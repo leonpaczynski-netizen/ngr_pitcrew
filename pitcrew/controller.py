@@ -5059,6 +5059,24 @@ class PitCrewController(QObject):
         # shown on the screen and still written into the outcome export. What
         # stops is the voice and the microphone - there is nothing to answer
         # if nothing was asked out loud.
+        # **This circuit's straights, or none - replaced on every arm** so a
+        # model never outlives its circuit (rule 11). With one, the detector
+        # reads how much straight is left off the lap ruler the pit wall
+        # builds; without one, or with no trusted distance, `fits` keeps the
+        # held-4 s fallback. See `race/straight.py`.
+        try:
+            straights = self.store.straight_model(circuit_key_for(event))
+        except Exception as exc:                            # noqa: BLE001
+            log("race").warning("straights: the model could not be read, "
+                                "so the held-4 s fallback applies: %s: %s",
+                                type(exc).__name__, exc)
+            straights = None
+        self.bridge.straight.use_model(
+            straights, ruler=lambda: getattr(self, "_lap_ruler", None))
+        log("race").info("straights: %s", "no model - held-4 s fallback"
+                         if straights is None else
+                         f"{len(straights.straights)} modelled "
+                         f"({straights.laps} laps, [DERIVED])")
         self._engineer_speaks = speaks
         if speaks:
             self.voice.warm()

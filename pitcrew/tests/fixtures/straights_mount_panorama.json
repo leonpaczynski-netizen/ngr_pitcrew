@@ -1,0 +1,222 @@
+{
+ "model_id": "mount-panorama-circuit-full-course",
+ "circuit_key": "mount-panorama-circuit-full-course",
+ "version": 1,
+ "source": "derived-laps",
+ "tag": "[DERIVED]",
+ "lap_length_m": 6165.7,
+ "laps": 43,
+ "session_ids": [
+  151,
+  152,
+  160,
+  173,
+  174,
+  175,
+  176
+ ],
+ "cars": [
+  "Lamborghini Hurac\u00e1n GT3 '15"
+ ],
+ "derived_on": "2026-09-14",
+ "rule": {
+  "throttle_pct": 90.0,
+  "max_lateral_g": 0.3,
+  "max_brake_pct": 5.0,
+  "min_held_s": 2.0,
+  "bridge_s": 0.5,
+  "presence": 0.5,
+  "end_quantile": 0.25,
+  "heavy_brake_pct": 50.0,
+  "min_brake_s": 0.2
+ },
+ "windows": [
+  {
+   "id": "S1",
+   "start_m": 334.3,
+   "end_m": 1203.0,
+   "laps": 43,
+   "laps_pooled": 43,
+   "median_s": 14.65,
+   "p25_s": 13.47,
+   "p75_s": 15.13,
+   "spread_s": 1.66,
+   "end_spread_m": 7.8,
+   "end_kph": 250.3,
+   "t_left_s": [
+    14.642,
+    12.732,
+    11.044,
+    9.465,
+    7.972,
+    6.546,
+    5.17,
+    3.83,
+    2.526,
+    1.253,
+    0.0
+   ],
+   "brake_m": 1227.9
+  },
+  {
+   "id": "S2",
+   "start_m": 3788.8,
+   "end_m": 3886.3,
+   "laps": 22,
+   "laps_pooled": 43,
+   "median_s": 2.27,
+   "p25_s": 2.23,
+   "p75_s": 2.6,
+   "spread_s": 0.37,
+   "end_spread_m": 9.9,
+   "end_kph": 178.4,
+   "t_left_s": [
+    2.231,
+    1.977,
+    1.733,
+    1.497,
+    1.268,
+    1.043,
+    0.825,
+    0.612,
+    0.404,
+    0.2,
+    0.0
+   ],
+   "brake_m": 5182.9
+  },
+  {
+   "id": "S3",
+   "start_m": 4023.6,
+   "end_m": 4943.4,
+   "laps": 43,
+   "laps_pooled": 43,
+   "median_s": 13.12,
+   "p25_s": 12.25,
+   "p75_s": 13.32,
+   "spread_s": 1.07,
+   "end_spread_m": 5.8,
+   "end_kph": 279.8,
+   "t_left_s": [
+    13.081,
+    11.576,
+    10.161,
+    8.793,
+    7.464,
+    6.168,
+    4.891,
+    3.634,
+    2.401,
+    1.191,
+    0.0
+   ],
+   "brake_m": 5182.9
+  },
+  {
+   "id": "S4",
+   "start_m": 5530.7,
+   "end_m": 5768.3,
+   "laps": 40,
+   "laps_pooled": 43,
+   "median_s": 4.27,
+   "p25_s": 3.87,
+   "p75_s": 4.5,
+   "spread_s": 0.63,
+   "end_spread_m": 7.9,
+   "end_kph": 226.0,
+   "t_left_s": [
+    4.191,
+    3.728,
+    3.276,
+    2.834,
+    2.402,
+    1.98,
+    1.569,
+    1.165,
+    0.77,
+    0.382,
+    0.0
+   ],
+   "brake_m": 5788.2
+  },
+  {
+   "id": "S5",
+   "start_m": 5977.4,
+   "end_m": 6228.5,
+   "laps": 43,
+   "laps_pooled": 43,
+   "median_s": 5.6,
+   "p25_s": 4.75,
+   "p75_s": 6.3,
+   "spread_s": 1.55,
+   "end_spread_m": 51.4,
+   "end_kph": 206.5,
+   "t_left_s": [
+    5.188,
+    4.563,
+    3.978,
+    3.418,
+    2.884,
+    2.367,
+    1.87,
+    1.387,
+    0.914,
+    0.452,
+    0.0
+   ],
+   "brake_m": 6294.9
+  }
+ ],
+ "braking": [
+  {
+   "id": "B1",
+   "start_m": 129.2,
+   "end_m": 181.0,
+   "laps": 43,
+   "peak_brake_pct": 100.0
+  },
+  {
+   "id": "B2",
+   "start_m": 1227.9,
+   "end_m": 1300.4,
+   "laps": 43,
+   "peak_brake_pct": 100.0
+  },
+  {
+   "id": "B3",
+   "start_m": 1770.7,
+   "end_m": 1808.6,
+   "laps": 43,
+   "peak_brake_pct": 72.5
+  },
+  {
+   "id": "B4",
+   "start_m": 3230.4,
+   "end_m": 3270.0,
+   "laps": 43,
+   "peak_brake_pct": 100.0
+  },
+  {
+   "id": "B5",
+   "start_m": 3642.4,
+   "end_m": 3685.7,
+   "laps": 43,
+   "peak_brake_pct": 100.0
+  },
+  {
+   "id": "B6",
+   "start_m": 5182.9,
+   "end_m": 5294.4,
+   "laps": 43,
+   "peak_brake_pct": 100.0
+  },
+  {
+   "id": "B7",
+   "start_m": 5788.2,
+   "end_m": 5859.8,
+   "laps": 43,
+   "peak_brake_pct": 100.0
+  }
+ ],
+ "tool": "tools/derive_straights.py"
+}

@@ -135,6 +135,14 @@ Versions, and what upgrading means here:
   made it conditional on the radar; see the block above the table.  **A column
   added to it later needs an `ADDED_COLUMNS` entry as well as the DDL line.**
 
+**v20 adds `straight_models` and nothing else** - one new table, so like v19
+  there is no migration function and the version moves only so
+  `Store._init_schema` still refuses a file this build predates.  Each
+  circuit's straights as lap-distance windows, so the voice starts a
+  volunteered line only where it fits; see the block above the table.  **A
+  column added to it later needs an `ADDED_COLUMNS` entry as well as the DDL
+  line.**
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -146,7 +154,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -1172,6 +1180,37 @@ CREATE TABLE IF NOT EXISTS verdict (
 
 CREATE INDEX IF NOT EXISTS idx_verdict_axis
     ON verdict(car_name, circuit_key, axis, id DESC);
+
+-- ----------------------------------------------------------------- v20
+-- **Where a circuit's straights are, so George only starts a line that fits.**
+--
+-- One row per circuit, keyed exactly like `corner_models` (the slug
+-- `track_layouts.slug` holds), because GT7 broadcasts no track ID and the
+-- circuit is whatever the driver selected. Its own table rather than a key
+-- inside `corner_models.corners_json`: `CornerModel.as_dict` rebuilds that
+-- JSON from its fields on every save, so anything else in it is dropped the
+-- next time a corner model is re-detected - and Mount Panorama, the circuit
+-- that needed this, has no corner model at all.
+--
+-- Written only by `tools/derive_straights.py --apply`, which the driver runs:
+-- a model changes when George may speak. `[DERIVED]`, never measured.
+CREATE TABLE IF NOT EXISTS straight_models (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    circuit_key   TEXT    NOT NULL UNIQUE,   -- = corner_models.circuit_key
+    model_id      TEXT    NOT NULL,
+    version       INTEGER NOT NULL DEFAULT 1,
+    source        TEXT    NOT NULL,          -- 'derived-laps'
+    -- The INTEGRATED lap-distance axis the live ruler produces - the median
+    -- length of the laps pooled - not the catalogue length.
+    lap_length_m  REAL    NOT NULL,
+    laps          INTEGER NOT NULL,          -- clean laps pooled (rule 4)
+    session_ids   TEXT    NOT NULL,          -- JSON array of sessions.id
+    -- The whole model: every window with its own lap count, median seconds
+    -- and spread, the braking zones, and the thresholds that produced them.
+    model_json    TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT    NOT NULL
+);
 """
 
 # Columns added to tables that already existed in an earlier version.

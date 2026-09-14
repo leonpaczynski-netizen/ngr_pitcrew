@@ -1982,6 +1982,59 @@ class Store:
             return None
         return CornerModel.from_dict(json.loads(rows[0]["corners_json"]))
 
+    # ------------------------------------------------------- straight models
+
+    def save_straight_model(self, circuit_key: str, model: dict) -> None:
+        """One circuit's straights, as `analysis.straights.derive` built them.
+
+        Refused rather than half-written: every window has to carry its lap
+        count, and the model the sessions it came from (rules 4 and 5).
+        """
+        windows = model.get("windows") or []
+        if not windows:
+            raise ValueError("a straights model with no windows is not a model")
+        if any(not isinstance(w.get("laps"), int) or w["laps"] <= 0
+               for w in windows):
+            raise ValueError("every straight window must carry its lap count")
+        sessions = model.get("session_ids") or []
+        if not sessions:
+            raise ValueError("a straights model must name its source sessions")
+        if model.get("circuit_key") != circuit_key:
+            raise ValueError(f"model is for {model.get('circuit_key')!r}, "
+                             f"not {circuit_key!r}")
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO straight_models (circuit_key, model_id, version, "
+                "source, lap_length_m, laps, session_ids, model_json, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(circuit_key) DO UPDATE SET "
+                "model_id=excluded.model_id, version=excluded.version, "
+                "source=excluded.source, lap_length_m=excluded.lap_length_m, "
+                "laps=excluded.laps, session_ids=excluded.session_ids, "
+                "model_json=excluded.model_json, "
+                "updated_at=excluded.updated_at",
+                (circuit_key, model.get("model_id") or circuit_key,
+                 int(model.get("version") or 1),
+                 model.get("source") or "derived-laps",
+                 float(model["lap_length_m"]), int(model.get("laps") or 0),
+                 json.dumps(sessions), json.dumps(model), _now(), _now()))
+
+    def straight_model(self, circuit_key: str | None):
+        """The circuit's straights for the live gate, or None.
+
+        None for an unknown circuit as well as an unmodelled one - "circuit
+        unknown" must not match a model.
+        """
+        if not circuit_key:
+            return None
+        from pitcrew.race.straight import StraightsModel
+        rows = self._query(
+            "SELECT model_json FROM straight_models WHERE circuit_key = ?",
+            (circuit_key,))
+        if not rows:
+            return None
+        return StraightsModel.from_dict(json.loads(rows[0]["model_json"]))
+
     def personal_bests(self, car_name: str | None,
                        sector_model: str | None) -> dict:
         """The fastest lap and the fastest each sector has ever been here.
