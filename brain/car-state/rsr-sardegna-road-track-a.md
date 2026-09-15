@@ -2640,3 +2640,29 @@ grid by fastest lap. Qualifying plan id 35 written (fuel 20, one run: out-lap + 
 
 **Prediction:** a clean flyer on the soft lands within ~0.5 s of 100.247. **Wrong if** a clean flyer is slower than the
 best medium (100.455) - then the soft is not buying the lap on this car and the out-lap is the suspect.
+
+## 53. Quali practice (s181) and the swap practice (s180) - 15 Sep 2026, late. NO SETUP CHANGE.
+
+**Rank zero:** gearbox by FEED identical to the fitted box on both sessions. Other values rest on the s177 SCREEN (§48).
+`bb` for both runs not known - asked.
+
+**s181 - Racing Soft, pit-lane out-lap + 3 flyers, at 100 L** (not the lobby's 20 L). Measurement 144.
+- Flyers **99.745 · 99.640 · 100.088** (L4 1.17 s off-track). **The first flyer is 0.1 s off the best** - fastest two
+  laps on file here. Tyre temps flat from flyer 1 to 3 (FL ~60, FR 65, RL ~64, RR 69 by lap mean): the out-lap does the
+  whole warm-up, as at Deep Forest. RR 14 % after the out-lap, 28 % after flyer 1.
+- **The current bar on the soft closes §52's gap:** no spin on any flyer. Soft ~0.8 s quicker than the best medium on file
+  (100.455, s158, ~66 L) at similar fuel - two sessions, not a same-set A/B, but far outside his lap-to-lap scatter.
+- **20 L tomorrow is ~58 kg lighter, the nose (tank) most:** [DERIVED] ~0.2 s at 0.003 s/L/lap, and the balance change is
+  UNMEASURED on the soft. He has driven the hard clean at 18.5 L (s179 L27).
+- **Out-lap off at the blind left:** right-rear onto the grass first at **101 km/h, throttle closed** for 1.5 s before,
+  294 grass frames, spin to 26 km/h, then a reset. Cause asked - with one out-lap tomorrow, this is the lap that cannot go wrong.
+- L4 right-front onto the grass at the blind-left exit at 173 km/h minimum (L2/L3 170, clean).
+
+**s180 - the swap practice §51 asked for (RM 6 laps, box, RH 4 laps).** The blind left had grass under a wheel on RM L1, a
+spin to a stop on RM L3 (~3,790 m), and **every hard lap after the out-lap**: L9 146 frames (1.95 s off, min 139 km/h),
+L10 71, L11 7 - right front first each time, and the laps got quicker (103.8 · 102.1 · 101.7). **§51's falsifier - "a
+practised swap still produces an off on the hard" - fires on the hard's first flying lap.** Race-plan question, not quali;
+reopened for his call, strategy 34 unchanged.
+
+**Tonight, pooled over both sessions:** 7 of 15 flying/out laps put a wheel on the grass at the blind-left exit.
+[MEASURED, pooled, no input marker issued - CLAUDE.md 23 Aug amendment.]

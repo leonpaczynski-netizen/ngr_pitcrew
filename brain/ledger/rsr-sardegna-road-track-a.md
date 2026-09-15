@@ -253,6 +253,14 @@ date,session_ids,key,direction,delta_pct_range,instrument,measured_floor,control
 2026-09-15,s179,n/a (10 Sep: blind-left exit is a repeatable track-limits problem),n/a,n/a,per-wheel surface at each off,n/a,n/a,the blind-left exit is a repeatable track-limits problem,he runs the line clean over a full stint,confirmed,"§50; L26 grass first (s177 L27 / s159 L3 shape) - but L9 and L18 began as rear slides on tarmac with the throttle closed or closing, a second failure mode in the same corner. All 3 offs tonight are there (measurement 142)",Rev H
 ```
 
+### 3e. 15 Sep late: swap practice (s180) and quali practice (s181)
+
+```csv
+date,session_ids,key,direction,delta_pct_range,instrument,measured_floor,control,prediction,falsifier,outcome,source,car_state_rev
+2026-09-15,s180,n/a (§51: keep RM->RH and practise the swap),n/a,n/a,per-wheel surface at the blind left; off_track_s,n/a,n/a,a practised swap runs the hard without an off,a practised swap still produces an off on the hard,refuted,"§53; RH L9 1.95 s off (146 grass frames, min 139 km/h), L10/L11 right front on grass; plan decision reopened for the driver",Rev H
+2026-09-15,s181,n/a (§52: soft first flyer),n/a,n/a,lap time; tyre temps by lap,not established,s155 soft (old bar),a clean soft flyer lands within ~0.5 s of 100.247 and beats 100.455,slower than 100.455,open,"§53; practice at 100 L: first flyer 99.745, best 99.640 (measurement 144) - quicker than the band; scored at the 20 L quali tomorrow",Rev H
+```
+
 **Notes, 3d - answered same night**
 
 - §49 prediction 2 (full-beeps switch): `[DRIVER]` *"I chose to full rev as I could see how much fuel I had"* - the lap-25 switch was his, not George's. The stint-1 half stays confirmed; George's own switch never fired live (the replay fires it at lap 22), which is the app work already filed. Row stays `unresolvable` for George's logic.
