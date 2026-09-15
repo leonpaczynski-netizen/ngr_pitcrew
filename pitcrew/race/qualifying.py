@@ -14,10 +14,19 @@ Two halves, armed separately and honestly:
   No measured window means the out-lap coach speaks relative trend only
   ("Tyres still coming up.") or stays quiet - it never invents a target
   number.
-* **Delta.** The reference is the best counted practice lap's own frames,
-  read through the Store so the distance and clock repairs apply. No
+* **Delta.** The reference starts as the best counted practice lap's own
+  frames, read through the Store so the distance and clock repairs apply. No
   reference lap means the delta half stands down and says so once - that is
   a statement of what practice measured, not a failure.
+
+**One reference for every call, and it is his best.** The line call judges
+against the best lap so far - practice's, then tonight's - so the mid-lap
+calls have to chase that same lap, or "Up" and "under your best" mean two
+different laps in the same minute (rule 13). Sardegna quali, 15 Sep 2026:
+"Up five tenths" at two thirds, then "four tenths down" at the line for a
+1:40.088 - up on the 1:40.247 practice lap the splits were chasing, down on
+the 1:39.640 set two laps before. So a flyer that sets a new best becomes the
+reference, from the curve the coach integrated live while he drove it.
 
 **Sign convention, used everywhere in this module: "up" means faster -
 ahead of the reference - and "down" means slower.** The delta is
@@ -90,6 +99,13 @@ ABANDON_MIN_DISTANCE_M = 200.0
 # absorbs stream gaps without admitting a phantom.
 REFERENCE_SPAN_TOLERANCE = 0.02
 
+# A flyer's own curve may replace the reference only where its integrated
+# distance agrees with the reference it replaces. Sardegna's three clean
+# flyers landed within 0.1% of the practice lap's 5088 m; the laps with an
+# off in them fell 3% short. Two per cent is the same bound the time gate
+# uses, and it keeps a cut or an excursion from becoming the lap to chase.
+REFERENCE_DISTANCE_TOLERANCE = 0.02
+
 # The out-lap judgments compare against floors built from LAP MEANS
 # (`race/temps.py` takes percentiles of per-lap means), so the live figure
 # has to be a mean too: the start/finish straight reads coolest, and judged
@@ -133,7 +149,9 @@ class ReferenceLap:
     build, because interpolation over a non-monotonic curve answers a
     different question at every lookup.
     """
-    lap_id: int
+    # The stored lap's id, or None for a flyer adopted from tonight's session
+    # - that one's curve was integrated live and was never a stored row.
+    lap_id: int | None
     lap_time_ms: int
     distances: tuple[float, ...]
     elapsed_ms: tuple[float, ...]
@@ -141,10 +159,18 @@ class ReferenceLap:
     @classmethod
     def from_frames(cls, frames: list[dict], *, lap_id: int,
                     lap_time_ms: int) -> "ReferenceLap | None":
+        return cls.from_curve(
+            ((frame.get("lap_distance_m"), frame.get("t_ms"))
+             for frame in frames),
+            lap_id=lap_id, lap_time_ms=lap_time_ms)
+
+    @classmethod
+    def from_curve(cls, points, *, lap_id: int | None,
+                   lap_time_ms: int) -> "ReferenceLap | None":
+        """From (distance m, elapsed ms) pairs, in the order they were driven."""
         distances: list[float] = []
         elapsed: list[float] = []
-        for frame in frames:
-            d, t = frame.get("lap_distance_m"), frame.get("t_ms")
+        for d, t in points:
             if d is None or t is None:
                 continue
             if distances and (d <= distances[-1] or t < elapsed[-1]):
@@ -263,6 +289,17 @@ class QualifyingCoach:
         # with, then the best of what he actually sets tonight, so "Purple"
         # is never claimed twice for the same pace.
         self._best_ms = reference.lap_time_ms if reference else None
+        # Whether this session chases a lap at all. Fixed at arming: with no
+        # practice reference the coach said "lap times only", and a split
+        # appearing later would contradict the one thing it announced.
+        self._chases = reference is not None
+        # The lap length a flyer's curve has to agree with before it may
+        # become the reference. Kept apart from `reference`, which can stand
+        # down while this cannot.
+        self._lap_m = reference.total_m if reference else None
+        # (integrated distance m, live elapsed ms) on the flyer in progress:
+        # the curve a new best is adopted from.
+        self._flyer_curve: list[tuple[float, float]] = []
         self._last_call_at: float | None = None
         # Out-lap state, reset each time one begins.
         self._out_start: tuple[float, float] | None = None
@@ -326,6 +363,8 @@ class QualifyingCoach:
             self._coach_temps(packet, now)
         else:
             self._advance(packet)
+            if self._chases:
+                self._note_curve(packet)
             self._coach_delta(packet, now)
 
     # ----------------------------------------------------------------- events
@@ -359,7 +398,11 @@ class QualifyingCoach:
         elif self.phase is _Phase.FLYING:
             if self._clean_flyer and not lap.is_pit_lap and lap.lap_time_ms > 0:
                 self._measure_noise()
+                new_best = (self._best_ms is not None
+                            and lap.lap_time_ms < self._best_ms)
                 self._line_call(lap, now)
+                if new_best and self._chases:
+                    self._adopt_flyer(lap, now)
             # The next lap is another run either way - tyres are warm, the
             # only question is whether he takes it.
             self._begin_flyer(packet)
@@ -486,6 +529,7 @@ class QualifyingCoach:
         self._early_said = False
         self._mid_said = False
         self._clean_flyer = True
+        self._flyer_curve = []
         front, rear = self._rolling_means(packet)
         self._flyer_started_in_window = (
             self.window is not None
@@ -504,6 +548,22 @@ class QualifyingCoach:
         self._last_packet_id = packet.packet_id
         self._distance_m += packet.speed_ms * step / SAMPLE_HZ
         self._elapsed_ms += step * 1000.0 / SAMPLE_HZ
+
+    def _note_curve(self, packet) -> None:
+        """One (distance, elapsed) point on the flyer's own curve.
+
+        **A clock that goes backwards retires what came before it.** On the
+        first frames of a lap GT7's lap clock may still hold the outgoing
+        lap's time (see ABANDON_MIN_DISTANCE_M); kept, those points would
+        make every honest point after them look regressive, and a curve
+        filtered for monotonic time would be the stale prefix and nothing
+        else. The reset is the truth, so the points above it go.
+        """
+        live = self._live_ms(packet)
+        curve = self._flyer_curve
+        while curve and curve[-1][1] > live:
+            curve.pop()
+        curve.append((self._distance_m, live))
 
     def _live_ms(self, packet) -> float:
         """Time on this lap: GT7's own channel where the C format carries it,
@@ -561,6 +621,61 @@ class QualifyingCoach:
         error = abs(self._distance_m - self.reference.total_m)
         self._noise_s = (error / self.reference.total_m
                          * self.reference.lap_time_ms / 1000.0)
+
+    def _adopt_flyer(self, lap, now: float) -> None:
+        """A new best becomes the lap the splits chase - or the splits stop.
+
+        Called after the line call has moved `_best_ms` to this lap, so the
+        only honest states afterwards are "the splits chase this lap" or "no
+        splits": left on the old reference, the next "Up" would be measured
+        against a lap the line call no longer compares with.
+
+        The curve is the coach's own live integration, which is also what the
+        next flyer is measured with, so whatever the stored practice frames
+        and the live integrator disagree by leaves with it. (Sardegna's spoken
+        splits sat about a tenth under a replay of the stored frames; the
+        cause is not pinned.) Adopted only where it describes the lap GT7
+        timed: its clock has to end at the lap time and its distance has to
+        be the circuit's.
+        """
+        curve = self._flyer_curve
+        self._flyer_curve = []
+        why = None
+        if len(curve) < 2:
+            why = "no trace was integrated"
+        else:
+            end_ms = curve[-1][1]
+            if (abs(end_ms - lap.lap_time_ms)
+                    > lap.lap_time_ms * REFERENCE_SPAN_TOLERANCE):
+                why = (f"its clock ends at {end_ms:.0f} ms against a "
+                       f"{lap.lap_time_ms} ms lap")
+            elif (self._lap_m is not None
+                  and abs(curve[-1][0] - self._lap_m)
+                  > self._lap_m * REFERENCE_DISTANCE_TOLERANCE):
+                why = (f"it measured {curve[-1][0]:.0f} m against a "
+                       f"{self._lap_m:.0f} m lap")
+        adopted = None if why else ReferenceLap.from_curve(
+            curve, lap_id=None, lap_time_ms=int(lap.lap_time_ms))
+        if adopted is None:
+            log("quali").warning(
+                "lap %s (%d ms) is the new best but cannot be chased: %s - "
+                "splits stand down until a lap that can be",
+                getattr(lap, "lap_num", None), lap.lap_time_ms,
+                why or "its trace was not monotonic")
+            if self.reference is not None:
+                self.reference = None
+                self._say("Splits off until your next best - "
+                          "that lap's trace had a gap.", now)
+            return
+        # **Logged on accept** (rule 10): the lap every later split is
+        # measured against, and how its trace compared with the one before.
+        log("quali").info(
+            "reference is now lap %s: %d ms over %.0f m from %d live samples "
+            "(was %s)", getattr(lap, "lap_num", None), adopted.lap_time_ms,
+            adopted.total_m, len(adopted.distances),
+            f"{self.reference.lap_time_ms} ms over {self.reference.total_m:.0f} m"
+            if self.reference is not None else "stood down")
+        self.reference = adopted
 
     def _line_call(self, lap, now: float) -> None:
         """The lap is set. Judged against GT7's own times - exact, no

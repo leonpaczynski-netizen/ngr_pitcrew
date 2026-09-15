@@ -552,16 +552,136 @@ def test_a_full_out_lap_and_flyer_replay():
 
     pid, now = start_flyer(coach, pid, now, front=82.0, rear=87.0)
     # 100 one-second steps at 55 m/s land on exactly 5500 m - the reference
-    # total - so the completed flyer measures the drift at zero.
+    # total - so the completed flyer measures the drift at zero. GT7's time
+    # agrees with the trace (100 s), so the lap becomes the reference.
     pid, now = drive(coach, pid, now, 100, speed=55.0, front=82.0, rear=87.0)
     coach.update(pkt(pid + 60, speed=55.0, front=82.0, rear=87.0),
-                 crossing(a_lap(2, 109_800)), now + 1.0)
-    assert "Purple. one forty-nine point eight - two tenths under your best." in coach.said
+                 crossing(a_lap(2, 100_000)), now + 1.0)
+    assert ("Purple. one forty flat - 10.0 seconds under your best."
+            in coach.said)
 
-    # Second flyer: the drift is measured and small, so no more "about".
+    # Second flyer: the drift is measured and small, so no more "about" -
+    # and it chases the 55 m/s lap just set, not the 50 m/s practice lap.
+    # 31 s at 60 m/s is 1860 m, which that lap reached in 33.8 s.
     pid, now = pid + 60, now + 1.0
-    pid, now = drive(coach, pid, now, 34, speed=55.0, front=82.0, rear=87.0)
-    assert "On it. Up 3.4 seconds." in coach.said
+    pid, now = drive(coach, pid, now, 31, speed=60.0, front=82.0, rear=87.0)
+    assert "On it. Up 2.8 seconds." in coach.said
+
+
+# ------------------------------------------------- one reference for the lot
+
+def _flyer(coach, pid, now, *, steps, speed, lap_num, lap_ms):
+    """A whole flyer: `steps` one-second steps at `speed`, then the line."""
+    start = len(coach.said)
+    pid, now = drive(coach, pid, now, steps, speed=speed)
+    pid, now = pid + 60, now + 1.0
+    coach.update(pkt(pid, speed=speed, front=75.0, rear=80.0),
+                 crossing(a_lap(lap_num, lap_ms)), now)
+    return pid, now, coach.said[start:]
+
+
+def test_the_splits_chase_the_lap_the_line_call_compares_with():
+    """Sardegna quali, 15 Sep 2026: "Up five tenths" at two thirds, then
+    "four tenths down" at the line for a 1:40.088 - up on the practice lap
+    the splits chased, down on the 1:39.640 he had set two laps before.
+
+    Here: a 110 s practice reference, a 100 s flyer, then a 106 s flyer -
+    four seconds up on practice, six down on tonight's best. Every call on
+    that lap has to say down."""
+    coach = QualifyingCoach(window=WINDOW, reference=ref_50ms())
+    pid, now = set_off(coach, front=75.0, rear=80.0)
+    pid, now = start_flyer(coach, pid, now)
+    pid, now, said = _flyer(coach, pid, now, steps=100, speed=55.0,
+                            lap_num=2, lap_ms=100_000)
+    assert said[-1].startswith("Purple.")
+    assert coach.reference.lap_time_ms == 100_000
+    assert coach.reference.lap_id is None           # tonight's, not a row
+
+    pid, now, said = _flyer(coach, pid, now, steps=106, speed=52.0,
+                            lap_num=3, lap_ms=106_000)
+    # 36 s at 52 m/s is 1872 m, which the 100 s lap reached in 34.0 s.
+    assert said[0] == "Down 2.0 seconds."
+    assert said[1].startswith("Down ")
+    assert said[2].startswith("one forty-six flat - 6.0 seconds down.")
+    assert not any(s.startswith(("On it.", "Up ")) for s in said)
+
+
+def test_a_new_best_whose_trace_contradicts_its_time_stands_the_splits_down():
+    """Rule 12's shape: the line call has moved to this lap, so the splits
+    either chase it or stop - never carry on against the lap before."""
+    coach = QualifyingCoach(window=WINDOW, reference=ref_50ms())
+    pid, now = set_off(coach, front=75.0, rear=80.0)
+    pid, now = start_flyer(coach, pid, now)
+    # GT7 says 109 s; the trace the coach integrated lasted 100.
+    pid, now, said = _flyer(coach, pid, now, steps=100, speed=55.0,
+                            lap_num=2, lap_ms=109_000)
+    assert said[-1] == ("Splits off until your next best - "
+                        "that lap's trace had a gap.")
+    assert coach.reference is None
+
+    # No splits on the next run - and a sound new best brings them back.
+    pid, now, said = _flyer(coach, pid, now, steps=100, speed=55.0,
+                            lap_num=3, lap_ms=100_000)
+    assert not any(s.startswith(("On it.", "Up ", "Down ", "Level"))
+                   for s in said)
+    assert said[-1].startswith("Purple.")
+    assert coach.reference is not None and coach.reference.lap_time_ms == 100_000
+    pid, now = drive(coach, pid, now, 31, speed=60.0)
+    assert coach.said[-1] == "On it. Up 2.8 seconds."
+    # Said once, not once per refusal.
+    assert sum(s.startswith("Splits off") for s in coach.said) == 1
+
+
+def test_a_short_trace_is_not_the_lap_to_chase():
+    """An off or a cut: the distance falls 3.6% short of the lap. Faster on
+    the clock, not a lap anyone should chase."""
+    coach = QualifyingCoach(window=WINDOW, reference=ref_50ms())
+    pid, now = set_off(coach, front=75.0, rear=80.0)
+    pid, now = start_flyer(coach, pid, now)
+    pid, now, said = _flyer(coach, pid, now, steps=106, speed=50.0,
+                            lap_num=2, lap_ms=106_000)
+    assert said[-1].startswith("Splits off")
+    assert coach.reference is None
+
+
+def test_a_stale_lap_clock_at_the_line_does_not_poison_the_adopted_curve():
+    """The first frames of a lap may still carry the outgoing lap's time.
+    Kept, they would be the whole curve after monotonic filtering."""
+    coach = QualifyingCoach(window=None, reference=ref_50ms())
+    coach.update(StubPacket(0, speed=15.0), [], 0.0)
+    coach.update(StubPacket(60, speed=55.0, lap_ms=116_000),
+                 crossing(a_lap(1, 116_000, out=True)), 1.0)
+    pid, now = 60, 1.0
+    for _ in range(5):
+        pid, now = pid + 1, now + 1.0 / 60.0
+        coach.update(StubPacket(pid, speed=55.0, lap_ms=116_000), [], now)
+    for k in range(6000):                        # 100 s at 55 m/s
+        pid, now = pid + 1, now + 1.0 / 60.0
+        coach.update(StubPacket(pid, speed=55.0,
+                                lap_ms=int((5 + k) * 1000 / 60)), [], now)
+    pid, now = pid + 1, now + 1.0 / 60.0
+    coach.update(StubPacket(pid, speed=55.0, lap_ms=116_000),
+                 crossing(a_lap(2, 100_100)), now)
+    reference = coach.reference
+    assert reference is not None and reference.lap_time_ms == 100_100
+    assert reference.elapsed_ms[0] < 1_000
+    assert reference.total_m == pytest.approx(5500.0, rel=0.01)
+    assert len(reference.distances) > 5_000
+
+
+def test_without_a_practice_reference_no_flyer_becomes_one():
+    """The coach announced "lap times only"; a split appearing later would
+    contradict the one thing it said."""
+    coach = QualifyingCoach(window=WINDOW, reference=None)
+    pid, now = set_off(coach, front=75.0, rear=80.0)
+    pid, now = start_flyer(coach, pid, now)
+    pid, now, _ = _flyer(coach, pid, now, steps=100, speed=55.0,
+                         lap_num=2, lap_ms=100_000)
+    pid, now, _ = _flyer(coach, pid, now, steps=100, speed=56.0,
+                         lap_num=3, lap_ms=98_300)
+    assert coach.reference is None
+    assert not any(s.startswith(("On it.", "Up ", "Down ", "Level", "Splits"))
+                   for s in coach.said)
 
 
 # ------------------------------------------------------------------- wiring
