@@ -232,3 +232,9 @@ date,session_ids,key,direction,delta_pct_range,instrument,measured_floor,control
 
 - bb +3 -> +1 is two clicks forward: -2 / 10 span = -20.0 pp (the file's 10 % a click; `+` rearward on this car).
 - The TCS row carries no key because TCS is an in-car aid, not a slider on the sheet.
+
+```csv
+date,session_ids,key,direction,delta_pct_range,instrument,measured_floor,control,prediction,falsifier,outcome,source,car_state_rev
+2026-09-15,s177 L15-22 -> L23-26,bb,forward,-10.0,HUD wear gauge RR per lap,one tick over 4 laps (0.007/lap),same tyre set on bb +1,[DRIVER] brake balance 0 saves the rear tyres,RR rate unchanged within a tick,unresolvable,"§48; measurement 138 (0.0675 v 0.069/lap); he keeps +1",Rev H
+2026-09-15,s177 L13 -> L14,n/a (TCS 1 -> 3 on a worn RM),n/a,n/a,exit wheelspin share; full-throttle acceleration 2nd-3rd,not established (TCS 1 laps span 11.7-22.5 %),L13 on TCS 1,TCS 3 cuts exit wheelspin without costing drive,wheelspin unchanged or acceleration falls,open,"§48; measurement 137 (16.8 -> 10.6 %; 5.28 -> 5.50 m/s2; one lap each, collinear with wear)",Rev H
+```

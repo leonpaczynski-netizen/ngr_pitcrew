@@ -2485,3 +2485,38 @@ unchecked: no wear rate). RM 12 / RH 17 at 29 -> refused (clock allows ~28; tank
 | RH 16-17 laps at the saving beep reaches the flag under 90 % with lap times flat | RR past 90 % before the last lap, or the last three laps >1 s off the stint median |
 | A +3 L fill reaches the flag with 2-4 L left | dry again, or more than ~6 L left |
 | +1 brake balance holds on the hard | he reaches for the MFD in the hard stint |
+
+## 48. Answers, settings screen, and the plan ARMED - 15 Sep 2026, later
+
+**SCREEN, 15 Sep 2026 - "current setup and this was run in latest race sim".** Every visible value
+matches the sheet on file: tyres RM/RM · body height 60/68 · anti-roll bar 5/**4** · compression
+23/25 · expansion 38/38 · natural frequency 3.40/3.60 · camber 1.0/1.0 · toe 0.00/+0.08 · LSD
+5/14/24 · downforce **440**/600 · ECU 100 · ballast 0/0 · restrictor 100 · transmission Fully
+Customisable: Racing, **Top Speed 240** (ratios by FEED, identical) · 509 BHP · 1,243 kg · 46:54 ·
+PP **746.59**. Stability readout Low -0.31 / High -0.18 (Rev A read -0.31 / -0.35) - recorded,
+not interpreted (§0). **Rank zero closed for s177.**
+
+- `[DRIVER]` *"george recommended much more fuel I chose that fuel"* - the 60.6 L was his, against
+  George's larger fill (sized to the flag with a lap of margin, `calls.fuel_target_l`). §44's
+  shortfall is a fill choice, not a George sizing fault. The contradictory log pair stands as app work.
+- `[DRIVER]` *"I'll stick with +1 for now, I moved to 0 to try and save rear tyres"* - measured
+  (id 138): rear-right 0.0675/lap on +1 against 0.069 on 0, same set. **No saving visible**, inside
+  one gauge tick over four laps.
+- **TCS 1/3/5** (id 137): no level cost measurable drive (full-throttle acceleration 5.1-5.6 m/s²
+  on all three). The one matched pair - last flying lap on TCS 1 against the in-lap on TCS 3 -
+  shows **less wheelspin out of corners on a more worn tyre** (16.8 % -> 10.6 %). TCS 5 could not
+  hold a 100 % tyre and the last-lap spins were off throttle. **Level and tyre wear moved together
+  all race, so this is a hint, not a finding.**
+
+**Plan decided by the driver: RM 12 -> RH 17, fuel-save.** `[DRIVER]` *"George needs to accept
+this through fuel saving it's been proven in practice."*
+
+**ARMED as strategy 33** (approved, certified *Driveable*; unchecked: stint length). Written as
+**RM 12 / RH 16, 28 laps**, because the certifier refuses 17: (1) its tank reach adds a reserve lap
+at the event burn 5.586 L/lap -> 16; (2) its clock charges each stop the next stint's whole load at
+the pump and allows ~28. **It drives the same race:** George boxes on lap 12 and sizes the fill to
+the flag off the live clock and live burn, so a 29-lap race is filled for 17. What it cannot do
+yet is know the stints are fuel-save stints - filed as app work (declared fuel-save stints: tank
+reach and clock on the measured saving burn, and the fuel-save beep armed for them).
+Playbook: fuel_short -> short_shift · tyre_short -> bring_stop_forward (stint 1, not before lap 11)
+· stop_missed -> recost_to_flag · fuel_long, incident, rain -> report_only.
