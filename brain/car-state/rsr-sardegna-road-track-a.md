@@ -2601,3 +2601,20 @@ from lap 25 would have run dry (32.6 L with 5 to go).
 hard's own speed (minimum ~160 km/h, same as s156 practice; free-air medium ~164). The two hard offs were the laps at
 or past the top of that range: L18 minimum 166; L26 arrived 215 km/h against 183-199 on every other hard lap. The
 medium-to-hard swap inside one session has only ever been driven in the two race sims.
+
+## 51. RH -> RM considered after s179 - recommendation: keep RM 12 -> RH 17. 15 Sep 2026
+
+`[DRIVER]` *"should we try RH to RM or leave it as it is?"* - asked because the swap to the hard is the hard direction to adapt to (§50).
+
+**Binding limit, hard first: the TANK.** Saving burns on file: 5.18 (s156 practice), 5.35 (s179 both stints), 5.59 (s177
+stint 2, chase laps). A 17-lap hard opening stint from 100 L: 91 L at 5.35 (9 L left), 95 L at 5.59 (5 L left); **18 laps
+at 5.59 is dry**. So the hard-first stint is capped at 17, and the medium must then do 12 whatever happens.
+**Medium at 12 laps:** RR 72 % at L11 (s179), 81 % at L12 and 89 % at L13 (s177) - one lap from the cliff.
+⇒ Hard first: any extra burn or a longer race moves a lap onto the tyre with no lap to give, at the flag, with no stop
+left (the s177 ending). Medium first: the stop is sized from his own burn, and the hard has room either side (83 % after
+16 tonight incl. 4 at full revs; 94 % at 19 in s156). Same fuel added in the box either way (~55 L).
+**What hard-first buys:** the swap goes to MORE grip; the medium runs light at the end. **What it costs:** the start in
+traffic on the slower tyre, and the only flexible stint becomes the one that cannot flex.
+**Decision offered: keep RM 12 -> RH 17**, and practise the swap (3-4 laps RM, box, 5-6 laps RH) so the first lap on
+the hard after a medium is not in a race. Falsifier for keeping it: a practised swap still produces an off on the hard.
+His call; strategy 34 unchanged.
