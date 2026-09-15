@@ -71,5 +71,5 @@ def test_no_gap_read_yet_plays():
 
 
 def test_the_pack_stays_within_budget_with_the_decisions_in_it():
-    # 800 since 15 Sep 2026 - see `test_voice_pack.test_the_pack_stays_within_budget`.
-    assert len(manifest.clips()) < 800
+    # 830 since 16 Sep 2026 - see `test_voice_pack.test_the_pack_stays_within_budget`.
+    assert len(manifest.clips()) < 830

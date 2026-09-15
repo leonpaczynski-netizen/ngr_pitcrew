@@ -250,6 +250,27 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     from pitcrew.strategy.handover import fuel_plan_problems
 
     refusals.extend(fuel_plan_problems(plan))
+    # **And the per-lap targets**, by the door's words too.
+    from pitcrew.strategy.targets import TARGETS_KEY, target_problems
+
+    refusals.extend(target_problems(plan))
+    # A planned stint with no lap time to judge its laps against is driveable
+    # and worth knowing: George says nothing about pace on it.
+    target_block = plan.get(TARGETS_KEY)
+    if isinstance(target_block, dict) and not target_problems(plan):
+        compounds = target_block.get("compounds") or {}
+        for index, stint in enumerate(stints, 1):
+            code = stint.get("compound")
+            entry = compounds.get(code) if code else None
+            if not code or not isinstance(entry, dict):
+                continue
+            key = ("save_lap_time_ms" if stint.get("fuel_save") is True
+                   else "lap_time_ms")
+            if entry.get(key) is None and f"{key}_source" in entry:
+                warnings.append(
+                    f"stint {index} has no {'fuel-save ' if key != 'lap_time_ms' else ''}"
+                    f"{code} target lap time, so George gives no pace target "
+                    f"on it")
 
     # ------------------------------------------------------------- the tank
     capacity = inputs.fuel_capacity_l

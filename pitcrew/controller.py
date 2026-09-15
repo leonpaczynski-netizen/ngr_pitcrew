@@ -82,6 +82,7 @@ from pitcrew.race.incident_watch import IncidentWatch
 from pitcrew.race.straight import Straight
 from pitcrew.race.colour import ColourCalls
 from pitcrew.race.refuel import RefuelAdviser
+from pitcrew.race.targets import board_target_fields
 from pitcrew.race.replan import (
     REPLAN_BUDGET_S,
     REPLAN_MAX_STOPS,
@@ -4985,6 +4986,21 @@ class PitCrewController(QObject):
             for gap in certificate.unchecked:
                 log("race").info("approved plan, not checked: %s", gap)
 
+        # **A plan approved before it could carry per-lap targets gets them
+        # from practice, for this race only** (16 Sep 2026). Not the stamp
+        # refused above - that would check the event against itself; this
+        # only prices the laps, and only where the plan has no `targets` block
+        # at all, so an author's or an approval's figures are never replaced.
+        # The stored row is untouched and every figure is sourced `practice`.
+        from pitcrew.strategy.targets import TARGETS_KEY, fill_targets
+
+        if (plan is not None and inputs is not None
+                and TARGETS_KEY not in plan):
+            plan = {**plan, TARGETS_KEY: fill_targets(plan, inputs)}
+            log("race").info("approved plan carried no per-lap targets; "
+                             "priced from practice for this race: %s",
+                             plan[TARGETS_KEY]["compounds"])
+
         # How many practice laps stand behind the two figures the plan
         # expects to execute. Every aggregate carries its sample count
         # (CLAUDE.md §4.4): a burn from three laps and one from fourteen are
@@ -6734,6 +6750,10 @@ class PitCrewController(QObject):
             # says "Box this lap." and the block says NOW; N once N in-laps
             # have gone by. `laps_overdue` is the box call's own count.
             laps_past_box=state.laps_overdue(),
+            # **The plan's per-lap targets** (16 Sep 2026): what this lap is
+            # asked for, and how the last one did against its own. The same
+            # verdict the heartbeat speaks - see `race/targets.py`.
+            **board_target_fields(state),
         )
         if not in_box:
             return base

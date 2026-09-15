@@ -666,6 +666,9 @@ class Handover:
             problems.append("the plan has no stints")
         problems.extend(stint_tyre_problems(self.plan))
         problems.extend(fuel_plan_problems(self.plan))
+        from pitcrew.strategy.targets import target_problems
+
+        problems.extend(target_problems(self.plan))
         # **Refused, never merged.** The stored payload is the plan's own keys
         # with the handover's alongside under one key, so a plan carrying one
         # of the reserved names would have it silently replaced. `assumptions`
@@ -1173,9 +1176,10 @@ def accept(store, event_id: int, handover: Handover, *,
     if not certificate.certified:
         return None, list(certificate.refusals)
 
+    warnings = list(certificate.warnings) + targets_not_passed(plan)
     payload = handover.as_stored(plan)
     payload["handover"]["certificate"] = {
-        "warnings": list(certificate.warnings),
+        "warnings": warnings,
         # **Recorded, because silence is never a pass.** A check that could not
         # run is not a check that passed, and the race audit has to be able to
         # tell the two apart.
@@ -1184,7 +1188,21 @@ def accept(store, event_id: int, handover: Handover, *,
     strategy_id = store.save_strategy(
         event_id, payload, label=label or f"{handover.author} plan",
         status="candidate")
-    return strategy_id, list(certificate.warnings)
+    return strategy_id, warnings
+
+
+def targets_not_passed(plan: dict) -> list[str]:
+    """A warning per planned compound whose lap target the handover left out.
+
+    **Not a refusal**: a practice figure is a real target and the plan runs on
+    it. But the driver asked for the desk's figures to reach George, and one
+    filled from practice looks the same on the board, so the desk is told.
+    """
+    from pitcrew.strategy.targets import not_passed_by_author
+
+    return [f"the handover passed no {code} target lap time - George judges "
+            f"{code} laps against practice's" for code in
+            not_passed_by_author(plan)]
 
 
 def main(argv: list[str] | None = None) -> int:

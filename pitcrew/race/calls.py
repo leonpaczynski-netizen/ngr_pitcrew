@@ -1135,6 +1135,15 @@ class RaceState:
     # acknowledged if so, and saying it again is the app talking to itself.
     incident_reported: bool = False
 
+    # --- the plan's per-lap targets (race/targets.py, 16 Sep 2026) ---
+    # The last completed lap against what the plan asked of it, or None where
+    # that lap got no verdict. Carries its own lap number: the heartbeat says
+    # it only on the crossing that lap ended on.
+    target_verdict: "object | None" = None
+    # What the plan asks of the lap being driven now, for the board. None
+    # where the race has no plan targets or the lap is not judged.
+    lap_target: "object | None" = None
+
     # --- tyre wear, MEASURED off the HUD gauge (telemetry/hud.py) ---
     # (lap, {corner: fraction worn}) per lap that carried a gauge reading.
     # **Measured, not modelled** - it is a transcription of the game's own
@@ -3939,6 +3948,7 @@ def _status(state: RaceState) -> Call | None:
         return None
     where = f"P{state.position}." if state.position else ""
     said = " ".join(part for part in (orientation(state), where,
+                                      _target_standing(state),
                                       _fuel_standing(state),
                                       _gauge_ask(state)) if part).strip()
     if not said:
@@ -4698,6 +4708,27 @@ def _gauge_ask(state: RaceState) -> str:
     return "Tyre gauge when you get a straight."
 
 
+def _target_standing(state: RaceState) -> str:
+    """The lap just completed against the plan's target, pace then burn.
+
+    **Inside the heartbeat, not a call of its own** - see `STATUS_EVERY_LAPS`
+    for why a second every-lap kind silences the heartbeat, the saving check
+    and the short-shift beep. The driver asked for it every lap (16 Sep 2026)
+    and the heartbeat is the every-lap channel. Before the fuel clause,
+    because the fuel clause is the one that escalates into next lap's
+    instruction and the last clause is the one retained.
+
+    Said only on the crossing that ended the lap it judges: a verdict about
+    lap 7 said on lap 9's crossing is news two minutes old.
+    """
+    from pitcrew.race.targets import verdict_sentence
+
+    verdict = state.target_verdict
+    if verdict is None or getattr(verdict, "lap", None) != state.lap:
+        return ""
+    return verdict_sentence(verdict)
+
+
 def _fuel_standing(state: RaceState) -> str:
     """Where the fuel stands, against a named distance, or an honest silence.
 
@@ -4716,6 +4747,11 @@ def _fuel_standing(state: RaceState) -> str:
     sigma is 0.68-2.04 s against a 0.5-1.5 s/lap degradation band, so a pace
     verdict is a coin flip dressed as a finding. Said once a race that is a
     bad call; said every lap it is twenty of them.
+
+    (The lap-against-target clause beside it, `_target_standing`, is a
+    different claim - how one lap compared with the number it was asked for,
+    always with the number - and it is its own clause so this one stays about
+    the tank. See `race/targets.py`.)
     """
     if state.fuel_l is None:
         return ""

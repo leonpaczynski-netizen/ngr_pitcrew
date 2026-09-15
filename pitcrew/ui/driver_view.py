@@ -510,6 +510,18 @@ class DriverState:
     # SectorsView`; None where no live reader is armed.
     sectors: "SectorsView | None" = None
 
+    # ---- the plan's per-lap targets, race only (the driver, 16 Sep 2026).
+    # What the lap being driven is asked for - a lap time on this compound,
+    # this set's age and this fuel, and a burn - and how the LAST completed
+    # lap did against its own. Positive is slow / over. The same verdict the
+    # heartbeat speaks (`race/targets.py`). None is a dash with a reason.
+    target_lap_ms: int | None = None
+    target_burn_l: float | None = None
+    target_why: str | None = None           # why the lap has no target time
+    target_saving: bool | None = None       # priced on the fuel-saving beep
+    last_vs_target_s: float | None = None
+    last_burn_vs_target_l: float | None = None
+
     # ---- the three lights (row 5.21).
     # WET: the hygrometer over the last few HUD reads - "wet", "mixed", "dry",
     # or None where the HUD could not be read (never "dry" for want of a read).
@@ -1363,6 +1375,53 @@ def delta_block(state: "DriverState") -> Block:
     return Block(format_delta(delta), lap_reference_note(state), tone)
 
 
+def target_pace_block(state: "DriverState") -> Block:
+    """VS TARGET: the last lap against the time the plan asked of it.
+
+    Green on target or quicker, the warning ink when slow past the band - the
+    band the voice uses, so "Pace on target." and a green box are one
+    decision (rule 12). The sub names what THIS lap is asked for.
+    """
+    from pitcrew.race.targets import ON_TARGET_S
+
+    delta = state.last_vs_target_s
+    if delta is None:
+        tone = TONE_PLAIN
+    elif delta >= ON_TARGET_S:
+        tone = TONE_URGENT
+    else:
+        tone = TONE_GOOD
+    return Block(format_delta(delta) if delta is not None else "--",
+                 target_note(state), tone)
+
+
+def target_burn_block(state: "DriverState") -> Block:
+    """BURN VS TARGET: the last lap's litres against the plan's per-lap burn."""
+    from pitcrew.race.targets import ON_TARGET_L
+
+    delta = state.last_burn_vs_target_l
+    if delta is None:
+        return Block("--", (f"target {state.target_burn_l:.2f} L"
+                            if state.target_burn_l is not None else "no target"))
+    tone = TONE_URGENT if delta >= ON_TARGET_L else TONE_GOOD
+    return Block(f"{delta:+.2f}", (f"target {state.target_burn_l:.2f} L"
+                                   if state.target_burn_l is not None else ""),
+                 tone)
+
+
+def target_note(state: "DriverState") -> str:
+    """What the lap in progress is asked for, or why it is asked for nothing."""
+    parts = []
+    if state.target_lap_ms is not None:
+        saving = " saving" if state.target_saving else ""
+        parts.append(f"target{saving} {format_lap_ms(state.target_lap_ms)}")
+    elif state.target_why:
+        parts.append(state.target_why)
+    if state.target_burn_l is not None:
+        parts.append(f"burn {state.target_burn_l:.2f} L")
+    return "  ·  ".join(parts)
+
+
 def lap_reference_note(state: "DriverState") -> str:
     """What the diff is against, named - rule 13: a delta that does not say
     what it is against is two numbers pretending to be one."""
@@ -1572,11 +1631,28 @@ class _LapTimePanel(QWidget):
         self.lap = _Box("laptime", value_px)
         self.diff = _Box("time diff", value_px)
         self.pred = _Box("pred. time", value_px)
-        for box in (self.lap, self.diff, self.pred):
+        # **The plan's targets, race only** (the driver, 16 Sep 2026): the
+        # last lap against the time the plan asked of it, with the burn
+        # against its own under it. In this panel rather than the fuel blocks
+        # because both are about ONE lap, and the fuel blocks' reason lines
+        # are at their width already.
+        #
+        # **In the predicted time's place, not beside it.** Two more boxes
+        # measured the race board at 4,014 px against the 3,400 ceiling
+        # (`test_the_board_does_not_grow_in_the_widest_state_it_can_be_given`),
+        # and the row "has no room for a third panel" already. In a race the
+        # number he is driving to is the plan's, so the prediction against the
+        # session best gives way; practice and qualifying keep it.
+        self.vs_target = _Box("vs target", value_px)
+        self.burn = QLabel("")
+        self.burn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.vs_target.layout().addWidget(self.burn)
+        for box in (self.lap, self.diff, self.pred, self.vs_target):
             row.addWidget(box)
         column.addLayout(row)
         self.note = _NoteLine()
         column.addWidget(self.note, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._sub_px = max(20, value_px // 2)
 
     def show_state(self, state: "DriverState") -> None:
         self.lap.set_value(format_lap_ms(state.lap_time_ms), INK)
@@ -1584,7 +1660,24 @@ class _LapTimePanel(QWidget):
         ink = INK if delta is None else GOOD if delta < 0 else NEAR if delta > 0 else INK
         self.diff.set_value(format_delta(delta), ink)
         self.pred.set_value(format_lap_ms(state.predicted_ms), INK)
-        self.note.set_note(lap_reference_note(state))
+        racing = state.session_kind == "race"
+        self.vs_target.setVisible(racing)
+        self.pred.setVisible(not racing)
+        note = lap_reference_note(state)
+        if racing:
+            inks = {TONE_GOOD: GOOD, TONE_URGENT: NEAR, TONE_PLAIN: INK_DIM}
+            pace, burn = target_pace_block(state), target_burn_block(state)
+            self.vs_target.set_value(pace.value, inks[pace.tone])
+            self.burn.setText(f"burn {burn.value}" if burn.value != "--"
+                              else "burn --")
+            self.burn.setStyleSheet(
+                f"font-family:{NUMBER_FACE};font-size:{self._sub_px}px;"
+                f"color:{inks[burn.tone]};background:transparent;")
+            # The target this lap is asked for leads the line: it is the
+            # number he is driving to, and the references are the record.
+            target = pace.sub
+            note = "  ·  ".join(part for part in (target, note) if part)
+        self.note.set_note(note)
 
 
 class _SectorPanel(QWidget):

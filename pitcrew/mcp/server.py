@@ -275,7 +275,9 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
         # here, approved in the app, and spoke "Box this lap. RS.".
         from pitcrew.strategy.handover import stint_tyre_problems
 
-        problems = stint_tyre_problems(payload)
+        from pitcrew.strategy.targets import target_problems
+
+        problems = stint_tyre_problems(payload) + target_problems(payload)
         if problems:
             return _dump({"saved": False, "error": "plan refused",
                           "problems": problems})
@@ -490,16 +492,22 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
         # is for another race.
         refusals = list(certificate.refusals)
         approve = certificate.certified and foreign is None
+        # **The desk is told which lap targets it did not pass** (16 Sep
+        # 2026): a target filled from practice looks the same on the board
+        # as one Ludo wrote, and the driver asked for Ludo's to reach George.
+        from pitcrew.strategy.handover import targets_not_passed
+
+        warnings = list(certificate.warnings) + targets_not_passed(stamped)
         payload = handover.as_stored(stamped)
         payload["handover"]["certificate"] = {
-            "warnings": list(certificate.warnings),
+            "warnings": warnings,
             "unchecked": list(certificate.unchecked),
         }
         strategy_id = store.save_strategy(
             event_id, payload, label=label or "written by the race engineer",
             evidence={"certified": certificate.certified,
                       "refusals": refusals,
-                      "warnings": certificate.warnings,
+                      "warnings": warnings,
                       "unchecked": certificate.unchecked,
                       "builtForAnotherRace": foreign},
             status="candidate")
@@ -530,7 +538,7 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
             "approved": approve,
             "certified": certificate.certified,
             "refusals": refusals,
-            "warnings": certificate.warnings,
+            "warnings": warnings,
             "unchecked": certificate.unchecked,
             "builtForAnotherRace": foreign,
             "unhandled": handover.unhandled(),

@@ -306,18 +306,30 @@ def stamp(store, event_id: int, plan: dict, *, inputs=None,
             f"{', '.join(REQUIRED_EXPECTS)} - a plan whose expectations "
             f"cannot be read arms and then reports nothing, which from the "
             f"driver's seat is a race going to plan")
+    from pitcrew.strategy.targets import (TARGETS_KEY, fill_targets,
+                                          target_problems, targets_answered)
+
+    # A malformed block is not filled around: `certify` refuses it by name,
+    # and filling would bury the author's mistake under practice's figures.
+    targets_need = (not targets_answered(stamped)
+                    and not target_problems(stamped))
+    if (not stamped.get("expects") or targets_need) and inputs is None:
+        from pitcrew.strategy.evidence import build_inputs
+        try:
+            inputs, _evidence = build_inputs(store, event_id)
+        except Exception:                                    # noqa: BLE001
+            # **Missing, not zero** (CLAUDE.md §4.3). A contract of zeroes
+            # would have every per-lap comparison reporting a car massively
+            # under plan; a contract of `None`s has them say nothing, which
+            # is the truth. `certify` is what refuses the plan for it.
+            inputs = None
     if not stamped.get("expects"):
-        if inputs is None:
-            from pitcrew.strategy.evidence import build_inputs
-            try:
-                inputs, _evidence = build_inputs(store, event_id)
-            except Exception:                                # noqa: BLE001
-                # **Missing, not zero** (CLAUDE.md §4.3). A contract of zeroes
-                # would have every per-lap comparison reporting a car massively
-                # under plan; a contract of `None`s has them say nothing, which
-                # is the truth. `certify` is what refuses the plan for it.
-                inputs = None
         stamped["expects"] = expectation_for(
             inputs, practice_lap_count(store, event_id)).as_plan()
+    # **The lap time and burn George judges each lap against** (16 Sep 2026).
+    # The author's figures are kept; every gap is filled from practice and
+    # sourced as such - see `strategy/targets.py`.
+    if targets_need:
+        stamped[TARGETS_KEY] = fill_targets(stamped, inputs)
 
     return stamped

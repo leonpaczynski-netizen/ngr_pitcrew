@@ -1081,11 +1081,34 @@ def hud_alert_lines() -> tuple[str, ...]:
     return tuple(alert_lines())
 
 
+@lru_cache(maxsize=1)
+def target_lines() -> tuple[str, ...]:
+    """The lap against the plan's target, inside the heartbeat (16 Sep 2026).
+
+    Driven through `race/targets.py`'s own sentence functions over every gap
+    they can say: each tenth from the on-target band to a second in both
+    directions, the seconds form past it, and the burn either way - so a
+    reworded clause is a re-rendered clip.
+    """
+    from pitcrew.race.targets import (ON_TARGET_L, ON_TARGET_S, burn_sentence,
+                                      pace_sentence)
+
+    lines = []
+    tenths = [tenth / 10.0 for tenth in range(int(ON_TARGET_S * 10), 10)]
+    for gap in (*tenths, 1.0, 1.4, 0.0):
+        for sign in (1.0, -1.0):
+            lines.append(pace_sentence(sign * gap))
+    for litres in (ON_TARGET_L, 0.3, 0.0):
+        for sign in (1.0, -1.0):
+            lines.append(burn_sentence(sign * litres))
+    return _pieces(*lines)
+
+
 def volunteered_lines() -> tuple[str, ...]:
     """Every clip the families above need."""
     return tuple(dict.fromkeys((*colour_data_lines(), *off_road_lines(),
                                 *refuel_lines(), *race_news_lines(),
-                                *hud_alert_lines())))
+                                *hud_alert_lines(), *target_lines())))
 
 
 # The two references the fuel clause is measured against, mirrored from

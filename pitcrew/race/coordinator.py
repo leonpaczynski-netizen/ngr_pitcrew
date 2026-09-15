@@ -299,6 +299,13 @@ class RaceCoordinator:
                     and not isinstance(burns.get(k), bool)
                     and burns[k] > 0 for k in ("save", "full"))
             else None)
+        # **What the plan asks of each lap** - a lap time per compound and a
+        # burn - judged at every crossing and said in the heartbeat (the
+        # driver, 16 Sep 2026). None where the plan carries nothing a lap
+        # could be judged against. See `strategy/targets.py`.
+        from pitcrew.strategy.targets import PlanTargets
+
+        self.targets = PlanTargets.from_plan(self.plan)
         # This race's own clean-lap burns, by the column the beep was on for
         # the whole lap. Emptied with the coordinator, which is built per race
         # (CLAUDE.md rule 11).
@@ -996,6 +1003,9 @@ class RaceCoordinator:
         self._incident_pending = None
         if incident is not None:
             self._note_incident(lap, reported=incident)
+        # **Against the plan's target**, before the mode latch below moves on
+        # to the next lap - the verdict needs the column this lap was driven on.
+        self._judge_against_target(lap, incident=incident is not None)
         # **The lap into the pace record of the cars either side**, with the
         # reason where it is not a lap of anybody's pace (rule: exclude the
         # excursions before correlating). Keyed on the wall's own read key.
@@ -1083,6 +1093,9 @@ class RaceCoordinator:
         self.state.note_stop_need()
         self._note_mode_burn(lap)
         self._decide_fuel_mode()
+        # After the column for the coming lap is decided, so its target is
+        # priced on the beep he is about to drive to.
+        self._target_next_lap(lap)
         folded = self._reconsider_ignored_box()
         if folded is not None:
             self.state.record(folded)
@@ -2341,6 +2354,74 @@ class RaceCoordinator:
         if asked or engaged is None:
             return asked
         return FUEL_MODE_DROP_RPM if engaged else None
+
+    def _lap_is_saving(self, lap) -> bool | None:
+        """Whether this lap was driven on the fuel-saving beep, or None where
+        it changed column during the lap.
+
+        The plan's column where the plan runs the beep (`fuel_save_engaged`,
+        read before `_note_mode_burn` moves the latch on); otherwise the
+        short-shift instruction the controller stamped on the lap.
+        """
+        engaged = self.state.fuel_save_engaged
+        if engaged is None:
+            return bool(getattr(lap, "short_shift_rpm", None))
+        before = self._mode_at_lap_start
+        if before is not None and before != engaged:
+            return None
+        return bool(engaged)
+
+    def _judge_against_target(self, lap, *, incident: bool) -> None:
+        """The completed lap against what the plan asked of it.
+
+        **Logged on every lap, accepted or not** (rule 10): the target, the
+        lap and the gap, or why this lap got no verdict. The heartbeat speaks
+        `state.target_verdict`; the board draws it.
+        """
+        from pitcrew.race.targets import judge, why_no_verdict
+
+        self.state.target_verdict = None
+        if self.targets is None:
+            return
+        why = why_no_verdict(lap, rolling_start=self.expect.rolling_start,
+                             incident=incident)
+        saving = self._lap_is_saving(lap) if why is None else None
+        if why is None and saving is None:
+            why = "the beep changed column during the lap"
+        if why is not None:
+            log("race").info("target: lap %s gets no verdict - %s",
+                             lap.lap_num, why)
+            return
+        target = self.targets.for_lap(
+            compound=self.state.tyre_compound, saving=saving,
+            lap_on_set=max(1, self.state.laps_since_stop),
+            fuel_at_start_l=getattr(lap, "fuel_start", None))
+        verdict = judge(lap, target)
+        self.state.target_verdict = verdict
+        log("race").info(
+            "target: lap %s on %s (%s, set lap %d): %s ms against %s ms "
+            "(%s) - burn %s against %s L", lap.lap_num, target.compound,
+            "saving" if saving else "full revs", target.lap_on_set,
+            lap.lap_time_ms, target.lap_ms,
+            target.lap_source or target.why_no_lap,
+            None if verdict is None else verdict.burn_l, target.burn_l)
+
+    def _target_next_lap(self, lap) -> None:
+        """What the plan asks of the lap now being driven, for the board.
+
+        None after a pit lap - the lap after it is the out lap, which is never
+        judged - and where the race has no targets.
+        """
+        if self.targets is None or getattr(lap, "is_pit_lap", False):
+            self.state.lap_target = None
+            return
+        engaged = self.state.fuel_save_engaged
+        self.state.lap_target = self.targets.for_lap(
+            compound=self.state.tyre_compound,
+            saving=bool(engaged) if engaged is not None else bool(
+                getattr(lap, "short_shift_rpm", None)),
+            lap_on_set=self.state.laps_since_stop + 1,
+            fuel_at_start_l=getattr(lap, "fuel_end", None))
 
     def _note_mode_burn(self, lap) -> None:
         """File this lap's burn under the beep column it was driven on.

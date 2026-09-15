@@ -679,6 +679,10 @@ def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
                 file_best_ms=599_999, reference_compound="RMW",
                 wet="mixed", abs_setting="Default", front_lock=True,
                 tcs_active=True,
+                # And the plan's targets at their widest (16 Sep 2026).
+                target_lap_ms=599_999, target_burn_l=12.34,
+                target_saving=True, last_vs_target_s=+12.345,
+                last_burn_vs_target_l=+12.34,
                 ahead=GapView(
                     seconds=12.4,
                     note=f"he is catching 0.6 s a lap - {long_name}",
@@ -817,6 +821,9 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
                 predicted_ms=599_999, delta_file_s=12.345, file_best_ms=599_999,
                 reference_compound="RS", wet="mixed", abs_setting="Default",
                 front_lock=True, tcs_active=True,
+                target_lap_ms=599_999, target_burn_l=12.34,
+                target_saving=True, last_vs_target_s=12.345,
+                last_burn_vs_target_l=12.34,
                 ahead=GapView(seconds=12.4,
                               note=f"he is catching 0.6 s a lap - {name}",
                               urgent=True),

@@ -1011,6 +1011,25 @@ def allocate_laps(total: int, limits: list[int | None]) -> list[int]:
     return laps
 
 
+def planned_lap_s(lap_index: int, base_s: float, wear: float | None,
+                  onboard_l: float | None, fuel_weight: float) -> float:
+    """One lap as the plan prices it: pace, the set's wear, the fuel aboard.
+
+    `lap_index` counts from 0 on the lap a set goes on. **This is the one
+    expression for a planned lap** - `_stint_seconds` sums it to cost a
+    stint, and `strategy/targets.py` reads it back one lap at a time as the
+    target George judges a lap against (the driver, 16 Sep 2026). Two copies
+    would be a plan costed on one lap and a driver judged against another
+    (rule 12).
+    """
+    lap_time = base_s
+    if wear:
+        lap_time += pace_loss_s((lap_index + 1) * wear)
+    if onboard_l is not None:
+        lap_time += onboard_l * fuel_weight
+    return lap_time
+
+
 @lru_cache(maxsize=200_000)
 def _stint_seconds(laps: int, base_s: float, wear: float | None,
                    fuel_at_start_l: float | None, fuel_per_lap_l: float | None,
@@ -1023,13 +1042,10 @@ def _stint_seconds(laps: int, base_s: float, wear: float | None,
     """
     total = 0.0
     for lap_index in range(laps):
-        lap_time = base_s
-        if wear:
-            total += pace_loss_s((lap_index + 1) * wear)
+        onboard = None
         if fuel_at_start_l is not None and fuel_per_lap_l:
             onboard = max(0.0, fuel_at_start_l - lap_index * fuel_per_lap_l)
-            lap_time += onboard * fuel_weight
-        total += lap_time
+        total += planned_lap_s(lap_index, base_s, wear, onboard, fuel_weight)
     return total
 
 

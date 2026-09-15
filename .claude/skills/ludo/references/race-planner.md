@@ -149,6 +149,12 @@ payload = {
     {"laps": 9,  "compound": "RS", "fuel_l": 69.4, "start_lap": 12, "tyres": True},
   ],
   "binding_constraint": "fuel",
+  "targets": {
+    "reference_load_l": 45.0,
+    "compounds": {
+      "RS": {"lap_time_ms": 101200, "wear_per_lap": 0.052}
+    }
+  },
   "notes": ["one line per assumption, with its source class"],
   "playbook": [
     {"trigger": "fuel_short",  "action": "short_shift",
@@ -218,9 +224,55 @@ Three plan fields, refused by name at every door when malformed
   beep is the fuel call's job ("Save N litres a lap", lift). A plan that never
   names the key leaves the beep exactly as before.
 
+### Per-lap targets: the lap time per compound George judges every lap against (16 Sep 2026)
+
+The driver: *"a lap time for each compound and a fuel delta per lap we are
+trying to hit each lap based on the optimal plan"*, shown on the board and
+spoken by George every lap - and **Ludo passes them**. The `targets` block
+beside the stints (`pitcrew/strategy/targets.py`):
+
+```json
+"targets": {
+  "reference_load_l": 45.0,
+  "compounds": {
+    "RM": {"lap_time_ms": 101200, "save_lap_time_ms": 101700,
+           "wear_per_lap": 0.052, "reference_load_l": 45.0}
+  }
+}
+```
+
+- **`lap_time_ms`** - a clean full-revs lap on a FRESH set of that compound,
+  in integer ms. Pass one for **every compound the plan runs**.
+- **`save_lap_time_ms`** - the same lap on the fuel-saving beep. Needed for
+  any `fuel_save: true` stint on that compound; there is no practice figure
+  for it, so without it George gives that stint no pace target (burn only).
+  Refused if quicker than `lap_time_ms`.
+- **`wear_per_lap`** - the set's wear fraction per lap. George's target gets
+  slower through the stint by the model's own `pace_loss_s` (flat to 50%).
+- **`reference_load_l`** - the fuel aboard the lap times were set with. Per
+  compound, or once at the top for all of them. The target gets quicker as
+  fuel burns off, at 0.003 s per litre per lap; **omit it and the target has
+  no fuel term at all** rather than one resting on a guessed load.
+
+**Each lap's target is `model.planned_lap_s`** - the optimiser's one-lap
+expression - for the compound on the car, the beep column, the laps on the
+set and the fuel measured at the start of the lap. **The burn target is not in
+this block**: it is `fuel_burns.save` / `fuel_burns.full` by the lap's beep
+column, else `expects.expected_fuel_per_lap_l`. Pass `fuel_burns` to set it.
+
+Anything left out is **filled from practice at stamp and labelled
+`practice`** (an author figure is labelled `author`); the reply's `warnings`
+names every planned compound whose lap time Ludo did not pass. A malformed
+field or unknown key is **refused** at every door.
+
+George's words each lap, inside the heartbeat: *"Pace two tenths slow."* /
+*"Pace on target."* (within 0.2 s) and *"Burn 0.2 litres over."* / *"Burn on
+target."* (within 0.1 L). No verdict on lap 1 of a standing start, a pit or
+out lap, an incident lap, or a lap more than 4% off its target.
+
 **The deliverable is three things, from Suzuka on:** the plan (with its tyres
-decisions), the playbook, and the engineering sheet - every `race_knowledge`
-field filled, or a line saying why it cannot be.
+decisions and its per-compound targets), the playbook, and the engineering
+sheet - every `race_knowledge` field filled, or a line saying why it cannot be.
 
 Anything outside the playbook is George reporting, not deciding. **He may always
 say "the plan no longer fits and I cannot fix it from here"** — that is a useful

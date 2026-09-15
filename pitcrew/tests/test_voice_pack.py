@@ -362,8 +362,17 @@ def test_the_pack_stays_within_budget():
     enumerated, which is the 60 clips this raise does not spend; a named line
     ("PUNISHED ahead, 2.1.") costs nothing because no clip can hold a name.
     800 leaves 33, about one more family of this size.
+
+    **Raised to 830 on 16 Sep 2026, for the lap against the plan's target**
+    (the driver: every lap judged against the plan's lap time and burn, in
+    the heartbeat). The ceiling stood at 800 with 781 used. `target_lines`
+    costs 26: "Pace two tenths slow." to nine tenths and one second, both
+    directions, whole; the seconds form split on its number; and the burn
+    split on its number. Splitting the tenths too ("Pace" | "two tenths" |
+    "slow.") was weighed and refused: it saves about seven clips and puts two
+    joins in a four-word line said every lap. 830 leaves 23.
     """
-    assert len(manifest.clips()) < 800
+    assert len(manifest.clips()) < 830
 
 
 def test_the_same_line_always_names_the_same_file():
