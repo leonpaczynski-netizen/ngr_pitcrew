@@ -61,16 +61,22 @@
      slots above it, and a caption overran a lamp. */
   #app { height: 100%; display: grid; gap: var(--gap-y) var(--gap-x); padding: 1.6vh 1.4vw;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.38fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) 22vh; }
+    grid-template-rows: minmax(0, 1fr) 20vh 7.5vh; }
   #left { grid-area: 1 / 1; } #centre { grid-area: 1 / 2; } #right { grid-area: 1 / 3; }
-  #lights { grid-area: 2 / 1 / 3 / 3; display: grid; gap: var(--gap-x);
+  /* **The lamps are colour, not size** (the driver, 16 Sep 2026: "reduce the
+     size of the ABS, TCS and DRY buttons significantly, these only need to be
+     very small and different coloured for visibility, and re-use that real
+     estate"). A lit lamp is read by its fill from the corner of the eye; the
+     word only has to confirm which one it is. So they take a thin band under
+     the readings, and the room they had goes to the two numbers. */
+  #lights { grid-area: 3 / 1 / 4 / 4; display: grid; gap: var(--gap-x);
     grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; }
-  /* **The two readings, stacked in the third column.** Fuel in hand to the
+  /* **The two readings, side by side across the width.** Fuel in hand to the
      stop, and the last lap against the plan's target (16 Sep 2026). Both are
-     readings rather than instructions, which is why they share the quiet
-     corner and never the centre. */
-  #extras { grid-area: 2 / 3; display: grid; gap: var(--gap-y);
-    grid-template-rows: repeat(2, minmax(0, 1fr)); min-width: 0; min-height: 0; }
+     readings rather than instructions, which is why they sit here and never
+     in the centre. */
+  #extras { grid-area: 2 / 1 / 3 / 4; display: grid; gap: var(--gap-x);
+    grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; min-height: 0; }
 
   .slot { position: relative; isolation: isolate; min-width: 0; min-height: 0;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
@@ -106,20 +112,21 @@
   /* On the flood every line is ground ink - 12:1 on the amber. */
   .flooded .val, .flooded .sub, .flooded .cap { color: var(--ground); transition: color 0s 70ms; }
 
-  .light { flex-direction: column; }
-  .light .word { font-family: var(--label); font-weight: 700; letter-spacing: 0.1em; font-size: 7.4vh;
-    color: var(--dim); line-height: 1; white-space: nowrap; text-transform: uppercase; padding-top: 0.12em; }
-  .light .lsub { font-family: var(--label); font-weight: 700; font-size: 3.3vh; color: var(--dim);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; min-height: 1.15em;
-    line-height: 1.15; }
+  .light { flex-direction: row; gap: 0.6vw; padding: 0.2vh 0.6vw; }
+  .light .word { font-family: var(--label); font-weight: 700; letter-spacing: 0.08em; font-size: 3.4vh;
+    color: var(--dim); line-height: 1; white-space: nowrap; text-transform: uppercase; }
+  /* The reason under a lamp is gone with the height: the fill says lit and
+     the word says which. `light()` still sets it, so it comes back with a
+     rule rather than with a change to what the app publishes. */
+  .light .lsub { display: none; }
   .light.flooded .word, .light.flooded .lsub { color: var(--ground); transition: color 0s 70ms; }
 
   /* Each reading: caption and reason on the left, the figure on the right. */
   #extras .face { display: grid; width: 100%; align-items: center; column-gap: 0.9vw;
     grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; }
-  #extras .cap { grid-area: 1 / 1; justify-self: start; font-size: 2.7vh; letter-spacing: 0.1em; }
-  #extras .sub { grid-area: 2 / 1; justify-self: start; font-size: 2.6vh; }
-  #extras .val { grid-area: 1 / 2 / 3 / 3; font-size: 7.4vh; margin: 0; }
+  #extras .cap { grid-area: 1 / 1; justify-self: start; font-size: 3.4vh; letter-spacing: 0.1em; }
+  #extras .sub { grid-area: 2 / 1; justify-self: start; font-size: 3.2vh; }
+  #extras .val { grid-area: 1 / 2 / 3 / 3; font-size: 13vh; margin: 0; }
 
   #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
     justify-content: center; background: var(--ground); text-align: center; padding: 4vh 4vw; }
@@ -135,14 +142,14 @@
 
   @media (orientation: portrait) {
     #app { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) 11vh 11vh; }
+      grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) 14vh 6.5vh; }
     #centre { grid-area: 1 / 1 / 2 / 3; } #left { grid-area: 2 / 1; } #right { grid-area: 2 / 2; }
-    #lights { grid-area: 3 / 1 / 4 / 3; }
-    #extras { grid-area: 4 / 1 / 5 / 3; grid-template-rows: none;
+    #extras { grid-area: 3 / 1 / 4 / 3; grid-template-rows: none;
       grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #lights { grid-area: 4 / 1 / 5 / 3; }
     .cap { font-size: 4vw; } .val { font-size: 19vw; } .centre .val { font-size: 30vw; }
-    .sub { font-size: 3.6vw; } .light .word { font-size: 5vw; } .light .lsub { font-size: 2.8vw; }
-    #extras .cap { font-size: 2.6vw; } #extras .sub { font-size: 2.4vw; } #extras .val { font-size: 8vw; }
+    .sub { font-size: 3.6vw; } .light .word { font-size: 3.2vw; }
+    #extras .cap { font-size: 3.1vw; } #extras .sub { font-size: 2.9vw; } #extras .val { font-size: 10.5vw; }
     #cover .big { font-size: 14vw; } #cover .why { font-size: 4vw; }
   }
   @media (prefers-reduced-motion: reduce) {
