@@ -3313,6 +3313,8 @@ class PitCrewController(QObject):
             except Exception:
                 log("pitcrew").exception("pit-wall: health could not be read")
         frames = self.bridge.recorder.encode(rows)
+        # Why this lap has no sectors, for the board's sector panel.
+        sector_refusal = None
 
         # **A lap has to have been driven for as long as it says it was.**
         #
@@ -3507,6 +3509,7 @@ class PitCrewController(QObject):
             elif cut.refused:
                 log("session").info("lap %s has no sector times: %s",
                                     lap.lap_num, cut.refused)
+                sector_refusal = cut.refused
         # **The session's opening lap is judged here, before it is written,
         # by the rule the rack rebuilds with.** The session state flags an
         # out-lap on a PIT EXIT, and a pit exit needs a pit ENTRY first -
@@ -3615,7 +3618,8 @@ class PitCrewController(QObject):
             # best and the archive's tag cannot name two tyres (critic pass 2).
             self._board_note_lap(
                 lap, rows, filed, lap_id=lap_id,
-                excluded=bool(pending) or reset is not None)
+                excluded=bool(pending) or reset is not None,
+                frames=frames, sector_refusal=sector_refusal)
         # Race laps belong to the race session, not to the practice rack.
         # They were pushed on here numbered as a continuation of the practice
         # laps, then vanished on the next rebuild because `_rows_for_event`
@@ -3670,7 +3674,8 @@ class PitCrewController(QObject):
         self._refresh_compound_pace(self.store.active_event_id())
         self._board_note_lap(lap, rows, row.compound, lap_id=lap_id,
                              excluded=(bool(pending) or reset is not None
-                                       or bool(row.is_out_lap)))
+                                       or bool(row.is_out_lap)),
+                             frames=frames, sector_refusal=sector_refusal)
 
     @staticmethod
     def _reset_in(rows, frames) -> float | None:
@@ -6211,9 +6216,11 @@ class PitCrewController(QObject):
 
     def _board_note_lap(self, lap, rows, compound: str | None, *,
                         lap_id: int | None = None,
-                        excluded: bool = False) -> None:
-        """At the crossing: the compound now fitted, and this lap as that
-        compound's session best if it is one. Never raises into the lap."""
+                        excluded: bool = False, frames=None,
+                        sector_refusal: str | None = None) -> None:
+        """At the crossing: the compound now fitted, this lap as that
+        compound's session best if it is one, and its sectors for the panel.
+        Never raises into the lap."""
         live = getattr(self.bridge, "board_live", None)
         if live is None:
             return
@@ -6224,6 +6231,19 @@ class PitCrewController(QObject):
                 live.set_compound(compound)
             if not excluded:
                 live.note_lap(lap, rows, FRAME_FIELDS, compound, lap_id=lap_id)
+            # **The sectors the row was written with**, not a second cut: the
+            # rack and the board read one `LapFrames`, so a lap cannot show
+            # one S2 on the rack and another above the game.
+            live.note_sectors(
+                lap_id=lap_id,
+                times_ms=(None if frames is None else
+                          (frames.sector1_ms, frames.sector2_ms,
+                           frames.sector3_ms)),
+                stamp=None if frames is None else frames.sector_model,
+                compound=compound,
+                counted=not (excluded or getattr(lap, "is_out_lap", False)
+                             or getattr(lap, "is_pit_lap", False)),
+                refused=sector_refusal)
         except Exception:                                    # noqa: BLE001
             log("ui").exception("the board could not take lap %s as a reference",
                                 getattr(lap, "lap_num", None))
@@ -6295,6 +6315,10 @@ class PitCrewController(QObject):
             if fitted and live.compound != fitted:
                 live.set_compound(fitted)
         fields = dict(live.board_fields()) if live is not None else {}
+        if live is not None:
+            from pitcrew.analysis.lap_sectors import cut_words
+
+            fields["sectors"] = live.sectors_view(cut_words)
         try:
             fields["wet"] = self.hud.wet_now()
         except Exception:                                    # noqa: BLE001

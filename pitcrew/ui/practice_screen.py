@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from pitcrew.analysis.gameclock import clock
+from pitcrew.analysis.lap_sectors import CUT_WORDS
 from pitcrew.analysis.runs import (
     FOR_QUALIFYING,
     FOR_RACE,
@@ -1871,14 +1872,9 @@ class PracticeScreen(QWidget):
         times = [r.lap_time_ms for r in self._rows if r.counted and r.lap_time_ms > 0]
         return min(times) if times else 0
 
-    # How each provenance reads on the spec line. The words matter: "thirds"
-    # has to say plainly that nobody measured this boundary, or a driver reads
-    # a sector split as if it were the one on a timing sheet.
-    _CUT_WORDS = {
-        "timing-line": "at the circuit's timing lines",
-        "landmark": "at the circuit's landmarks",
-        "thirds": "thirds of the lap - not GT7's",
-    }
+    # How each provenance reads on the spec line - `lap_sectors.CUT_WORDS`,
+    # shared with the driver board so the two name the same lines alike.
+    _CUT_WORDS = CUT_WORDS
 
     def _sector_stamps(self) -> set:
         """Every set of sector lines on this rack.

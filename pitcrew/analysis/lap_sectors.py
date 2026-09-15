@@ -97,6 +97,25 @@ SOURCE_TIMING_LINE = "timing-line"
 SOURCE_LANDMARK = "landmark"
 SOURCE_THIRDS = "thirds"
 
+# How each provenance reads on a screen. The words matter: "thirds" has to say
+# plainly that nobody measured this boundary, or a driver reads a sector split
+# as if it were the one on a timing sheet. One table for the rack and the
+# driver board, so the two cannot describe the same lines differently.
+CUT_WORDS = {
+    SOURCE_TIMING_LINE: "at the circuit's timing lines",
+    SOURCE_LANDMARK: "at the circuit's landmarks",
+    SOURCE_THIRDS: "thirds of the lap - not GT7's",
+}
+
+
+def cut_words(stamp: str | None) -> str | None:
+    """`<circuit>:<source>:<lines>` (see `SectorModel.stamp`) as words."""
+    if not stamp:
+        return None
+    parts = stamp.split(":")
+    source = parts[1] if len(parts) > 2 else ""
+    return CUT_WORDS.get(source, source or None)
+
 # Three, everywhere. A 90-140 s lap gives 30-45 s a sector, which is coarse but
 # sits far clear of the corner noise floor that put per-corner coaching out of
 # reach: a corner is 3-4x noisier in relative terms than a whole lap on this

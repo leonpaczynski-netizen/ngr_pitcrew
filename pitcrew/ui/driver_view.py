@@ -499,6 +499,10 @@ class DriverState:
     # "all best times should be locked to compound"). Named on the board so
     # "vs session best" can never be read as a best on another tyre.
     reference_compound: str | None = None
+    # **The last lap's three sectors against this session's bests** on the
+    # same tyre and lines (the driver, 15 Sep 2026). `race.board_live.
+    # SectorsView`; None where no live reader is armed.
+    sectors: "SectorsView | None" = None
 
     # ---- the three lights (row 5.21).
     # WET: the hygrometer over the last few HUD reads - "wet", "mixed", "dry",
@@ -1223,6 +1227,100 @@ def lap_reference_note(state: "DriverState") -> str:
     return "  ·  ".join(parts)
 
 
+def fuel_flag_block(state: "DriverState") -> Block:
+    """IN HAND TO THE FLAG, with the supply it rests on named.
+
+    **The reference first, then the burn.** The reference is the half that
+    has to survive a cut, because it is what says whether the figure is his
+    to move; the burn is what lets him check it. The order is the whole
+    design here - `set_sub_width` elides from the right, so on a face wide
+    enough to need eliding it is the litres that go, not the words.
+
+    The burn was taken off this line entirely for a while, on the arithmetic
+    that `on the plan's fill · 4.19 L/lap` wanted thirty-one characters
+    against a twenty-one character bound. That was measured on the OFFSCREEN
+    test font at 27 px a character. On the rig the face is 16 px a character
+    and the whole string is 496 px against a 640 px bound - it fits with room
+    to spare, and it was removed for a reason that was not true.
+    """
+    if state.fuel_to_flag is None:
+        # **A dash gets a REASON, never the reference or the burn.**
+        # `on the plan's fill · 4.19 L/lap` under a dash says what the figure
+        # would have rested on, which is not why there isn't one - and "every
+        # dash on this board says why" is the rule the whole panel is built
+        # on. `fuel_in_hand_to_flag` always returns a `why` beside a None, so
+        # this fallback is the belt.
+        return Block("--", state.fuel_to_flag_why or "not measured")
+    rests_on = state.fuel_to_flag_on or ""
+    if state.burn_l is not None:
+        burn = f"{state.burn_l:.2f} L/lap"
+        rests_on = f"{rests_on} · {burn}" if rests_on else burn
+    return Block(f"{state.fuel_to_flag:.1f}", rests_on,
+                 _tone(state.fuel_to_flag < 0))
+
+
+def position_block(state: "DriverState") -> Block:
+    """POSITION: `P6` over `of 12`, or a dash - P0 is not a place anyone
+    finished in. `RaceState.position` is None until the first packet is
+    decoded and after a read the locator refused."""
+    if state.position is None:
+        return Block("--", "not read yet")
+    # `P6` and `of 12` rather than the spoken `position_line`'s "P6 of 12." -
+    # the same two numbers, laid out for an eye instead of an ear.
+    return Block(f"P{state.position}",
+                 f"of {state.field_size}" if state.field_size else "")
+
+
+def format_sector_ms(ms: int | None) -> str:
+    """`38.412`, or `1:02.345` for a sector past a minute, or a dash."""
+    if ms is None or ms <= 0:
+        return "--.---"
+    if ms >= 60_000:
+        return format_lap_ms(ms)
+    return f"{ms / 1000:.3f}"
+
+
+def sector_blocks(state: "DriverState") -> tuple[tuple, str]:
+    """The three sector boxes and the line under them.
+
+    **Green "best" when this lap set that sector's session best; otherwise the
+    difference to it, amber when slower** - the same colours TIME DIFF uses, so
+    the lap panel speaks one language (his choice, 15 Sep 2026). A difference
+    that is negative without being a best is a lap that does not count - an
+    out-lap - running under a counted best, and it is shown as it is.
+
+    **The reason for dashes goes on the line, not under S1**, where a box's
+    reason would be elided and read as belonging to that sector alone.
+    """
+    view = state.sectors
+    dashes = tuple(Block(format_sector_ms(None)) for _ in range(3))
+    if view is None:
+        return dashes, ""
+    if view.times_ms is None:
+        parts = [view.why or "no sector times"]
+        if view.cut:
+            parts.append(f"sectors {view.cut}")
+        return dashes, "  ·  ".join(parts)
+    blocks = []
+    for ms, best, mine in zip(view.times_ms, view.best_ms, view.set_best):
+        value = format_sector_ms(ms)
+        if mine:
+            blocks.append(Block(value, "best", TONE_GOOD))
+        elif best is None:
+            blocks.append(Block(value))
+        else:
+            diff = (ms - best) / 1000.0
+            blocks.append(Block(value, f"{diff:+.3f}",
+                                TONE_URGENT if diff > 0
+                                else TONE_GOOD if diff < 0 else TONE_PLAIN))
+    parts = ["last lap"]
+    if view.compound and any(best is not None for best in view.best_ms):
+        parts.append(f"vs {view.compound} session bests")
+    if view.cut:
+        parts.append(f"sectors {view.cut}")
+    return tuple(blocks), "  ·  ".join(parts)
+
+
 class _Box(QWidget):
     """A framed title-over-value box, as on the driver's reference image."""
 
@@ -1296,6 +1394,52 @@ class _LapTimePanel(QWidget):
         self.diff.set_value(format_delta(delta), ink)
         self.pred.set_value(format_lap_ms(state.predicted_ms), INK)
         self.note.setText(lap_reference_note(state))
+
+
+class _SectorPanel(QWidget):
+    """Last lap S1 | S2 | S3, each against this session's best of it.
+
+    Framed boxes like the lap panel beside it, with the difference under each
+    value and one line naming the lap, the tyre and where the lines came from -
+    GT7 sends no sectors, so a split is the app's own claim and the board says
+    whose (`analysis/lap_sectors.py`).
+    """
+
+    def __init__(self, value_px: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        self.boxes = []
+        self.subs = []
+        for name in ("s1", "s2", "s3"):
+            box = _Box(name, value_px)
+            sub = QLabel("")
+            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            box.layout().addWidget(sub)
+            self.boxes.append(box)
+            self.subs.append(sub)
+            row.addWidget(box)
+        column.addLayout(row)
+        self.note = QLabel("")
+        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.note.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:24px;color:{INK_DIM};"
+            f"background:transparent;")
+        column.addWidget(self.note)
+
+    def show_state(self, state: "DriverState") -> None:
+        blocks, note = sector_blocks(state)
+        for box, sub, block in zip(self.boxes, self.subs, blocks):
+            ink = GOOD if block.good else NEAR if block.urgent else INK_DIM
+            box.set_value(block.value, GOOD if block.sub == "best" else INK)
+            sub.setText(block.sub)
+            sub.setStyleSheet(
+                f"font-family:{NUMBER_FACE};font-size:26px;color:{ink};"
+                f"background:transparent;")
+        self.note.setText(note)
 
 
 class _Light(QWidget):
@@ -1869,6 +2013,17 @@ class DriverView(QWidget):
         # state rather than one widget re-parented on every update.
         self.lap_panel_top = _LapTimePanel(value_px=58)
         self.lap_panel_lead = _LapTimePanel(value_px=120)
+        # The race page for when the phone strip is reading: the lap panel at
+        # the middle rank, above the fuel and position leading.
+        self.lap_panel_mid = _LapTimePanel(value_px=96)
+        # Last lap S1 / S2 / S3, beside the lights (15 Sep 2026).
+        self.sector_panel = _SectorPanel(value_px=58)
+        # **The phone page's lead rank.** Separate instances from the middle
+        # rank's, fed the same blocks - a widget re-parented on every update
+        # is the thing this file already refused once for the lap panel.
+        self.stop_lead = _Stat("in hand to the stop", value_px=_Stat.GAP_PX)
+        self.flag_lead = _Stat("in hand to the flag", value_px=_Stat.GAP_PX)
+        self.position_lead = _Stat("position", value_px=_Stat.GAP_PX)
 
         # **The gaps lead and they sit at the bottom.** This file's layout
         # rule is that he glances UP from the game screen below, so the bottom
@@ -1932,6 +2087,9 @@ class DriverView(QWidget):
         centred.addWidget(self.lap_panel_top, 0, Qt.AlignmentFlag.AlignVCenter)
         centred.addWidget(tyres)
         centred.addWidget(light_block)
+        self.sector_panel.setSizePolicy(QSizePolicy.Policy.Maximum,
+                                        QSizePolicy.Policy.Preferred)
+        centred.addWidget(self.sector_panel, 0, Qt.AlignmentFlag.AlignVCenter)
         centred.addStretch(1)
         stacked.addLayout(centred)
 
@@ -1964,9 +2122,32 @@ class DriverView(QWidget):
         lead_lap.addStretch(1)
         practice_column.addLayout(lead_lap)
 
+        # **The phone page.** The gaps and laps to the stop are on his phone,
+        # so the numbers he plans with take the edge nearest his eye at the
+        # lead size, and the lap panel sits above them.
+        self.race_phone = QWidget()
+        phone_column = QVBoxLayout(self.race_phone)
+        phone_column.setContentsMargins(0, 0, 0, 0)
+        phone_column.setSpacing(12)
+        phone_column.addStretch(1)
+        mid_lap = QHBoxLayout()
+        mid_lap.addStretch(1)
+        mid_lap.addWidget(self.lap_panel_mid)
+        mid_lap.addStretch(1)
+        phone_column.addLayout(mid_lap)
+        phone_lead = QHBoxLayout()
+        phone_lead.setSpacing(70)
+        for stat in (self.stop_lead, self.flag_lead, self.position_lead):
+            stat.set_sub_width(_Stat.MIDDLE_SUB_W)
+            phone_lead.addStretch(1)
+            phone_lead.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
+        phone_lead.addStretch(1)
+        phone_column.addLayout(phone_lead)
+
         self.lower = QStackedLayout()
         self.lower.addWidget(race_lower)
         self.lower.addWidget(self.leading_lap)
+        self.lower.addWidget(self.race_phone)
         self._race_lower = race_lower
         stacked.addLayout(self.lower)
 
@@ -2035,6 +2216,8 @@ class DriverView(QWidget):
         self._show_session_kind(state)
         self.lap_panel_top.show_state(state)
         self.lap_panel_lead.show_state(state)
+        self.lap_panel_mid.show_state(state)
+        self.sector_panel.show_state(state)
         self.wet_light.show_light(*wet_light(state.wet))
         self.abs_light.show_light(*abs_light(state.abs_setting, state.front_lock))
         self.tcs_light.show_light(*tcs_light(state.tcs_active))
@@ -2047,19 +2230,6 @@ class DriverView(QWidget):
         self._show_gap(self.ahead_stat, state.ahead)
         self._show_gap(self.behind_stat, state.behind)
         self._show_fuel(state)
-
-        if state.position is None:
-            # **A dash, not a zero.** `RaceState.position` is None until the
-            # first packet is decoded and after a read the locator refused;
-            # P0 is not a place anyone finished in.
-            self.position_stat.show_value("--", "not read yet")
-        else:
-            # `P6` and `of 12` rather than the spoken `position_line`'s
-            # "P6 of 12." - the same two numbers, laid out for an eye instead
-            # of an ear.
-            self.position_stat.show_value(
-                f"P{state.position}",
-                f"of {state.field_size}" if state.field_size else "")
 
     # Kept as names on the view for the tests that reach for them; the
     # expressions are the module's `tyre_clause` and `box_caption`.
@@ -2089,40 +2259,15 @@ class DriverView(QWidget):
         readings of one tank on the screen, none reconciling with the others.
         The litres live on the box panel, where the stop is priced off them.
         """
-        stop = fuel_stop_block(state)
-        self.stop_stat.show_value(stop.value, stop.sub, urgent=stop.urgent)
-
-        # **The reference first, then the burn.** The reference is the half
-        # that has to survive a cut, because it is what says whether the
-        # figure is his to move; the burn is what lets him check it. The
-        # order is the whole design here - `set_sub_width` elides from the
-        # right, so on a face wide enough to need eliding it is the litres
-        # that go, not the words.
-        #
-        # The burn was taken off this line entirely for a while, on the
-        # arithmetic that `on the plan's fill · 4.19 L/lap` wanted
-        # thirty-one characters against a twenty-one character bound. That
-        # was measured on the OFFSCREEN test font at 27 px a character. On
-        # the rig the face is 16 px a character and the whole string is
-        # 496 px against a 640 px bound - it fits with room to spare, and it
-        # was removed for a reason that was not true.
-        rests_on = state.fuel_to_flag_on or ""
-        if state.burn_l is not None:
-            burn = f"{state.burn_l:.2f} L/lap"
-            rests_on = f"{rests_on} · {burn}" if rests_on else burn
-        if state.fuel_to_flag is None:
-            # **A dash gets a REASON, never the reference or the burn.**
-            # `on the plan's fill · 4.19 L/lap` under a dash says what the
-            # figure would have rested on, which is not why there isn't one -
-            # and "every dash on this board says why" is the rule the whole
-            # panel is built on. `fuel_in_hand_to_flag` always returns a
-            # `why` beside a None, so this fallback is the belt.
-            self.flag_stat.show_value(
-                "--", state.fuel_to_flag_why or "not measured")
-        else:
-            self.flag_stat.show_value(
-                f"{state.fuel_to_flag:.1f}", rests_on,
-                urgent=state.fuel_to_flag < 0)
+        # Both race pages carry these three - the gap-led page at the middle
+        # rank and the phone page at the lead - from one expression each.
+        stop, flag, where = (fuel_stop_block(state), fuel_flag_block(state),
+                             position_block(state))
+        for stat, block in ((self.stop_stat, stop), (self.stop_lead, stop),
+                            (self.flag_stat, flag), (self.flag_lead, flag),
+                            (self.position_stat, where),
+                            (self.position_lead, where)):
+            stat.show_value(block.value, block.sub, urgent=block.urgent)
 
     def _show_session_kind(self, state: DriverState) -> None:
         """Race: the gaps lead and the lap panel sits by the corners. Practice
@@ -2132,14 +2277,19 @@ class DriverView(QWidget):
         plan" and "no gap read" is five things to read that can never change.
         """
         racing = state.session_kind == "race"
-        self.lower.setCurrentWidget(self._race_lower if racing
-                                    else self.leading_lap)
-        # Width only: the top panel shares the corners' row, whose height the
-        # corner grid sets, so hiding it cannot move the board's height.
-        self.lap_panel_top.setVisible(racing)
-        # **Moved to the strip, not copied** - and only while a strip page is
-        # actually polling (`DriverState.strip_live`). Hiding can only shrink
-        # the laid-out minimum, so it cannot push the board off his panel.
-        on_strip = racing and state.strip_live
-        self.leading.setVisible(not on_strip)
-        self.box_stat.setVisible(not on_strip)
+        # **The phone page only while a phone is actually reading**
+        # (`DriverState.strip_live`) - the gaps and laps to the stop are on
+        # it, so this board promotes the fuel and position to the lead. The
+        # moment it stops polling the whole gap-led page comes back: swapped
+        # whole, never a row hidden, per the note where the pages are built.
+        on_phone = racing and state.strip_live
+        self.lower.setCurrentWidget(
+            self.race_phone if on_phone
+            else self._race_lower if racing else self.leading_lap)
+        # Width only: both panels share the corners' row, whose height the
+        # corner grid sets, so hiding one cannot move the board's height.
+        # The gap-led page is today's board exactly, and its row has no room
+        # for a third panel beside the lap panel - so the sectors are on the
+        # phone page and in practice, not on the fallback.
+        self.lap_panel_top.setVisible(racing and not on_phone)
+        self.sector_panel.setVisible(not (racing and not on_phone))

@@ -195,19 +195,23 @@ def test_the_lights_carry_their_own_ink_and_never_claim_a_reading_they_lack():
 
 # ------------------------------------------------------------- the ultrawide
 
-def test_the_ultrawide_gives_up_the_gaps_and_the_stop_only_while_a_phone_reads(app):
+def test_the_ultrawide_swaps_to_the_phone_page_only_while_a_phone_reads(app):
+    """Fuel and position lead while the phone carries the gaps; the moment it
+    stops polling the whole gap-led page comes back."""
     view = DriverView()
-    view.update_state(racing(strip_live=True))
-    assert view.leading.isHidden() and view.box_stat.isHidden()
-    # The phone went flat: both come straight back.
+    view.update_state(racing(strip_live=True, position=6, field_size=12))
+    assert view.lower.currentWidget() is view.race_phone
+    assert view.position_lead.value.text() == "P6"
+    assert view.stop_lead.value.text() == view.stop_stat.value.text() == "0.3"
+    # The phone went flat.
     view.update_state(racing(strip_live=False))
-    assert not view.leading.isHidden() and not view.box_stat.isHidden()
+    assert view.lower.currentWidget() is view._race_lower
 
 
 def test_practice_is_untouched_by_the_strip(app):
     view = DriverView()
     view.update_state(DriverState(session_kind="practice", strip_live=True))
-    assert not view.box_stat.isHidden()
+    assert view.lower.currentWidget() is view.leading_lap
 
 
 # ------------------------------------------------------------- the server

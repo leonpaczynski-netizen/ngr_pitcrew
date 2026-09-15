@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import dataclass
 
 # The recorder's own sample rate, so distance is stepped exactly as it is there.
 SAMPLE_HZ = 60.0
@@ -89,6 +90,30 @@ NO_COMPOUND = "compound not set"
 NO_TELEMETRY = "no telemetry"
 
 _NOTHING_SHOWN = (None, None, None, None, None, None, None, None, None)
+
+# Why the sectors are dashes, in the board's words.
+NO_LAP_YET = "no lap completed yet"
+NO_SECTOR_TIMES = "no sector times for that lap"
+
+
+@dataclass(frozen=True)
+class SectorsView:
+    """The last completed lap cut into three, against this session's best of
+    each sector on the same tyre and the same sector lines.
+
+    Asked for on 15 Sep 2026 for the ultrawide ("last lap S1/S2/S3 vs best").
+    **GT7 sends no sectors** - these are `analysis/lap_sectors.py`'s cut, so
+    `cut` names where the lines came from and the board prints it. A best is
+    only ever a counted lap's: not an out-lap, not a pit lap, not a struck lap,
+    and never a sector cut on other lines (a sector at 1,780 m is not the same
+    piece of road as one at 2,097).
+    """
+    times_ms: tuple | None = None           # the last lap's three, or None
+    best_ms: tuple = (None, None, None)     # the session bests they are against
+    set_best: tuple = (False, False, False)  # this lap IS that best
+    why: str | None = None                  # why `times_ms` is None
+    cut: str | None = None                  # the lines' provenance, in words
+    compound: str | None = None
 
 
 def _front_slip(packet) -> float | None:
@@ -133,6 +158,12 @@ class BoardLive:
         self._lock_until = -1.0
         self._tcs_until = -1.0
         self._last_seen: float | None = None
+        # The sector panel - Qt thread only, set at the crossing.
+        # `(lap_id, (s1, s2, s3), stamp, compound)` for every counted lap
+        # with all three sectors, so a struck lap can be retired and the next
+        # best found without going back to the store.
+        self._sector_laps: list = []
+        self._last_sectors: tuple | None = None   # (lap_id, times, stamp, code, why)
         # (code, session ref, file ref, lap ms, delta, delta on file,
         #  predicted, lock, tcs) - published whole, read whole.
         self._shown = _NOTHING_SHOWN
@@ -195,6 +226,59 @@ class BoardLive:
                 if ref.lap_id != lap_id}
         if len(refs) != len(self._session_refs):
             self._session_refs = refs
+        # Its sectors stop being bests too; the next best is whatever the
+        # remaining counted laps hold.
+        self._sector_laps = [entry for entry in self._sector_laps
+                             if entry[0] != lap_id]
+
+    # ------------------------------------------------------------ sectors
+
+    def note_sectors(self, *, lap_id: int | None, times_ms, stamp: str | None,
+                     compound: str | None, counted: bool,
+                     refused: str | None = None) -> None:
+        """At the crossing, on the Qt thread: the lap just completed, cut.
+
+        Every lap becomes the LAST lap - the panel shows what he has just
+        driven, dashes and a reason included. Only a counted lap with all
+        three sectors, on a known tyre, can become a best.
+        """
+        code = compound.upper() if compound else None
+        whole = (times_ms is not None and len(times_ms) == 3
+                 and all(value is not None and value > 0 for value in times_ms))
+        times = tuple(int(value) for value in times_ms) if whole else None
+        why = None if whole else (refused or NO_SECTOR_TIMES)
+        if whole and counted and code and stamp:
+            self._sector_laps = [*self._sector_laps,
+                                 (lap_id, times, stamp, code)]
+        self._last_sectors = (lap_id, times, stamp, code, why)
+
+    def sectors_view(self, cut_words=None) -> SectorsView:
+        """The panel. `cut_words(stamp)` turns the lines' stamp into words."""
+        last = self._last_sectors
+        if last is None:
+            return SectorsView(why=NO_LAP_YET, compound=self.compound)
+        lap_id, times, stamp, code, why = last
+        cut = cut_words(stamp) if (cut_words and stamp) else None
+        if times is None:
+            return SectorsView(why=why, cut=cut, compound=code)
+        # **Same tyre, same lines** - the two locks every best on this board
+        # carries (rule 13: a best that does not say what it is against is
+        # two numbers pretending to be one).
+        pool = [entry for entry in self._sector_laps
+                if entry[2] == stamp and entry[3] == code]
+        best, mine = [], []
+        for index in range(3):
+            if not pool:
+                best.append(None)
+                mine.append(False)
+                continue
+            holder = min(pool, key=lambda entry: entry[1][index])
+            best.append(holder[1][index])
+            # Ties go to the lap that set it first: `min` keeps the earliest,
+            # so a later lap equalling a best does not claim it.
+            mine.append(lap_id is not None and holder[0] == lap_id)
+        return SectorsView(times_ms=times, best_ms=tuple(best),
+                           set_best=tuple(mine), cut=cut, compound=code)
 
     # ------------------------------------------------------------ telemetry thread
 
