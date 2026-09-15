@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pitcrew.ui.driver_view import (
     Block, DriverState, abs_light, box_block, delta_block,
     format_lap_ms, fuel_stop_block, fuel_target_block, gap_block,
-    release_block, tcs_light, tyres_block, wet_light)
+    release_block, target_strip_block, tcs_light, tyres_block, wet_light)
 
 # **A car "within a second" is his threshold, not a measurement** (15 Sep
 # 2026). What makes it usable is the reader, which is measured: two reads of
@@ -85,6 +85,7 @@ SUBJECT_LAPS_TO_STOP = "laps_to_stop"
 SUBJECT_AHEAD = "ahead"
 SUBJECT_BEHIND = "behind"
 SUBJECT_FUEL_TO_STOP = "fuel_to_stop"
+SUBJECT_VS_TARGET = "vs_target"
 
 
 @dataclass(frozen=True)
@@ -200,9 +201,19 @@ class StripComposer:
         extra = (None if centre.id == CENTRE_FUEL_SHORT
                  else Item("IN HAND TO THE STOP", stop,
                            subject=SUBJECT_FUEL_TO_STOP).to_json())
+        # **The second extra: the last lap against the plan's target** (the
+        # driver's pick, 16 Sep 2026, when the strip was the one surface it
+        # had not reached). Beside the fuel one rather than in the centre
+        # rotation: the centre is for what to do NOW, and a lap already
+        # driven is a reading. Absent - hidden, not dashed - where the race
+        # has no targets or the lap got no verdict.
+        target = (None if state.target_lap_ms is None
+                  and state.last_vs_target_s is None
+                  else Item("VS TARGET", target_strip_block(state),
+                            subject=SUBJECT_VS_TARGET).to_json())
         return {"kind": "race", "centre": centre.to_json(),
                 "left": left.to_json(), "right": right.to_json(),
-                "extra": extra}
+                "extra": extra, "extra2": target}
 
     # -------------------------------------------------------------- practice
 
@@ -219,6 +230,9 @@ class StripComposer:
                           Block(format_lap_ms(state.predicted_ms)),
                           subject="pred_time").to_json(),
             "extra": None,
+            # No plan, no targets: practice and qualifying have nothing to be
+            # on target against, and the slot is absent rather than dashed.
+            "extra2": None,
         }
 
     # ------------------------------------------------------------------ all

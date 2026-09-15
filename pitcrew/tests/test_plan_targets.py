@@ -478,6 +478,37 @@ def test_the_lap_panel_trades_the_prediction_for_the_target_in_a_race(qt_app):
     assert panel.vs_target.isHidden() and not panel.pred.isHidden()
 
 
+def test_the_phone_strip_carries_the_target_as_its_second_reading(qt_app):
+    """The driver's pick, 16 Sep 2026: beside fuel in hand, not in the centre
+    rotation - the centre is what to do now, and a lap already driven is a
+    reading."""
+    from pitcrew.ui.driver_view import DriverState, GapView
+    from pitcrew.ui.strip import StripComposer
+
+    racing = dict(session_kind="race", has_plan=True, laps_to_box=4.0,
+                  box_on_lap=14, fuel_to_stop=0.3, laps_of_fuel=4.3,
+                  ahead=GapView(seconds=3.4, note="steady"),
+                  behind=GapView(seconds=2.6, note="steady"))
+    payload = StripComposer().compose(DriverState(
+        **racing, target_lap_ms=90_000, target_burn_l=4.50,
+        last_vs_target_s=0.312, last_burn_vs_target_l=0.12))
+    slot = payload["extra2"]
+    assert slot["caption"] == "VS TARGET" and slot["subject"] == "vs_target"
+    assert slot["value"] == "+0.312" and slot["sub"] == "burn +0.12 of 4.50"
+    assert slot["tone"] == "urgent"           # over the band, as the board
+    # Every subject on one payload is unique, or the page morphs one block
+    # into another.
+    subjects = [payload[key]["subject"] for key in
+                ("left", "centre", "right", "extra", "extra2")
+                if payload.get(key)]
+    assert len(set(subjects)) == len(subjects), subjects
+    # No targets, no slot - hidden rather than dashed.
+    assert StripComposer().compose(DriverState(**racing))["extra2"] is None
+    # And practice has nothing to be on target against.
+    assert StripComposer().compose(
+        DriverState(session_kind="practice"))["extra2"] is None
+
+
 @pytest.fixture
 def qt_app():
     pytest.importorskip("PyQt6.QtWidgets")

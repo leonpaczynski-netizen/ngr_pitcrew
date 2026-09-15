@@ -1409,6 +1409,24 @@ def target_burn_block(state: "DriverState") -> Block:
                  tone)
 
 
+def target_strip_block(state: "DriverState") -> Block:
+    """VS TARGET for the phone strip: the lap gap, the burn under it.
+
+    One block for both surfaces (rules 12 and 13) - the phone's figure is the
+    board's `target_pace_block` value with the board's burn line as its
+    reason, so the two cannot word one lap two ways. None where the lap got
+    no verdict at all: the strip hides a slot rather than showing a dash it
+    has no room to explain.
+    """
+    pace = target_pace_block(state)
+    if state.last_vs_target_s is None and state.last_burn_vs_target_l is None:
+        return Block("--", state.target_why or "no target", TONE_PLAIN)
+    burn = target_burn_block(state)
+    against = ("" if state.target_burn_l is None
+               else f" of {state.target_burn_l:.2f}")
+    return Block(pace.value, f"burn {burn.value}{against}", pace.tone)
+
+
 def target_note(state: "DriverState") -> str:
     """What the lap in progress is asked for, or why it is asked for nothing.
 

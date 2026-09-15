@@ -152,12 +152,17 @@ def test_only_an_instruction_floods_not_a_number_to_watch():
 
 
 def test_the_page_draws_both_rows_on_one_grid():
-    """The lamps and fuel in hand share the slots' column edges."""
+    """The lamps and the two readings share the slots' column edges.
+
+    The readings are stacked in the third column since 16 Sep 2026 - fuel in
+    hand, and the last lap against the plan's target.
+    """
     from pitcrew.ui.strip_server import PAGE
 
     page = PAGE.read_text(encoding="utf-8")
     assert "#lights { grid-area: 2 / 1 / 3 / 3" in page
-    assert "#extra { grid-area: 2 / 3; }" in page
+    assert "#extras { grid-area: 2 / 3;" in page
+    assert 'id="extra2"' in page and "item(\"extra2\", d.extra2" in page
     assert "startViewTransition" in page and "data.act === true" in page
 
 
