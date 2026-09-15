@@ -61,7 +61,7 @@
      slots above it, and a caption overran a lamp. */
   #app { height: 100%; display: grid; gap: var(--gap-y) var(--gap-x); padding: 1.6vh 1.4vw;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.38fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) 20vh 7.5vh; }
+    grid-template-rows: minmax(0, 1fr) 25vh 7.5vh; }
   #left { grid-area: 1 / 1; } #centre { grid-area: 1 / 2; } #right { grid-area: 1 / 3; }
   /* **The lamps are colour, not size** (the driver, 16 Sep 2026: "reduce the
      size of the ABS, TCS and DRY buttons significantly, these only need to be
@@ -121,12 +121,22 @@
   .light .lsub { display: none; }
   .light.flooded .word, .light.flooded .lsub { color: var(--ground); transition: color 0s 70ms; }
 
-  /* Each reading: caption and reason on the left, the figure on the right. */
-  #extras .face { display: grid; width: 100%; align-items: center; column-gap: 0.9vw;
-    grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; }
-  #extras .cap { grid-area: 1 / 1; justify-self: start; font-size: 3.4vh; letter-spacing: 0.1em; }
-  #extras .sub { grid-area: 2 / 1; justify-self: start; font-size: 3.2vh; }
-  #extras .val { grid-area: 1 / 2 / 3 / 3; font-size: 13vh; margin: 0; }
+  /* Each reading: the caption over its second figure on the left, the big
+     figure on the right, both filling the slot's height.
+
+     **The second line is a NUMBER, not a caption** (the driver, 16 Sep
+     2026: "make the burn number bigger, fill the space properly"). "burn
+     +0.12 of 4.19" and "9.1 laps aboard" are readings he acts on, so they
+     are sized as figures - a little over half the big one - and the caption
+     above them is the small text. */
+  #extras .face { display: grid; width: 100%; height: 100%; align-items: center;
+    column-gap: 1.2vw; grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto; align-content: center; }
+  #extras .cap { grid-area: 1 / 1; justify-self: start; align-self: end;
+    font-size: 3.2vh; letter-spacing: 0.1em; }
+  #extras .sub { grid-area: 2 / 1; justify-self: start; align-self: start;
+    font-size: 6.4vh; line-height: 1.15; }
+  #extras .val { grid-area: 1 / 2 / 3 / 3; font-size: 17vh; margin: 0; }
 
   #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
     justify-content: center; background: var(--ground); text-align: center; padding: 4vh 4vw; }
@@ -142,14 +152,17 @@
 
   @media (orientation: portrait) {
     #app { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) 14vh 6.5vh; }
+      grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) 22vh 6.5vh; }
     #centre { grid-area: 1 / 1 / 2 / 3; } #left { grid-area: 2 / 1; } #right { grid-area: 2 / 2; }
-    #extras { grid-area: 3 / 1 / 4 / 3; grid-template-rows: none;
-      grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    /* **A row each, not a column each.** Half the phone's width is not
+       enough for "burn +0.12 of 4.19" beside its own figure - the fitter
+       shrank it to a caption. Stacked, both readings get the full width. */
+    #extras { grid-area: 3 / 1 / 4 / 3; grid-template-columns: none;
+      grid-template-rows: repeat(2, minmax(0, 1fr)); gap: var(--gap-y); }
     #lights { grid-area: 4 / 1 / 5 / 3; }
     .cap { font-size: 4vw; } .val { font-size: 19vw; } .centre .val { font-size: 30vw; }
     .sub { font-size: 3.6vw; } .light .word { font-size: 3.2vw; }
-    #extras .cap { font-size: 3.1vw; } #extras .sub { font-size: 2.9vw; } #extras .val { font-size: 10.5vw; }
+    #extras .cap { font-size: 2.9vw; } #extras .sub { font-size: 5.6vw; } #extras .val { font-size: 12vw; }
     #cover .big { font-size: 14vw; } #cover .why { font-size: 4vw; }
   }
   @media (prefers-reduced-motion: reduce) {
