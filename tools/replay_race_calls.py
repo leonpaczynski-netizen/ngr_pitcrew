@@ -120,7 +120,8 @@ def replay_stop(race, watch: RefuelWatch, frames: list[dict], lap_num: int,
         basis = fuel_target_basis(race.state)
         call = watch.note(frame.get("fuel_l"), speed_kph=frame.get("speed_kph"),
                           target_l=target, fuel_per_lap_l=race.state.fuel_per_lap_l,
-                          to_flag_l=fuel_to_flag_l(race.state), basis=basis)
+                          to_flag_l=fuel_to_flag_l(race.state), basis=basis,
+                          burn_basis=race.state.fuel_burn_basis)
         if call is not None:
             out(f"lap {lap_num:>2}  {frame.get('fuel_l', 0):5.1f}L  "
                 f"{'box':>12} | {call.call} {call.reason}".strip())

@@ -21,6 +21,8 @@ import pytest
 
 from pitcrew.race.calls import (RaceState, _fuel_instruction, fuel_target_basis,
                                 fuel_target_l)
+from pitcrew.race.expectations import (FUEL_BASIS_HIGHER, FUEL_BASIS_RACE,
+                                       FUEL_BASIS_STINT)
 from pitcrew.race.refuel import RefuelAdviser, RefuelWatch, TARGET
 
 
@@ -111,12 +113,13 @@ def test_the_box_call_names_the_bound_behind_the_litres():
 
 # --------------------------------------------------------- with the hose in
 
-def _fill(watch: RefuelWatch, *, target, basis):
+def _fill(watch: RefuelWatch, *, target, basis, burn_basis=FUEL_BASIS_STINT):
     """Three rising frames past the arming threshold, then the target call."""
     said = []
     for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
         call = watch.note(fuel, speed_kph=0.0, target_l=target,
-                          fuel_per_lap_l=7.35, basis=basis)
+                          fuel_per_lap_l=7.35, basis=basis,
+                          burn_basis=burn_basis)
         if call is not None:
             said.append(call)
     return said
@@ -136,16 +139,86 @@ def test_without_a_basis_the_old_lap_count_is_still_said():
     assert said[0].reason.startswith("9 laps at this race's burn.")
 
 
-def test_the_adviser_accepts_a_three_value_context_and_a_four_value_one():
+@pytest.mark.parametrize("burn_basis", [FUEL_BASIS_STINT, FUEL_BASIS_RACE,
+                                        FUEL_BASIS_HIGHER])
+def test_every_installed_race_burn_is_this_races(burn_basis):
+    said = _fill(RefuelWatch(), target=63.0, basis="7 laps to the flag",
+                 burn_basis=burn_basis)
+
+    assert said[0].reason.startswith("7 laps to the flag, at this race's burn.")
+
+
+def test_a_practice_burn_is_named_as_practice():
+    """Sardegna, 15 Sep 2026, session 179, race_run 24, 20:30:32.
+
+    "Fuel to 97 litres. 17 laps after the box, at this race's burn." - over
+    `build_inputs`' practice 5.586 L/lap. Every lap ran the plan's fuel-save
+    short-shift, so the expectation tracker installed no race burn and
+    `fuel_burn_basis` stayed None. Driven through the controller's own
+    context, so the words and the number come out of one state."""
+    from types import SimpleNamespace
+
+    from pitcrew.controller import PitCrewController
+
+    state = deep_forest(fuel_per_lap_l=5.586, fuel_burn_basis=None)
+    assert state.fuel_burn_basis is None
+    stub = SimpleNamespace(race=SimpleNamespace(running=True, state=state))
+    context = PitCrewController._refuel_context(stub)
+    assert context[1] == 5.586 and context[4] is None
+
+    spoken = []
+    adviser = RefuelAdviser(context=lambda: context, speak=spoken.append)
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        adviser.note_frame(fuel, 0.0)
+
+    assert [c.kind for c in spoken] == [TARGET]
+    assert spoken[0].reason.startswith(
+        f"{fuel_target_basis(state)[0].upper()}"
+        f"{fuel_target_basis(state)[1:]}, at the practice burn.")
+    assert "this race" not in spoken[0].spoken()
+
+    # And the same state once the race's burn is installed says so.
+    state.fuel_burn_basis = FUEL_BASIS_RACE
+    spoken.clear()
+    adviser = RefuelAdviser(context=lambda: PitCrewController._refuel_context(
+        stub), speak=spoken.append)
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        adviser.note_frame(fuel, 0.0)
+    assert ", at this race's burn." in spoken[0].reason
+
+
+def test_a_practice_burn_without_a_bound_names_practice_too():
+    said = _fill(RefuelWatch(), target=63.0, basis=None, burn_basis=None)
+
+    assert said[0].reason.startswith("9 laps at the practice burn.")
+
+
+def test_a_caller_that_does_not_say_whose_burn_names_none():
+    """Not told is not practice and not the race: no burn is named."""
+    said = []
+    watch = RefuelWatch()
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        call = watch.note(fuel, speed_kph=0.0, target_l=63.0,
+                          fuel_per_lap_l=7.35, basis="7 laps to the flag")
+        if call is not None:
+            said.append(call)
+    assert said[0].reason.startswith("7 laps to the flag.")
+    assert "burn" not in said[0].reason
+
+
+def test_the_adviser_accepts_three_four_and_five_value_contexts():
     spoken = []
     for context in (lambda: (63.0, 7.35, None),
-                    lambda: (63.0, 7.35, None, "7 laps to the flag")):
+                    lambda: (63.0, 7.35, None, "7 laps to the flag"),
+                    lambda: (63.0, 7.35, None, "7 laps to the flag", None)):
         adviser = RefuelAdviser(context=context, speak=spoken.append)
         for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
             adviser.note_frame(fuel, 0.0)
-    assert len(spoken) == 2
-    assert "9 laps" in spoken[0].reason
-    assert "7 laps to the flag" in spoken[1].reason
+    assert len(spoken) == 3
+    assert spoken[0].reason.startswith("9 laps.")
+    assert spoken[1].reason.startswith("7 laps to the flag.")
+    assert spoken[2].reason.startswith(
+        "7 laps to the flag, at the practice burn.")
 
 
 # ---------------------------------------------------- the replay of the night

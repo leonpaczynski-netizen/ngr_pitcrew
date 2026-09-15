@@ -50,6 +50,20 @@ BATHURST = (
 )
 
 
+@pytest.mark.parametrize("line", (
+    # Sardegna, 15 Sep 2026, race_run 24, 20:30:32 - as it should have been
+    # said: the burn behind the 97 litres was practice's, not this race's.
+    "Fuel to 97 litres. 17 laps after the box, at the practice burn.",
+    "Fuel to 97 litres. 17 laps at the practice burn.",
+))
+def test_the_fill_that_names_the_practice_burn_plays_from_declared_clips(line):
+    clips = set(manifest.clips())
+    segments = manifest.segments_for(line)
+    assert segments, line
+    missing = [name for name in segments if name not in clips]
+    assert not missing, (line, missing)
+
+
 def test_a_position_call_with_its_reason_plays_from_its_pieces():
     """The shape was only tried on a whole line, so with a reason behind it
     "P11 of 13." went to the generic split - which refuses the 11 in "P11"

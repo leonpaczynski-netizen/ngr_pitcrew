@@ -8047,8 +8047,12 @@ class PitCrewController(QObject):
         # The third figure is the alternative he is actually weighing in the
         # box - see `calls.fuel_to_flag_l`. It is None whenever staying out is
         # not a live option, and the watch says nothing about it then.
+        # The fifth is whose burn `fuel_per_lap_l` is - None while it is
+        # still practice's - so the in-box sentence names the burn that
+        # actually sized the fill.
         return (fuel_target_l(race.state), race.state.fuel_per_lap_l,
-                fuel_to_flag_l(race.state), fuel_target_basis(race.state))
+                fuel_to_flag_l(race.state), fuel_target_basis(race.state),
+                race.state.fuel_burn_basis)
 
     def _voice_refuel(self, call) -> None:
         """Say it, show it, and file it with the rest of the race's calls."""

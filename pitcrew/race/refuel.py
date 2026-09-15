@@ -75,6 +75,13 @@ TARGET = "refuel-target"
 RELEASE = "refuel-release"
 SHORT = "refuel-short"
 
+# **The caller did not say whose burn sized the target.** Distinct from None,
+# which is a statement - no race burn installed, so the figure is practice's
+# (`RaceState.fuel_burn_basis`). A watch that is not told names no burn at all
+# rather than guess one: "at this race's burn" said over a practice figure is
+# the defect this exists to stop (Sardegna, 15 Sep 2026, session 179).
+BURN_UNSTATED = object()
+
 
 @dataclass(frozen=True)
 class RefuelCall:
@@ -106,6 +113,7 @@ class RefuelWatch:
         self._prev_l: float | None = None
         self._filling = False
         self._target_l: float | None = None
+        self._burn_basis = BURN_UNSTATED
         self._said_target = False
         self._said_release = False
         self._said_short = False
@@ -126,7 +134,8 @@ class RefuelWatch:
              target_l: float | None,
              fuel_per_lap_l: float | None = None,
              to_flag_l: float | None = None,
-             basis: str | None = None) -> RefuelCall | None:
+             basis: str | None = None,
+             burn_basis=BURN_UNSTATED) -> RefuelCall | None:
         """One frame. Returns what to say, or None - which is almost always.
 
         `target_l` is what the tank should read at pit exit, recomputed by the
@@ -134,6 +143,11 @@ class RefuelWatch:
         fill is first seen: the car is stationary for the whole of it, so
         nothing that feeds the figure can move while the hose is in, and a
         target that wobbled mid-fill would be chatter rather than news.
+
+        `burn_basis` is `RaceState.fuel_burn_basis` beside that target: one of
+        `expectations.FUEL_BASIS_*` where this race's burn is installed, None
+        where the burn is still practice's. Captured with the target, because
+        the words have to name the burn that sized the number (rules 5, 12).
         """
         if fuel_l is None:
             return None
@@ -164,6 +178,7 @@ class RefuelWatch:
             self._filling = True
             self.started_l = self._low_l
             self._target_l = target_l
+            self._burn_basis = burn_basis
 
         target = self._target_l
         if target is None:
@@ -188,10 +203,16 @@ class RefuelWatch:
             # plan's stint and nothing said so. The basis names which bound
             # produced the figure; the lap count is derived from it and is
             # kept for the case where no basis was handed over.
+            # **And the burn it was sized on, by name.** Sardegna, session
+            # 179: "17 laps after the box, at this race's burn." over the
+            # practice 5.586 L/lap, because every lap ran the plan's
+            # short-shift and no race burn was ever installed.
+            burn = _burn_words(self._burn_basis)
+            bound = (basis[0].upper() + basis[1:]) if basis else None
             return RefuelCall(TARGET, f"Fuel to {_ceil_l(target)} litres.",
-                              (f"{basis[0].upper() + basis[1:]}, at this "
-                               f"race's burn." if basis
-                               else _laps_reason(target, fuel_per_lap_l))
+                              (f"{bound}{f', at {burn}' if burn else ''}."
+                               if bound
+                               else _laps_reason(target, fuel_per_lap_l, burn))
                               + _to_flag_clause(to_flag_l, target))
 
         if not self._said_release and fuel_l >= target - RELEASE_EPSILON_L:
@@ -239,9 +260,10 @@ class RefuelAdviser:
     qualifying coach: the controller builds it with a `speak` callable and
     hands it over, and the frame path calls one method and knows nothing else.
 
-    `context` returns `(target_l, fuel_per_lap_l, to_flag_l, basis)` for the
-    race right now - `basis` being the bound that sized the target, in words -
-    or None where nothing can size a stop. It is called **only when the car is
+    `context` returns `(target_l, fuel_per_lap_l, to_flag_l, basis,
+    burn_basis)` for the race right now - `basis` being the bound that sized
+    the target, in words, and `burn_basis` whose burn did (see
+    `RefuelWatch.note`) - or None where nothing can size a stop. It is called **only when the car is
     slow enough to be in a pit box**, because it re-derives the fill from the
     race's own burn and that is not free sixty times a second for an hour.
     """
@@ -258,16 +280,22 @@ class RefuelAdviser:
     def note_frame(self, fuel_l: float | None,
                    speed_kph: float | None) -> None:
         target = fuel_per_lap = to_flag = basis = None
+        burn_basis = BURN_UNSTATED
         if speed_kph is not None and speed_kph <= FILL_MAX_KPH:
             found = self._context()
             if found is not None:
-                # Three values from an older context, four from the
-                # controller's: the fourth is the bound behind the figure.
+                # Three values from an older context, five from the
+                # controller's: the fourth is the bound behind the figure, the
+                # fifth whose burn. A context too old to carry the fifth has
+                # not said, and the watch then names no burn at all.
                 target, fuel_per_lap, to_flag = found[:3]
                 basis = found[3] if len(found) > 3 else None
+                if len(found) > 4:
+                    burn_basis = found[4]
         call = self.watch.note(fuel_l, speed_kph=speed_kph, target_l=target,
                                fuel_per_lap_l=fuel_per_lap,
-                               to_flag_l=to_flag, basis=basis)
+                               to_flag_l=to_flag, basis=basis,
+                               burn_basis=burn_basis)
         if call is not None:
             self._speak(call)
 
@@ -306,7 +334,24 @@ def _ceil_l(litres: float) -> int:
     return int(litres) if litres == int(litres) else int(litres) + 1
 
 
-def _laps_reason(target: float, fuel_per_lap_l: float | None) -> str:
+def _burn_words(burn_basis) -> str | None:
+    """"this race's burn", "the practice burn", or None where not told.
+
+    Any installed basis - the race, this stint, or the higher of the two - is
+    this race's laps; None is `build_inputs`' practice figure, which is what
+    `RaceState.fuel_per_lap_l` holds until a race burn replaces it. Not told
+    names nothing, never a guess.
+    """
+    if burn_basis is BURN_UNSTATED:
+        return None
+    if burn_basis is None:
+        return "the practice burn"
+    return "this race's burn"
+
+
+def _laps_reason(target: float, fuel_per_lap_l: float | None,
+                 burn: str | None = None) -> str:
     if not fuel_per_lap_l:
         return ""
-    return f"{target / fuel_per_lap_l:.0f} laps at this race's burn."
+    laps = f"{target / fuel_per_lap_l:.0f} laps"
+    return f"{laps} at {burn}." if burn else f"{laps}."

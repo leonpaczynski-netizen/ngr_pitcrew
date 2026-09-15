@@ -984,30 +984,37 @@ def refuel_lines() -> tuple[str, ...]:
 
     Driven frame by frame through `RefuelWatch.note`, over every basis
     `calls.fuel_target_basis` names for the box states the manifest already
-    sweeps, so a reworded basis is a re-rendered clip.
+    sweeps, so a reworded basis is a re-rendered clip - and over each burn
+    the sentence can name: this race's (every `FUEL_BASIS_*`), practice's
+    (None), and none where the caller did not say.
     """
     from pitcrew.race.calls import fuel_target_basis
-    from pitcrew.race.refuel import RefuelWatch
+    from pitcrew.race.expectations import (FUEL_BASIS_HIGHER, FUEL_BASIS_RACE,
+                                           FUEL_BASIS_STINT)
+    from pitcrew.race.refuel import BURN_UNSTATED, RefuelWatch
 
     bases = [None]
     for state in _box_fuel_states():
         basis = fuel_target_basis(state)
         if basis:
             bases.append(basis)
+    burns = (None, FUEL_BASIS_STINT, FUEL_BASIS_RACE, FUEL_BASIS_HIGHER,
+             BURN_UNSTATED)
     lines = []
     for basis in dict.fromkeys(bases):
-        for start_l, to_flag_l in ((5.0, None), (5.0, 40.0), (19.9, None),
-                                   (19.9, 40.0)):
-            watch = RefuelWatch()
-            watch.note(start_l, speed_kph=100.0, target_l=None)
-            fuel = start_l
-            while fuel < 30.0:
-                fuel += 0.5
-                call = watch.note(fuel, speed_kph=0.0, target_l=20.0,
-                                  fuel_per_lap_l=2.5, to_flag_l=to_flag_l,
-                                  basis=basis)
-                if call is not None:
-                    lines.append(call.spoken())
+        for burn_basis in burns:
+            for start_l, to_flag_l in ((5.0, None), (5.0, 40.0), (19.9, None),
+                                       (19.9, 40.0)):
+                watch = RefuelWatch()
+                watch.note(start_l, speed_kph=100.0, target_l=None)
+                fuel = start_l
+                while fuel < 30.0:
+                    fuel += 0.5
+                    call = watch.note(fuel, speed_kph=0.0, target_l=20.0,
+                                      fuel_per_lap_l=2.5, to_flag_l=to_flag_l,
+                                      basis=basis, burn_basis=burn_basis)
+                    if call is not None:
+                        lines.append(call.spoken())
     watch = RefuelWatch()
     watch.note(5.0, speed_kph=100.0, target_l=None)
     for fuel in (5.5, 6.0, 6.5, 7.0):
