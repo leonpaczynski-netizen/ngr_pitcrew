@@ -2618,3 +2618,25 @@ traffic on the slower tyre, and the only flexible stint becomes the one that can
 **Decision offered: keep RM 12 -> RH 17**, and practise the swap (3-4 laps RM, box, 5-6 laps RH) so the first lap on
 the hard after a medium is not in a race. Falsifier for keeping it: a practised swap still produces an off on the hard.
 His call; strategy 34 unchanged.
+
+## 52. Rd 9 qualifying - NO SETUP CHANGE. 15 Sep 2026, for 16 Sep 20:30
+
+`[DRIVER]` *"one out lap and one flying lap only in porsche cup"*. Hub, series defaults (division not on the hub):
+5 min + 120 s continuation, **20 L fixed**, tyre wear and fuel SAME_AS_RACE (8x / 3x), slipstream DISABLED,
+grid by fastest lap. Qualifying plan id 35 written (fuel 20, one run: out-lap + one flyer).
+
+- **Tyre:** Racing Soft. Only soft laps on file are s155 (9 Sep, `arb_r` one click softer than the car now,
+  `bb +3`): 100.247 on its first full lap - the app's reference lap - then 102.3 / 100.5 / 101.0 as the
+  rear-right lost ~14 % a lap, cliff at 89 %. Best medium 100.455 (s158 L16, current bar, 65.9 L). One lap each,
+  inside his own scatter: the soft is quicker on doctrine, not on a clean comparison.
+- **Fuel:** out-lap + flyer ~14 L at 7.0-7.2 L/lap [MEASURED s153-155]; ~6 L spare. Not a lever.
+- **Why no slider moves:** nothing can be tried before the one lap that sets the grid; the Rev A quali column is
+  [DOCTRINE] from before Rev B-H and was never driven; the last untried step on this car (`arb_r` +2) spun 6 of 9
+  laps (§27). He has driven the car clean at under 25 L (s179 L27 102.1 at 18.5 L).
+- **Gap named:** the current bar (4) has never run on the soft; s155's lap 1 began at speed, so no real pit-lane
+  out-lap on the soft exists here. `bb` on the soft is his: the only soft laps ran +3, he races the medium on +1.
+- **Beep:** Practice screen with the Qualifying intent -> performance table. The Race screen would arm strategy 34's
+  fuel-save beep (checked in `controller.py` `_follow_fuel_mode` / `_arm_quali`).
+
+**Prediction:** a clean flyer on the soft lands within ~0.5 s of 100.247. **Wrong if** a clean flyer is slower than the
+best medium (100.455) - then the soft is not buying the lap on this car and the out-lap is the suspect.
