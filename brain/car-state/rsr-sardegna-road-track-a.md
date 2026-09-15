@@ -2549,3 +2549,43 @@ allows ~28; ceiling 29).
 stint-1 burn; (2) no "Full beeps" in stint 1; in stint 2 it comes only once the tank reaches 29 at
 full revs; (3) the beep is on 7,400 from the grid. **Proves it wrong:** a fill 5 L+ over; a full-revs
 switch followed by a fuel-short call inside three laps; the beep at 8,500 on lap 1.
+
+---
+
+# Session 179 - 28-lap race sim on strategy 34 (RM 12 -> RH), 15 Sep 2026 evening. **P17 -> P1 laps 17-25, spin L26, finished P4.**
+
+**Rank zero:** not re-confirmed for s179 - the s177 SCREEN (§48) is the last ground truth; asked. Brake
+balance and TCS for tonight were not read off the video.
+
+## 50. Debrief
+
+`[DRIVER]` *"George told me too much fuel"* · *"RM to RH worked but RH feel slippery into the cold in evening"*
+
+**Plan against actual.** Stints 12 / 16 (plan 12 / 17 at a 29-lap ceiling). RM RR 72 % at lap 11; RH RR 83 %
+at the flag, clean laps 102.1-103.8. Burn 5.34 over 22 green laps. Stop 23.6 s ex-fuel + 60.8 L at 1.00 L/s.
+Game clock 17:33 at the green, 21:00 (its stop) from lap 20.
+
+**Fuel** (measurement 141, `[DERIVED]`). Arrived 36.0 L, left 96.8 on George's *"Fuel to 97 litres. 17 laps
+after the box"*. 16 laps needed ~85 L -> **12 L over**: ~5 L was lap 29, genuinely live (a clean stint 2 ends
+lap 28 with ~6 s on the clock) until the L18 and L26 spins took ~32 s; **~6 L was a spare lap past the 29-lap
+ceiling, which cannot run** - ~6 s stood in the box. Replay of the same laps on the same code: 91 L and a
+"Full beeps" at lap 22. Live: 97 L and no full-beeps call in the log, yet shifts went 7,400 -> 8,400 from L25
+(L25/L27 102.1 against ~103.3 saving). Flag 4.9 L. **App work**, filed.
+
+**The hard in the evening** (139-140, `[MEASURED]`). Free-air RH laps 19-24 (P1) against daylight RH at the
+same tyre age and fuel: exit wheelspin 4.1 % v 2.3 % (s156) / 1.95 % (s153); tyre temps within 1-2 °C; **~1.2 s
+a lap quicker**. The control kills the attribution: tonight's **daylight medium** ran 2.8 % against s177's 1.1 %
+at the same game clock, and s177's evening medium (0.9 %) was no looser than its daylight (1.1 %) with rears 2-3 °C
+cooler. ⇒ tonight was looser on exits from the green, on both tyres; **the evening is not visible in it**, and
+the feed carries no track temperature. His report stands as primary evidence; unresolvable on telemetry.
+
+**Every off was the blind left** (142). L9 RM 58 %: rear stepped out mid-corner at 2-11 % throttle, all four on
+tarmac. L18 RH 31 %: throttle 81 -> 14 % at ~55° lock, yaw doubled on the lift, then kerb/grass, then the spin.
+L26 RH 72 %: ~8 km/h more entry speed, never back on throttle, right-hand pair on the grass first. Two of three
+are off-throttle rear slides on tarmac - TCS cannot act there. With s177 L27 and s159 L3 this corner owns every
+off on file in the race sims. Not a single-lap input marker (CLAUDE.md 23 Aug amendment) - a pooled best-corner
+build is the route if he wants it.
+
+**No setup change.** One evening's report against a control that shows the same looseness in daylight is not a
+basis for moving a slider on both compounds. Asked: rank zero, where the slip is felt and on which pedal,
+whether the dark matters at the blind left, and who switched to full revs at lap 25.
