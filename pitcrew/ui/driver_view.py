@@ -1410,16 +1410,18 @@ def target_burn_block(state: "DriverState") -> Block:
 
 
 def target_note(state: "DriverState") -> str:
-    """What the lap in progress is asked for, or why it is asked for nothing."""
-    parts = []
+    """What the lap in progress is asked for, or why it is asked for nothing.
+
+    **The burn target is not here, it is under the burn figure.** The note
+    carries the lap references too and `_NoteLine` is bounded at 1,040 px: at
+    the rig's faces a fourth clause elided the best on file off the end, and
+    that reference is what stops "vs target" and "time diff" being read as
+    the same claim (rule 13).
+    """
     if state.target_lap_ms is not None:
         saving = " saving" if state.target_saving else ""
-        parts.append(f"target{saving} {format_lap_ms(state.target_lap_ms)}")
-    elif state.target_why:
-        parts.append(state.target_why)
-    if state.target_burn_l is not None:
-        parts.append(f"burn {state.target_burn_l:.2f} L")
-    return "  ·  ".join(parts)
+        return f"target{saving} {format_lap_ms(state.target_lap_ms)}"
+    return state.target_why or ""
 
 
 def lap_reference_note(state: "DriverState") -> str:
@@ -1668,8 +1670,11 @@ class _LapTimePanel(QWidget):
             inks = {TONE_GOOD: GOOD, TONE_URGENT: NEAR, TONE_PLAIN: INK_DIM}
             pace, burn = target_pace_block(state), target_burn_block(state)
             self.vs_target.set_value(pace.value, inks[pace.tone])
-            self.burn.setText(f"burn {burn.value}" if burn.value != "--"
-                              else "burn --")
+            # The burn against its own target, with the target beside it -
+            # the one place the figure he is being judged on is drawn.
+            against = ("" if state.target_burn_l is None
+                       else f" of {state.target_burn_l:.2f}")
+            self.burn.setText(f"burn {burn.value}{against}")
             self.burn.setStyleSheet(
                 f"font-family:{NUMBER_FACE};font-size:{self._sub_px}px;"
                 f"color:{inks[burn.tone]};background:transparent;")

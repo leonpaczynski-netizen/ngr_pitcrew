@@ -470,8 +470,8 @@ def test_the_lap_panel_trades_the_prediction_for_the_target_in_a_race(qt_app):
     panel.show_state(race)
     assert not panel.vs_target.isHidden() and panel.pred.isHidden()
     assert panel.vs_target.value.text() == "+0.300"
-    assert panel.burn.text() == "burn -0.05"
-    assert panel.note.full_text().startswith("target 1:30.000")
+    assert panel.burn.text() == "burn -0.05 of 4.50"
+    assert panel.note.full_text() == "target 1:30.000"
     assert target_pace_block(race).tone == TONE_URGENT
     assert target_burn_block(race).tone == TONE_GOOD
     panel.show_state(DriverState(session_kind="practice"))

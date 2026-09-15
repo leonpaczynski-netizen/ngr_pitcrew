@@ -93,9 +93,13 @@ def sample_board(session_kind: str = "race") -> DriverState:
     `test_undercut_deep_forest.py` is written against - those two are
     presentation, and there is no expression behind them to disagree with.
     """
+    from types import SimpleNamespace
+
     from pitcrew.race.calls import (RaceState, fuel_in_hand_to_flag,
                                     fuel_in_hand_to_stop)
+    from pitcrew.race.targets import judge
     from pitcrew.race.tyre_split import SplitHistory
+    from pitcrew.strategy.targets import PlanTargets
 
     state = RaceState()
     state.laps_total = 20
@@ -118,6 +122,23 @@ def sample_board(session_kind: str = "race") -> DriverState:
         splits.note_lap(temps)
     to_stop, stop_why = fuel_in_hand_to_stop(state)
     to_flag, flag_why, flag_on = fuel_in_hand_to_flag(state)
+
+    # **The plan's target for this lap and the verdict on the last one,
+    # through `strategy/targets.py` and `race/targets.py` themselves** - the
+    # same rule as the fuel figures above: an artefact that disagrees with
+    # the code it pictures proves the opposite of what it was taken for. A
+    # 1:32.100 RS lap on a 60 L reference load, eight laps into the set, and
+    # a last lap of 1:32.640 burning 4.31 L against the plan's 4.19.
+    plan_targets = PlanTargets.from_plan({
+        "fuel_burns": {"full": state.fuel_per_lap_l},
+        "targets": {"compounds": {"RS": {
+            "lap_time_ms": 92_100, "wear_per_lap": 0.045,
+            "reference_load_l": 60.0}}}})
+    target = plan_targets.for_lap(
+        compound="RS", saving=False, lap_on_set=state.lap,
+        fuel_at_start_l=state.fuel_l + state.fuel_per_lap_l)
+    verdict = judge(SimpleNamespace(lap_num=state.lap, lap_time_ms=92_640,
+                                    fuel_used=4.31), target)
 
     return DriverState(
         temps_c=SAMPLE_TEMPS[-1],
@@ -144,6 +165,10 @@ def sample_board(session_kind: str = "race") -> DriverState:
         fuel_to_flag=to_flag, fuel_to_flag_why=flag_why,
         fuel_to_flag_on=flag_on,
         position=3, field_size=12,
+        target_lap_ms=target.lap_ms, target_burn_l=target.burn_l,
+        target_saving=target.saving,
+        last_vs_target_s=verdict.lap_delta_s,
+        last_burn_vs_target_l=verdict.burn_delta_l,
         ahead=GapView(seconds=1.2, note="catching 0.4 s a lap - Boxhead",
                       good=True),
         behind=GapView(seconds=4.8, note="he is catching 0.6 s a lap - Rocky",
@@ -311,6 +336,15 @@ def _capture(window: PreviewWindow, board: DriverView, out: Path) -> None:
     QApplication.processEvents()
     board.grab().save(str(out / "driver-board-practice.png"))
     print(f"wrote {out / 'driver-board-practice.png'}")
+    # **And the race page as it stands while a phone is reading the strip**,
+    # where the fuel and position lead and the lap panel takes the middle
+    # rank - a different page, so a different picture.
+    from dataclasses import replace as _replace
+
+    board.update_state(_replace(sample_board(), strip_live=True))
+    QApplication.processEvents()
+    board.grab().save(str(out / "driver-board-phone.png"))
+    print(f"wrote {out / 'driver-board-phone.png'}")
     board.update_state(sample_board())
     QApplication.processEvents()
     # **The size the grab actually came out at, not the one asked for.** They

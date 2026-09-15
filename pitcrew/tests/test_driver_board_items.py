@@ -766,6 +766,13 @@ def test_the_preview_sample_is_produced_by_the_code_it_pictures(qt_app):
     # on plus the laps to the box, less the one in progress - it is the first
     # of them (14 Sep 2026).
     assert board.box_on_lap == 9 + int(board.laps_to_box) - 1
+    # The target and the verdict on it are the same arithmetic the race makes:
+    # the gap is the sample's last lap against the target beside it, not a
+    # figure typed to look right.
+    assert board.last_vs_target_s == pytest.approx(
+        (92_640 - board.target_lap_ms) / 1000.0)
+    assert board.last_burn_vs_target_l == pytest.approx(
+        4.31 - board.target_burn_l)
 
 
 def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
