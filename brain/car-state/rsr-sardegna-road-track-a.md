@@ -2596,3 +2596,8 @@ trend is wear-shaped; the evening still cannot be separated from it. **Lap 29** 
 L18 11.4 s, L26 22.2 s against a race that ended lap 28 26.9 s past the clock. No single off lost the lap; lap 26
 with either other did. Lap 26 alone: 4.7 s short - inside George's ~6 s spare-lap fuel. Had 29 been on, full revs
 from lap 25 would have run dry (32.6 L with 5 to go).
+
+**Not visibility** - `[DRIVER]` *"adjusting from RM to RH and less grip"*. Over 13 hard laps he took the blind left at the
+hard's own speed (minimum ~160 km/h, same as s156 practice; free-air medium ~164). The two hard offs were the laps at
+or past the top of that range: L18 minimum 166; L26 arrived 215 km/h against 183-199 on every other hard lap. The
+medium-to-hard swap inside one session has only ever been driven in the two race sims.
