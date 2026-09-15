@@ -193,6 +193,31 @@ George names the compound as he always did, which under a helmet reads as
 "fit RS"; only 4 of 64 stored stints ever carried it. Stint 1 is exempt: the
 car starts on what it is on.
 
+### Fuel-save stints, the beep George runs, and the race's lap ceiling (15 Sep 2026)
+
+Three plan fields, refused by name at every door when malformed
+(`handover.fuel_plan_problems`, read by `validate` and `certify` alike):
+
+- **`max_race_laps`** - the most laps the race can run. George caps his
+  laps-left count at it, treats the count as firm there (no spare lap in the
+  fill), and calls the flag on it. Set it only from a measured crossing - at
+  Sardegna lap 28 ended with 3.1 s on the clock. A plan covering exactly the
+  ceiling while the clock model allows one fewer certifies **with a warning**,
+  not a refusal.
+- **`fuel_burns: {"save": L/lap, "full": L/lap}`** - MEASURED, save below full.
+  Required when any stint is fuel-save. The gate reaches a fuel-save stint on
+  `save`; George prices a switch to full revs with `full`, and replaces both
+  with this race's own burn after two clean laps on a column (the other column
+  scaled by the plan's ratio).
+- **`fuel_save: true|false` on a stint** - the beep plays the issued table's
+  fuel-saving points from the start of that stint. **Any stint naming the key
+  hands the beep to George** (`calls.fuel_mode_wanted`): to a stop on a
+  fuel-save stint it holds saving; on the run to the flag it goes to full revs
+  once the tank reaches at the full burn with the fill's margin and 1 L in
+  hand, and back to saving when it stops reaching. Saving beyond the saving
+  beep is the fuel call's job ("Save N litres a lap", lift). A plan that never
+  names the key leaves the beep exactly as before.
+
 **The deliverable is three things, from Suzuka on:** the plan (with its tyres
 decisions), the playbook, and the engineering sheet - every `race_knowledge`
 field filled, or a line saying why it cannot be.

@@ -5055,6 +5055,11 @@ class PitCrewController(QObject):
         # rival's stop or a place in flight until it is heard rather than
         # retiring it when it is handed over. See `_say_volunteered`.
         self.race.acknowledged_delivery = True
+        # **The beep starts the race on the column the plan's first stint
+        # declares** - from the grid, not from the first crossing - and the
+        # last race's column is forgotten first (CLAUDE.md rule 11).
+        self._fuel_mode_on_beep = None
+        self._follow_fuel_mode()
 
         # **Declare the instrument, once, on the grid.** Silence is this
         # app's most-used output and it has never meant one thing - no plan,
@@ -5820,6 +5825,13 @@ class PitCrewController(QObject):
             # the driver's answer - when it comes - is recorded beside it.
             self.store.finish_race_run(self.race_run_id)
             self.race_run_id = None
+        if (self.race is not None
+                and self.race.state.fuel_save_engaged is not None):
+            # **A race that ran the beep hands it back on full revs.** Left on
+            # the saving points, practice after the flag would beep 1,100 rpm
+            # early with nothing on screen saying why (CLAUDE.md rule 11).
+            self.bridge.set_short_shift(None)
+        self._fuel_mode_on_beep = None
         self.race = None
         self.bridge.race_clock = None
         # An offer outlives the race that raised it: the buttons stayed live
@@ -5893,6 +5905,30 @@ class PitCrewController(QObject):
             "race finished on lap %s - run %s closed. The session is still "
             "recording; stop it when you are done to file the video and "
             "close the laps.", self.race.state.lap, run_id)
+
+    def _follow_fuel_mode(self) -> None:
+        """Put the beep on the column George is running, when it has moved.
+
+        **Whether or not anything is said.** The switch is made at a crossing
+        or at pit exit (`RaceCoordinator._decide_fuel_mode`, `_apply_stint`),
+        and the sentence that announces it can lose its crossing to a fuel or
+        box call - the beep must not wait for the sentence. A call shown
+        after this sets the beep again from the same `beep_drop_rpm`, so a
+        drop it asks for still wins; applied here first, the column is right
+        even on a path where the call is never shown. Nothing here where the
+        plan does not hand the beep over.
+        """
+        race = self.race
+        if race is None:
+            return
+        engaged = race.state.fuel_save_engaged
+        if engaged is None or engaged == getattr(self, "_fuel_mode_on_beep",
+                                                 None):
+            return
+        self.bridge.set_short_shift(race.beep_drop_rpm(None))
+        self._fuel_mode_on_beep = engaged
+        log("beep").info("beep on its %s points (George's fuel mode)",
+                         "fuel-saving" if engaged else "full-revs")
 
     def _on_race_event(self, event) -> None:
         """Feed one telemetry event to the race, and say ONE thing back.
@@ -5969,6 +6005,7 @@ class PitCrewController(QObject):
             if wear_lap and wear_now:
                 self.race.state.note_wear(wear_lap, wear_now)
         call = self.race.handle(event)
+        self._follow_fuel_mode()
         if getattr(self.race.state, "finished", False):
             # The flag: say what the rig held back during the race.
             rig = getattr(self, "rig", None)
@@ -6045,7 +6082,13 @@ class PitCrewController(QObject):
         # call that instructs still means "stop short-shifting"; `None` from
         # one that only describes the race means nothing at all.
         if call.kind != STATUS:
-            self.bridge.set_short_shift(call.short_shift_drop_rpm)
+            # **`beep_drop_rpm`, not the call's field alone** (15 Sep 2026).
+            # Where the plan hands George the beep, a call that asks for no
+            # drop leaves it on the column he is running - otherwise a box
+            # call released a stint the plan declared fuel-save. Where it does
+            # not, this is `call.short_shift_drop_rpm` exactly as before.
+            self.bridge.set_short_shift(self.race.beep_drop_rpm(call))
+            self._fuel_mode_on_beep = self.race.state.fuel_save_engaged
 
         # **The board's top line, and it is set whether or not the voice is
         # on.** With the engineer silent the board is the only channel left,

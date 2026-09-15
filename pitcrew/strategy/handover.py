@@ -565,6 +565,91 @@ def stint_tyre_problems(plan) -> list[str]:
     return problems
 
 
+def fuel_plan_problems(plan) -> list[str]:
+    """Problems with a plan's fuel-save stints and its lap ceiling.
+
+    Three fields, added 15 Sep 2026 after the Sardegna race sim (session 177):
+
+    * `max_race_laps` - the most laps the race can run. George never counts,
+      and never fuels, past it (`RaceCoordinator._laps_left_under_ceiling`).
+    * `fuel_burns` - `{"save": L/lap, "full": L/lap}`, MEASURED, what the car
+      burns on the beep's fuel-saving points and on its full-revs points. The
+      gate reaches a fuel-save stint on the first; George prices a switch to
+      full revs with the second.
+    * `fuel_save` on a stint - a yes or a no. The beep starts that stint on
+      its fuel-saving points.
+
+    **Read by both the door and the gate** (`Handover.validate` and
+    `certify`), so a plan cannot pass one and fail the other on these.
+    """
+    problems: list[str] = []
+    if not isinstance(plan, dict):
+        return problems
+    stints = [s for s in (plan.get("stints") or []) if isinstance(s, dict)]
+
+    raw_ceiling = plan.get("max_race_laps")
+    if raw_ceiling is not None:
+        ceiling = as_whole_number(raw_ceiling, LAP_CEILING, minimum=1)
+        if ceiling is None:
+            problems.append(f"max_race_laps is {short_value(raw_ceiling)}, "
+                            f"which is not a lap count")
+        else:
+            counts = [as_whole_number(s.get("laps"), LAP_CEILING, minimum=0)
+                      for s in stints]
+            if counts and all(c is not None for c in counts):
+                total = sum(counts)
+                if total > ceiling:
+                    problems.append(
+                        f"the stints cover {total} laps but the race can "
+                        f"never run more than {ceiling}")
+
+    def burn(value) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value) if value > 0 else None
+
+    save = full = None
+    burns = plan.get("fuel_burns")
+    if burns is not None:
+        if not isinstance(burns, dict):
+            problems.append(f"fuel_burns is {short_value(burns)}; it is "
+                            f'{{"save": L/lap, "full": L/lap}}')
+        else:
+            save, full = burn(burns.get("save")), burn(burns.get("full"))
+            for key, got in (("save", save), ("full", full)):
+                if got is None:
+                    problems.append(
+                        f"fuel_burns.{key} is "
+                        f"{short_value(burns.get(key))}, not a burn in L/lap")
+            if save is not None and full is not None and save >= full:
+                # Two columns transposed: the same failure `write_shift_points`
+                # refuses by name, and silent at the wheel the same way.
+                problems.append(
+                    f"fuel_burns.save ({save:g}) must be below fuel_burns.full "
+                    f"({full:g}) - saving that burns more is two columns "
+                    f"transposed")
+
+    saving = []
+    for index, stint in enumerate(stints, 1):
+        if "fuel_save" not in stint:
+            continue
+        if not isinstance(stint["fuel_save"], bool):
+            problems.append(
+                f"stint {index}'s fuel_save is "
+                f"{short_value(stint['fuel_save'])}; it is true or false")
+        elif stint["fuel_save"]:
+            saving.append(index)
+    if saving and (save is None or full is None):
+        which = ", ".join(str(i) for i in saving)
+        problems.append(
+            f"stint{'s' if len(saving) > 1 else ''} {which} "
+            f"{'are' if len(saving) > 1 else 'is a'} fuel-save "
+            f"stint{'s' if len(saving) > 1 else ''} and the plan carries no "
+            f"measured fuel_burns (save and full) - the tank cannot be "
+            f"reached, nor full revs priced, on a burn nobody measured")
+    return problems
+
+
 @dataclass
 class Handover:
     """Everything Ludo hands George for one race."""
@@ -580,6 +665,7 @@ class Handover:
         if not isinstance(self.plan, dict) or not self.plan.get("stints"):
             problems.append("the plan has no stints")
         problems.extend(stint_tyre_problems(self.plan))
+        problems.extend(fuel_plan_problems(self.plan))
         # **Refused, never merged.** The stored payload is the plan's own keys
         # with the handover's alongside under one key, so a plan carrying one
         # of the reserved names would have it silently replaced. `assumptions`
@@ -967,7 +1053,8 @@ def standing_orders(stored: dict) -> list[Order]:
 # Adding one more field by hand would be the same shape a fourth time;
 # `test_the_door_reads_every_count_a_plan_carries` holds these against what
 # `Plan.as_dict` emits.
-PLAN_COUNTS = {"stops": (_STOP_CEILING, None), "laps": (LAP_CEILING, 0)}
+PLAN_COUNTS = {"stops": (_STOP_CEILING, None), "laps": (LAP_CEILING, 0),
+               "max_race_laps": (LAP_CEILING, 1)}
 # `end_lap` is a `Stint` PROPERTY, never stored and never read off a stored
 # stint, so declaring it here was a key that could not be exercised.
 STINT_COUNTS = {"laps": (LAP_CEILING, 0), "start_lap": (LAP_CEILING, 1)}

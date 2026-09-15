@@ -31,7 +31,7 @@ checked: it carries the authority without the arithmetic.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pitcrew.strategy.model import (
     STINT_SAFETY_FACTOR,
@@ -65,6 +65,22 @@ class Certificate:
         if self.unchecked:
             parts.append("Not checked: " + "; ".join(self.unchecked) + ".")
         return " ".join(parts)
+
+
+def _ceiling_of(plan: dict) -> int | None:
+    from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
+
+    value = plan.get("max_race_laps")
+    return (as_whole_number(value, LAP_CEILING, minimum=1)
+            if value is not None else None)
+
+
+def _saving_burn(plan: dict) -> float | None:
+    burns = plan.get("fuel_burns")
+    value = burns.get("save") if isinstance(burns, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
 
 
 def _stints(plan: dict) -> list[dict]:
@@ -228,6 +244,13 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
                 f"{laps_said(short_value(lap) for lap in pit_laps)} but its "
                 f"stints box on {laps_said(implied)}")
 
+    # **The fuel-save stints and the lap ceiling**, refused by the same words
+    # the door uses (`handover.fuel_plan_problems`), so a stored plan that
+    # predates a fix is refused on the grid as it would be at the desk.
+    from pitcrew.strategy.handover import fuel_plan_problems
+
+    refusals.extend(fuel_plan_problems(plan))
+
     # ------------------------------------------------------------- the tank
     capacity = inputs.fuel_capacity_l
     if capacity is None:
@@ -293,6 +316,19 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
         if allowed is None:
             unchecked.append("the lap count against the clock, because no "
                              "reference lap time is known")
+        elif (total > allowed and total - allowed == 1
+              and _ceiling_of(plan) == total):
+            # **The desk's ceiling, stated against the model's count.** The
+            # clock model charges every stop its whole load at the pump - a
+            # ceiling, as its docstring says - and at Sardegna it allows 28
+            # where the race ran 29 on a 60.6 L fill. The fill is sized live
+            # against the clock AND the ceiling, so the lap the model doubts
+            # is never fuelled past; it is said, not refused.
+            warnings.append(
+                f"the stints cover {total} laps and the clock model allows "
+                f"about {allowed}; the race can never run more than {total}, "
+                f"and George sizes the fill by the live clock under that "
+                f"ceiling")
         elif total > allowed:
             refusals.append(
                 f"the stints cover {total} laps but the clock allows about "
@@ -379,12 +415,22 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
         # certifier that measured the tank another way refused plans the
         # optimiser had built, which is how Suzuka's was refused on the grid.
         reach = tank_limited_laps(inputs)
-        if reach:
-            for index, count in enumerate(laps, 1):
-                if count > reach:
-                    refusals.append(
-                        f"stint {index} runs {count} laps on a tank that "
-                        f"reaches {reach}")
+        # **A fuel-save stint is reached on the burn it is driven at**, the
+        # plan's measured `fuel_burns.save`, through the same expression and
+        # the same reserve. `fuel_plan_problems` has already refused a
+        # fuel-save stint with no burn, so there is no unpriced case here.
+        save_burn = _saving_burn(plan)
+        save_reach = (tank_limited_laps(replace(inputs,
+                                                fuel_per_lap_l=save_burn))
+                      if save_burn else None)
+        for index, (stint, count) in enumerate(zip(stints, laps), 1):
+            saving = stint.get("fuel_save") is True and bool(save_reach)
+            limit = save_reach if saving else reach
+            if limit and count > limit:
+                refusals.append(
+                    f"stint {index} runs {count} laps on a tank that "
+                    f"reaches {limit}"
+                    + (" at the fuel-save burn" if saving else ""))
 
     return Certificate(refusals, warnings, unchecked)
 

@@ -88,6 +88,28 @@ FUEL_SAVE = "fuel-save"
 # 13 Sep 2026: nothing ever told him the shortfall had closed.
 FUEL_REACHES = "fuel-reaches"
 FUEL_LONG = "fuel-long"
+# **The beep changed column, fuel-save or full revs, and why.** George moves it
+# on fuel: a stint the plan declared fuel-save starts on the saving points;
+# on the run to the flag a tank that reaches at full revs gets the full
+# points back, and one that stops reaching gets the saving points again.
+# Sardegna race sim, 15 Sep 2026 - see `fuel_mode_wanted`.
+FUEL_MODE = "fuel-mode"
+# Why the beep moved, as `RaceState.fuel_mode_change` carries it.
+FUEL_MODE_PLANNED = "planned"
+FUEL_MODE_FULL_REACHES = "full-reaches"
+FUEL_MODE_FULL_SHORT = "full-short"
+# **The scalar drop a fuel-save beep engages at: the beep's own
+# `DEFAULT_SHORT_SHIFT_DROP_RPM`.** Every gear the issued table names a
+# fuel-saving point for plays that point instead (`ShiftBeep.threshold_for`),
+# so on a car with a table this only has to be non-zero. Restated rather than
+# imported so the pure call layer does not pull in the audio stack;
+# `test_fuel_save_mode` holds the two equal.
+FUEL_MODE_DROP_RPM = 500.0
+# **Litres in hand before a saving beep is released to full revs.** Held full
+# until the full burn genuinely stops reaching, released only with this
+# spare - CLAUDE.md rule 10's bound in each direction, so a burn that wanders
+# by a litre does not flip the beep lap after lap.
+FUEL_MODE_HYSTERESIS_L = 1.0
 TYRE = "tyre"
 # **The gauge, not the model.** `TYRE` above is the retired
 # modelled warning; this one rests on a transcription of GT7's own
@@ -249,6 +271,11 @@ URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            FUEL_SHORT, LAPS_TO_GO,
            # Below the run-in: "Last lap." is true once, this can wait a lap.
            FUEL_REACHES,
+           # **The beep changing column is heard below the fuel calls it
+           # answers to.** The beep itself moves whether or not this is said
+           # (the controller follows `fuel_save_engaged`), so losing a
+           # crossing costs a sentence, never the instruction.
+           FUEL_MODE,
            BOX_SOON,
            # **`STAY_OUT_FUEL` sits immediately below `BOX_SOON`, because it
            # is the argument against it.** The two answer the same question
@@ -387,6 +414,7 @@ REGISTER = {
     FUEL_SHORT: DECISION,
     FUEL_REACHES: DECISION,
     FUEL_LONG: DECISION,
+    FUEL_MODE: DECISION,
     STAY_OUT: DECISION,
     SAVING_RESPONSE: DECISION,
     SAVING_CHANGE: FACT,
@@ -1027,6 +1055,16 @@ class RaceState:
     # Whether the last fuel-short call said was a save target, not yet
     # answered by FUEL_REACHES. Set and cleared only by `record`.
     fuel_save_said: bool = False
+    # **Whether the beep is on its fuel-saving points, as George runs it.**
+    # None where the plan says nothing about saving: then the beep follows
+    # each call exactly as it always has. True/False once a plan declares
+    # `fuel_save` on its stints - see `fuel_mode_wanted`.
+    fuel_save_engaged: bool | None = None
+    # What the approved plan asked of the stint being run.
+    fuel_save_planned: bool = False
+    # `(lap, engaged, why, litres)` of the last switch not yet said, or None.
+    # Set by the coordinator, cleared by `record` when the call is made.
+    fuel_mode_change: tuple | None = None
     # A stop was made and nothing said whether the tyres came off. The wear
     # model keeps counting through it - GT7 lets you take fuel without taking
     # tyres - and the call that rests on it says so out loud.
@@ -1733,6 +1771,8 @@ class RaceState:
             if FUEL_SHORT not in self.said:
                 self.said.append(FUEL_SHORT)
             self.said_at[FUEL_SHORT] = call.severity
+        if call.kind == FUEL_MODE:
+            self.fuel_mode_change = None
         if call.kind == FUEL_REACHES:
             # Answered. A shortfall that opens again is news again.
             self.fuel_save_said = False
@@ -1849,7 +1889,9 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
     # mostly spent. Tagged per driver, so two rivals do not swallow each other
     # either. Below the `said` check it never ran at all.
     if call.kind in (RIVAL_SHORT, RIVAL_COMMITTED, RIVAL_BOXED, CLOSING,
-                     CHASE):
+                     CHASE, FUEL_MODE):
+        # `FUEL_MODE` is tagged per switch: the beep can go full and come
+        # back in one stint, and the second is as much news as the first.
         # `CHASE` too: tagged per lap, so `said` never silences it for the
         # stint - critic pass 5 found it spoken once and then never.
         # `RIVAL_BOXED` and `CLOSING` joined them: untagged, one CLOSING call
@@ -2012,6 +2054,7 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _box_now(state),
         _box_soon(state),
         _fuel(state),
+        _fuel_mode(state),
         # **`_tyre` is not here, deliberately.** It said "Tyres are at the end
         # of their window. Modelled at 92%." - a sentence whose first clause is
         # a flat assertion about the tyres, built on wear-per-lap times laps.
@@ -3122,6 +3165,95 @@ def _fuel(state: RaceState) -> Call | None:
             confidence,
             severity=gap)
     return None
+
+
+def fuel_mode_wanted(state: RaceState, *, save_burn_l: float | None,
+                     full_burn_l: float | None
+                     ) -> tuple[bool | None, str | None, float | None]:
+    """`(fuel-save beep?, why it moved, litres behind the decision)`.
+
+    **The one decision about which column the beep plays**, made at a
+    crossing by the coordinator and applied to the beep by the controller
+    from `RaceCoordinator.beep_drop_rpm`. `why` is None when nothing moved;
+    `(None, None, None)` when the plan does not manage the beep at all.
+
+    The driver's rule, 15 Sep 2026 (Sardegna race sim): *"if we have more
+    fuel on board then we need in last stint to flag he can change the shift
+    beep for full performance or like wise if we under fueled change the
+    shift beep to fuel save"*. So:
+
+    * **To the flag:** full revs once the tank reaches at the FULL burn with
+      its margin and `FUEL_MODE_HYSTERESIS_L` in hand; back to saving the
+      moment the full burn no longer reaches. Saving more than the saving
+      beep gives is the existing fuel call's job (`_fuel`: "Save N litres a
+      lap", "Short-shift and lift").
+    * **To a stop, on a stint the plan declared fuel-save:** the saving beep
+      stays. Fuel left at a stop is not spare - it goes back in at the pump,
+      and on the medium the saving is also a tyre saving (car-state §22).
+    * **To a stop, on a full-revs stint:** saving only if the full burn does
+      not reach the stop.
+
+    **The margin is the fill's own** (`fuel_margin_l`, rule 12), so "reaches"
+    here and the litres George asks for at the pump are one expression. With
+    no full-revs burn to price it the saving beep stays: the switch that
+    spends fuel is never made on a guess.
+    """
+    engaged = state.fuel_save_engaged
+    if engaged is None:
+        return None, None, None
+    if state.in_pit or state.finished or state.fuel_l is None:
+        return engaged, None, None
+    target, frame = fuel_frame(state)
+    if target is None or target <= 0:
+        return engaged, None, None
+    if frame == TO_THE_STOP and state.fuel_save_planned:
+        if engaged:
+            return True, None, None
+        return True, FUEL_MODE_PLANNED, None
+    if not full_burn_l or full_burn_l <= 0:
+        return engaged, None, None
+    margin_l, _why = fuel_margin_l(target, full_burn_l, sd_l=state.fuel_sd_l,
+                                   timed=state.race_minutes is not None,
+                                   lap_count_firm=state.laps_estimate_firm)
+    need_full = target * full_burn_l + (margin_l or 0.0)
+    spare = state.fuel_l - need_full
+    if engaged and spare >= FUEL_MODE_HYSTERESIS_L:
+        return False, FUEL_MODE_FULL_REACHES, spare
+    if not engaged and spare < 0:
+        return True, FUEL_MODE_FULL_SHORT, -spare
+    return engaged, None, None
+
+
+def _fuel_mode(state: RaceState) -> Call | None:
+    """The beep changed column: said once, on the crossing it changed or the
+    one after, never later - a switch heard three laps late describes a beep
+    he has already been hearing."""
+    change = state.fuel_mode_change
+    if change is None or state.in_pit or state.finished:
+        return None
+    lap, engaged, why, litres = change
+    if state.lap - lap > 1:
+        return None
+    frame = fuel_reference(state)
+    tag = f"{FUEL_MODE}:{lap}:{'save' if engaged else 'full'}"
+    if not engaged and why == FUEL_MODE_PLANNED:
+        return Call(FUEL_MODE, state.lap, "Full beeps.",
+                    "As planned for this stint.", tag=tag,
+                    short_shift_drop_rpm=None)
+    if not engaged:
+        return Call(FUEL_MODE, state.lap,
+                    "Full beeps. Fuel reaches the "
+                    + ("flag." if frame == TO_THE_FLAG else "stop."),
+                    f"{litres:.1f} litres spare at full revs."
+                    if litres is not None else "At full revs.",
+                    tag=tag, short_shift_drop_rpm=None)
+    if why == FUEL_MODE_FULL_SHORT and litres is not None:
+        reason = (f"Full revs would leave you {litres:.1f} litres short "
+                  f"{frame}.")
+    else:
+        reason = "As planned for this stint."
+    return Call(FUEL_MODE, state.lap, "Fuel-save beeps.", reason, tag=tag,
+                short_shift_drop_rpm=FUEL_MODE_DROP_RPM)
 
 
 def _past_half_stint(state: RaceState) -> bool:

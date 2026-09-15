@@ -21,6 +21,8 @@ from pitcrew.race.calls import (
     stop_still_needed,
     BOX_IGNORED_LAPS,
     BOX_NOW,
+    FUEL_MODE_DROP_RPM,
+    FUEL_MODE_PLANNED,
     FUEL_REACHES,
     FUEL_SAVE,
     FUEL_SHORT,
@@ -33,6 +35,7 @@ from pitcrew.race.calls import (
     Call,
     RaceState,
     fuel_in_hand,
+    fuel_mode_wanted,
     _crossing_the_line,
     clear_stint,
     next_call,
@@ -270,6 +273,37 @@ class RaceCoordinator:
         # being handled. See `_corroborate_pit_lap`.
         self._dropped_before_lap = 0
         self._stints = list(self.plan.get("stints") or ())
+        # **The most laps this race can run, as the desk wrote it.** A timed
+        # race's distance is `ceil(time left / lap)` over a clock that still
+        # holds the stop, and at Sardegna (session 177) that asked for 96 L
+        # where 15 laps wanted 82.8: he crossed to start lap 29 with 3.1 s on
+        # the clock, so 30 was never on. The driver: *"never put more fuel in
+        # than that."* None where no plan says - the clock alone, as before.
+        from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
+
+        self.max_race_laps = (
+            as_whole_number(self.plan.get("max_race_laps"), LAP_CEILING,
+                            minimum=1)
+            if self.plan.get("max_race_laps") is not None else None)
+        # **The beep's fuel-save column, run by George, only where the plan
+        # asks for it.** A plan that names `fuel_save` on any stint hands the
+        # beep over; one that does not leaves it following each call exactly
+        # as it always has. See `calls.fuel_mode_wanted`.
+        if any(isinstance(s, dict) and "fuel_save" in s for s in self._stints):
+            self.state.fuel_save_engaged = False
+        burns = self.plan.get("fuel_burns")
+        self._planned_burns = (
+            (float(burns["save"]), float(burns["full"]))
+            if isinstance(burns, dict)
+            and all(isinstance(burns.get(k), (int, float))
+                    and not isinstance(burns.get(k), bool)
+                    and burns[k] > 0 for k in ("save", "full"))
+            else None)
+        # This race's own clean-lap burns, by the column the beep was on for
+        # the whole lap. Emptied with the coordinator, which is built per race
+        # (CLAUDE.md rule 11).
+        self._mode_burns: dict[bool, list[float]] = {True: [], False: []}
+        self._mode_at_lap_start: bool | None = None
         # **The bounds the engineer at the desk set on the engineer in the
         # car.** Empty for a plan the app wrote itself, and empty is not the
         # same as absent: see `_may`.
@@ -438,6 +472,8 @@ class RaceCoordinator:
             return None
         last = self._stints[-1]
         end = int(last.get("start_lap") or 1) + int(last.get("laps") or 0) - 1
+        if end and self.max_race_laps:
+            end = min(end, self.max_race_laps)
         return end or None
 
     def disarm(self) -> None:
@@ -511,6 +547,20 @@ class RaceCoordinator:
             return
         self._note_mandatory_stops()
         stint = self._stints[index]
+        # **What the plan asked of this stint's fuel, and the beep follows it
+        # from the start of the stint** - the lights, the out-lap, before any
+        # crossing has had a chance to decide. A stint with no word (a re-plan
+        # adopted mid-race writes none) keeps what was being run.
+        if self.state.fuel_save_engaged is not None and "fuel_save" in stint:
+            planned = stint.get("fuel_save") is True
+            self.state.fuel_save_planned = planned
+            if planned != self.state.fuel_save_engaged:
+                self.state.fuel_save_engaged = planned
+                self.state.fuel_mode_change = (
+                    self.state.lap, planned, FUEL_MODE_PLANNED, None)
+                log("race").info("stint %d: beep on its %s points, as the "
+                                 "plan declares", index,
+                                 "fuel-saving" if planned else "full-revs")
         # The compound on the car now. Named by the plan, or - when the plan
         # does not name one - unchanged, because a re-plan adopted mid-race
         # carries no compound and the rubber has not changed because of it.
@@ -1031,6 +1081,8 @@ class RaceCoordinator:
         # `stop_still_needed` reads it: whether a stop he was told was off
         # has been needed long enough to come back. See `note_stop_need`.
         self.state.note_stop_need()
+        self._note_mode_burn(lap)
+        self._decide_fuel_mode()
         folded = self._reconsider_ignored_box()
         if folded is not None:
             self.state.record(folded)
@@ -2206,7 +2258,18 @@ class RaceCoordinator:
         pending = max(0, len(self._stints) - 1 - self.state.stint_index)
         if not pending or not self.pit_loss_s:
             return left
-        return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
+        after = self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
+        most = self._laps_left_under_ceiling()
+        if after is not None and most is not None:
+            after = min(after, most)
+        return after
+
+    def _laps_left_under_ceiling(self) -> int | None:
+        """Laps the desk's ceiling still allows, or None where there is none."""
+        if not self.max_race_laps:
+            return None
+        return max(0, self.max_race_laps
+                   - (self.state.lap + self.state.laps_missed()))
 
     def stamp_clock(self, lap) -> None:
         """Write the race clock onto the lap, on the way past.
@@ -2254,6 +2317,98 @@ class RaceCoordinator:
         """A fuel save was asked for at this crossing. The first ask stands."""
         if self._save_asked_lap is None:
             self._save_asked_lap = int(lap)
+
+    # The fewest laps on one beep column this race before its own burn
+    # replaces the plan's figure for that column.
+    MODE_BURN_LAPS = 2
+
+    def beep_drop_rpm(self, call: Call | None = None) -> float | None:
+        """The drop the beep should be on after `call`, or None for full revs.
+
+        **One expression for the controller's two doors** - the call it is
+        about to show and the crossing that produced no call (rule 12). A call
+        that names a drop gets it. Otherwise, where the plan hands George the
+        beep, it stays on the column he is running; where it does not, None,
+        which is the old instruction "stop short-shifting" exactly as before.
+
+        This is the defect the plan would have died on: a box call, a tyre
+        call, any call without a drop used to release the beep, so a stint
+        declared fuel-save would have gone back to full revs the first time
+        George said anything else.
+        """
+        asked = call.short_shift_drop_rpm if call is not None else None
+        engaged = self.state.fuel_save_engaged
+        if asked or engaged is None:
+            return asked
+        return FUEL_MODE_DROP_RPM if engaged else None
+
+    def _note_mode_burn(self, lap) -> None:
+        """File this lap's burn under the beep column it was driven on.
+
+        Only a lap driven wholly on one column, and only a racing lap - the
+        pit lap and the out lap burn for reasons that are not the beep.
+        """
+        engaged = self.state.fuel_save_engaged
+        before, self._mode_at_lap_start = self._mode_at_lap_start, engaged
+        if engaged is None or before is None or before != engaged:
+            return
+        used = getattr(lap, "fuel_used", None)
+        if (not used or used <= 0 or getattr(lap, "is_pit_lap", False)
+                or getattr(lap, "is_out_lap", False)
+                or getattr(lap, "excluded", False)):
+            return
+        self._mode_burns[engaged].append(float(used))
+
+    def mode_burns_l(self) -> tuple[float | None, float | None]:
+        """`(fuel-save burn, full-revs burn)` in L/lap, this race first.
+
+        A column driven for `MODE_BURN_LAPS` clean laps is priced off those
+        laps (median of the last three). The column not yet driven is the
+        driven one scaled by the plan's own ratio between the two - so a windy
+        day moves both. Neither driven: the plan's figures. No plan figures
+        and nothing driven: None, and `fuel_mode_wanted` then refuses to spend
+        fuel it cannot price.
+        """
+        def driven(engaged: bool) -> float | None:
+            laps = self._mode_burns[engaged][-3:]
+            if len(self._mode_burns[engaged]) < self.MODE_BURN_LAPS:
+                return None
+            ordered = sorted(laps)
+            mid = len(ordered) // 2
+            return (ordered[mid] if len(ordered) % 2
+                    else (ordered[mid - 1] + ordered[mid]) / 2.0)
+
+        save, full = driven(True), driven(False)
+        planned = self._planned_burns
+        if planned is not None:
+            ratio = planned[1] / planned[0]
+            if save is not None and full is None:
+                full = save * ratio
+            elif full is not None and save is None:
+                save = full / ratio
+            elif save is None and full is None:
+                save, full = planned
+        return save, full
+
+    def _decide_fuel_mode(self) -> None:
+        """Move the beep's column at a crossing, when the fuel says so."""
+        if self.state.fuel_save_engaged is None:
+            return
+        save, full = self.mode_burns_l()
+        engaged, why, litres = fuel_mode_wanted(
+            self.state, save_burn_l=save, full_burn_l=full)
+        if why is None or engaged is None:
+            return
+        self.state.fuel_save_engaged = engaged
+        self.state.fuel_mode_change = (self.state.lap, engaged, why, litres)
+        log("race").info(
+            "lap %s: beep to its %s points (%s%s) - burns save %s, full %s "
+            "L/lap, %.1f L aboard", self.state.lap,
+            "fuel-saving" if engaged else "full-revs", why,
+            f", {litres:.1f} L" if litres is not None else "",
+            f"{save:.2f}" if save else "unpriced",
+            f"{full:.2f}" if full else "unpriced",
+            self.state.fuel_l or 0.0)
 
     def projected_lap_ms(self) -> int | None:
         """The lap a timed race's remaining distance is divided by.
@@ -2309,6 +2464,20 @@ class RaceCoordinator:
         self.state.race_remaining_s = self.clock.remaining_s
         lap_ms = self.projected_lap_ms()
         left = self.clock.laps_left(lap_ms)
+        # **The desk's ceiling, applied to the clock's count and nothing
+        # downstream of it** - every reader (the fill, the flag, the run-in,
+        # the stop's price) takes `left` or `laps_total` from here, so one cap
+        # reaches all of them (rule 12). The clock may still say FEWER: a race
+        # that is running slow is shorter, and that is the clock's to say.
+        at_ceiling = False
+        most = self._laps_left_under_ceiling()
+        if left is not None and most is not None and left >= most:
+            if left > most:
+                log("race").info(
+                    "the clock counts %d laps left; the race can never run "
+                    "more than %d, so %d", left, self.max_race_laps, most)
+            left = most
+            at_ceiling = True
         self.state.clock_corroborated = self.clock.corroborated
         # Carried onto the state so the lap-count calls can say which fault
         # they are living with - see `calls._laps_to_go`.
@@ -2345,6 +2514,11 @@ class RaceCoordinator:
         # have is the most dangerous thing in the file.
         _firm_noise = bool(margin is not None and sigma is not None
                            and margin >= sigma / 1000.0)
+        # **At the ceiling the count cannot grow**, so the whole spare lap
+        # `fuel_margin_l` carries for a count that might is the fuel he told
+        # us never to carry. It may still come in a lap SHORT; that lap is the
+        # price of the ceiling, and it is his.
+        _firm_noise = _firm_noise or at_ceiling
         # What the VOICE needs, which is a different question: is the number
         # good enough to say flat? Noise, plus the bias the noise test cannot
         # see. Nothing sizes a fill off this.
