@@ -26,6 +26,7 @@ from pitcrew.strategy.certify import certify
 from pitcrew.strategy.execution import _with_start_laps, contract_gaps, stamp
 from pitcrew.strategy.handover import Handover, from_dict
 
+from ._desk import with_desk_figures
 from .test_certify import inputs, plan, stint
 from .test_controller import qt_app  # noqa: F401
 from .test_mcp_server import call, seeded  # noqa: F401
@@ -211,9 +212,9 @@ def test_the_mcp_door_stores_an_unreadable_count_and_says_why(seeded):
     db, event_id = seeded
     got = call("propose_strategy",
                {"event_id": event_id,
-                "plan": json.dumps({"stints": [
+                "plan": json.dumps(with_desk_figures({"stints": [
                     {"laps": "ten", "compound": "RS"},
-                    {"laps": 10, "compound": "RS", "tyres": True}]})},
+                    {"laps": 10, "compound": "RS", "tyres": True}]}))},
                db=db)
     assert got["saved"] is True, got
     assert "int()" not in json.dumps(got)
@@ -243,9 +244,9 @@ def test_the_mcp_door_keeps_a_garbage_stint_where_it_was(seeded):
     db, event_id = seeded
     got = call("propose_strategy",
                {"event_id": event_id,
-                "plan": json.dumps({"stints": [
+                "plan": json.dumps(with_desk_figures({"stints": [
                     {"laps": 10, "compound": "RS"}, "x",
-                    {"laps": 10, "compound": "RS", "tyres": True}]})},
+                    {"laps": 10, "compound": "RS", "tyres": True}]}))},
                db=db)
     assert got["saved"] is True and got["certified"] is False, got
     assert got["refusals"] == ["stint 2 is 'x', not a stint"]
@@ -323,7 +324,8 @@ def _write(db, event_id, **extra):
                           {"laps": 10, "compound": "RS", "tyres": True}],
                "stops": 1, "playbook": [], **extra}
     return call("write_strategy", {"event_id": event_id,
-                                   "plan": json.dumps(payload)}, db=db)
+                                   "plan": json.dumps(
+                                       with_desk_figures(payload))}, db=db)
 
 
 def test_write_strategy_does_not_approve_a_plan_for_another_race(seeded):

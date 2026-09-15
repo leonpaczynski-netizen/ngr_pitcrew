@@ -59,7 +59,11 @@ def sardegna_plan(**over) -> dict:
 
 
 def test_the_drivers_plan_is_a_valid_handover():
-    payload = {**sardegna_plan(), "playbook": [], "author": "ludo"}
+    from ._desk import with_desk_figures
+
+    # With the per-lap targets every desk plan carries since 16 Sep 2026.
+    payload = {**with_desk_figures(sardegna_plan()), "playbook": [],
+               "author": "ludo"}
     assert from_dict(payload).validate() == []
 
 

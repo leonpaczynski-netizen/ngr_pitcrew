@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from ._desk import with_desk_figures
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -133,7 +135,8 @@ def test_a_proposed_plan_is_saved_unapproved(seeded):
 
     db, event_id = seeded
     got = call("propose_strategy",
-               {"event_id": event_id, "plan": json.dumps({"stints": [10, 10]})},
+               {"event_id": event_id, "plan": json.dumps(
+                   with_desk_figures({"stints": [10, 10]}))},
                db=db)
     assert got["saved"] is True and got["approved"] is False
 
@@ -158,7 +161,8 @@ def test_a_proposed_plan_leaves_a_row_in_the_journal(seeded):
 
     db, event_id = seeded
     got = call("propose_strategy",
-               {"event_id": event_id, "plan": json.dumps({"stints": [10, 10]}),
+               {"event_id": event_id, "plan": json.dumps(
+                   with_desk_figures({"stints": [10, 10]})),
                 "label": "a candidate"}, db=db)
     assert got["saved"] is True
 
@@ -186,12 +190,12 @@ def test_a_proposed_plan_is_read_as_whole_numbers(seeded):
     db, event_id = seeded
     got = call("propose_strategy",
                {"event_id": event_id,
-                "plan": json.dumps({
+                "plan": json.dumps(with_desk_figures({
                     "stints": [{"laps": 10.0, "compound": "RS",
                                 "start_lap": 1.0},
                                {"laps": 10.0, "compound": "RS",
                                 "start_lap": 11.0, "tyres": True}],
-                    "stops": 1.0, "pit_laps": [10.0]})},
+                    "stops": 1.0, "pit_laps": [10.0]}))},
                db=db)
     assert got["saved"] is True
 
@@ -273,10 +277,10 @@ def test_a_proposed_plan_is_stamped_so_it_can_actually_be_run(seeded):
     db, event_id = seeded
     got = call("propose_strategy",
                {"event_id": event_id,
-                "plan": json.dumps({"stints": [
+                "plan": json.dumps(with_desk_figures({"stints": [
                     {"laps": 10, "compound": "RS"},
                     {"laps": 10, "compound": "RS", "tyres": True},
-                    {"laps": 10, "compound": "RS", "tyres": True}]})},
+                    {"laps": 10, "compound": "RS", "tyres": True}]}))},
                db=db)
     assert got["saved"] is True, got
 

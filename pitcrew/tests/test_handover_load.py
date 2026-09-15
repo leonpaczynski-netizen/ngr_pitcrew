@@ -21,6 +21,7 @@ import json
 
 from pitcrew.race.coordinator import RaceCoordinator, context_from_stored
 from pitcrew.strategy.execution import context_from_event
+from ._desk import with_desk_figures
 from pitcrew.strategy.handover import (
     Handover,
     PlaybookEntry,
@@ -40,7 +41,7 @@ def a_handover(**over) -> Handover:
                         "start_lap": 16, "tyres": True}],
             "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"}
     plan.update(over.pop("plan", {}))
-    return Handover(plan=plan,
+    return Handover(plan=with_desk_figures(plan),
                     playbook=[PlaybookEntry(
                         trigger="fuel_short", action="short_shift",
                         when="more than 0.5 laps short to the flag",

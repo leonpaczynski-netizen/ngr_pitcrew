@@ -22,11 +22,12 @@ from pitcrew.race.targets import (ON_TARGET_L, ON_TARGET_S, board_target_fields,
                                   burn_sentence, judge, pace_sentence,
                                   verdict_sentence)
 from pitcrew.strategy.certify import certify
-from pitcrew.strategy.handover import Handover, targets_not_passed
+from pitcrew.strategy.handover import Handover, fuel_plan_problems
 from pitcrew.strategy.model import (CompoundProfile, RaceInputs,
                                     _stint_seconds, planned_lap_s)
 from pitcrew.strategy.targets import (SOURCE_AUTHOR, SOURCE_PRACTICE,
-                                      LapTarget, PlanTargets, fill_targets,
+                                      LapTarget, PlanTargets,
+                                      desk_target_problems, fill_targets,
                                       target_problems, targets_answered)
 from pitcrew.telemetry.session_state import EventKind, Lap, SessionEvent
 
@@ -174,12 +175,85 @@ def test_restamping_keeps_what_was_filled_before():
     assert again["compounds"]["RM"]["lap_time_ms"] == 90_000
 
 
-def test_the_desk_is_told_which_lap_targets_it_did_not_pass():
-    plan = _plan(targets={"compounds": {"RM": {"lap_time_ms": 89_400}}})
-    plan["targets"] = fill_targets(plan, _inputs())
-    said = targets_not_passed(plan)
-    assert said == ["the handover passed no RH target lap time - George "
-                    "judges RH laps against practice's"]
+# ------------------------------- the desk must pass them (16 Sep 2026)
+
+def _desk_plan(saving=False, **over):
+    """A Ludo plan carrying every figure George judges a lap against."""
+    plan = {"stops": 1, "stints": [
+        {"laps": 10, "compound": "RM", "start_lap": 1, "fuel_l": 50.0,
+         "fuel_save": saving},
+        {"laps": 10, "compound": "RH", "start_lap": 11, "fuel_l": 50.0,
+         "tyres": True, "fuel_save": False}],
+        "fuel_burns": ({"save": 4.0, "full": 4.8} if saving
+                       else {"full": 4.8}),
+        "targets": {"reference_load_l": 50.0, "compounds": {
+            "RM": {"lap_time_ms": 90_000,
+                   **({"save_lap_time_ms": 90_600} if saving else {})},
+            "RH": {"lap_time_ms": 90_800}}}}
+    plan.update(over)
+    return plan
+
+
+@pytest.mark.parametrize("saving", [False, True])
+def test_a_desk_plan_with_every_figure_passes_the_door(saving):
+    plan = _desk_plan(saving)
+    assert desk_target_problems(plan) == []
+    assert Handover(plan=plan, playbook=[]).validate() == []
+
+
+def test_a_full_revs_burn_alone_is_a_plan_with_no_saving_in_it():
+    """It was refused for want of `save`, which left a non-saving plan no way
+    to pass its burn per lap except through `expects`."""
+    assert fuel_plan_problems({"stints": [{"laps": 10}],
+                               "fuel_burns": {"full": 4.8}}) == []
+    saving = {"stints": [{"laps": 10, "fuel_save": True}],
+              "fuel_burns": {"full": 4.8}}
+    assert any("fuel-save stint" in p for p in fuel_plan_problems(saving))
+
+
+@pytest.mark.parametrize("change, fragment", [
+    (lambda p: p["targets"]["compounds"].pop("RH"),
+     "no target lap time for RH: pass targets.compounds.RH.lap_time_ms"),
+    (lambda p: p.pop("targets"),
+     "no target lap time for RM"),
+    (lambda p: p.pop("fuel_burns"),
+     "no burn per lap: pass fuel_burns.full"),
+    (lambda p: p["fuel_burns"].pop("full"),
+     "no burn per lap: pass fuel_burns.full"),
+    (lambda p: p["stints"][0].pop("compound"),
+     "stint 1 names no compound"),
+])
+def test_a_desk_plan_missing_a_figure_is_refused_by_name(change, fragment):
+    plan = _desk_plan()
+    change(plan)
+    problems = Handover(plan=plan, playbook=[]).validate()
+    assert any(fragment in problem for problem in problems), problems
+
+
+def test_a_fuel_saving_strategy_must_pass_its_saving_burn_and_lap_time():
+    plan = _desk_plan(saving=True)
+    plan["targets"]["compounds"]["RM"].pop("save_lap_time_ms")
+    plan["fuel_burns"].pop("save")
+    problems = Handover(plan=plan, playbook=[]).validate()
+    assert any("stint 1 is a fuel-save stint on RM with no fuel-saving target "
+               "lap time" in p for p in problems), problems
+    assert any("fuel-save stint and the plan carries no measured fuel_burns"
+               in p for p in problems), problems
+
+
+def test_the_propose_door_refuses_what_the_write_door_refuses(store, event_id,
+                                                             monkeypatch):
+    import json
+
+    from pitcrew.mcp import server
+
+    monkeypatch.setattr(server, "_store", lambda: store)
+    monkeypatch.setattr(store, "close", lambda: None)
+    plan = _desk_plan()
+    plan.pop("fuel_burns")
+    got = json.loads(server.propose_strategy(event_id, json.dumps(plan)))
+    assert got["saved"] is False
+    assert any("no burn per lap" in p for p in got["problems"]), got
 
 
 @pytest.mark.parametrize("block, fragment", [
@@ -344,6 +418,28 @@ def test_a_race_with_no_plan_targets_says_nothing_about_them():
     assert race.targets is None
     assert all("Pace" not in c.spoken() for c in said.values())
     assert board_target_fields(race.state)["target_lap_ms"] is None
+
+
+def test_a_fuel_saving_stint_is_called_and_drawn_on_its_saving_figures():
+    """The driver: the burn per lap for a fuel-saving strategy "must be passed
+    and called by George as well as on board with lap time delta"."""
+    plan = _desk_plan(saving=True)
+    plan["stints"][0]["laps"] = 20
+    plan["stints"] = plan["stints"][:1]
+    plan["stops"] = 0
+    plan["targets"]["compounds"]["RM"].pop("reference_load_l", None)
+    plan["targets"].pop("reference_load_l")
+    race = _race(plan)
+    assert race.state.fuel_save_engaged is True
+    # Laps 2 and 3 on the saving beep: 90.6 s and 4.0 L are the targets.
+    said = _drive(race, [(1, 93_000, 4.1), (2, 90_900, 4.3), (3, 90_650, 4.02)])
+    assert "Pace three tenths slow. Burn 0.3 litres over." in said[2].spoken()
+    assert "Pace on target. Burn on target." in said[3].spoken()
+    fields = board_target_fields(race.state)
+    assert fields["target_saving"] is True
+    assert fields["target_lap_ms"] == 90_600 and fields["target_burn_l"] == 4.0
+    assert fields["last_vs_target_s"] == pytest.approx(0.05)
+    assert fields["last_burn_vs_target_l"] == pytest.approx(0.02)
 
 
 def test_a_pit_lap_and_its_out_lap_are_not_judged():

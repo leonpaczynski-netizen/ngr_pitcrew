@@ -15,6 +15,7 @@ import pytest
 from pitcrew.mcp import server
 from pitcrew.store.db import Store
 
+from ._desk import with_desk_figures
 from .test_mcp_server import seeded  # noqa: F401 - the fixture
 
 
@@ -36,7 +37,7 @@ def _plan(**over):
         "binding_constraint": "fuel",
     }
     payload.update(over)
-    return payload
+    return with_desk_figures(payload)
 
 
 def test_a_plan_with_no_playbook_is_refused_and_names_the_recipe(door):

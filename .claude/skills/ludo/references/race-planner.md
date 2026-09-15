@@ -149,6 +149,7 @@ payload = {
     {"laps": 9,  "compound": "RS", "fuel_l": 69.4, "start_lap": 12, "tyres": True},
   ],
   "binding_constraint": "fuel",
+  "fuel_burns": {"full": 7.7},
   "targets": {
     "reference_load_l": 45.0,
     "compounds": {
@@ -211,7 +212,10 @@ Three plan fields, refused by name at every door when malformed
   ceiling while the clock model allows one fewer certifies **with a warning**,
   not a refusal.
 - **`fuel_burns: {"save": L/lap, "full": L/lap}`** - MEASURED, save below full.
-  Required when any stint is fuel-save. The gate reaches a fuel-save stint on
+  **`full` is required on every desk plan** (16 Sep 2026) - it is the burn per
+  lap George judges each full-revs lap against - and a plan with no saving
+  passes `{"full": L/lap}` alone. **`save` is required when any stint is
+  fuel-save**, and is the burn George judges each saving lap against. The gate reaches a fuel-save stint on
   `save`; George prices a switch to full revs with `full`, and replaces both
   with this race's own burn after two clean laps on a column (the other column
   scaled by the plan's ratio).
@@ -241,12 +245,11 @@ beside the stints (`pitcrew/strategy/targets.py`):
 }
 ```
 
-- **`lap_time_ms`** - a clean full-revs lap on a FRESH set of that compound,
-  in integer ms. Pass one for **every compound the plan runs**.
-- **`save_lap_time_ms`** - the same lap on the fuel-saving beep. Needed for
-  any `fuel_save: true` stint on that compound; there is no practice figure
-  for it, so without it George gives that stint no pace target (burn only).
-  Refused if quicker than `lap_time_ms`.
+- **`lap_time_ms`** - REQUIRED. A clean full-revs lap on a FRESH set of that
+  compound, in integer ms, for **every compound the plan runs**.
+- **`save_lap_time_ms`** - REQUIRED for every compound a `fuel_save: true`
+  stint runs. The same lap on the fuel-saving beep; refused if quicker than
+  `lap_time_ms`.
 - **`wear_per_lap`** - the set's wear fraction per lap. George's target gets
   slower through the stint by the model's own `pace_loss_s` (flat to 50%).
 - **`reference_load_l`** - the fuel aboard the lap times were set with. Per
@@ -257,13 +260,37 @@ beside the stints (`pitcrew/strategy/targets.py`):
 **Each lap's target is `model.planned_lap_s`** - the optimiser's one-lap
 expression - for the compound on the car, the beep column, the laps on the
 set and the fuel measured at the start of the lap. **The burn target is not in
-this block**: it is `fuel_burns.save` / `fuel_burns.full` by the lap's beep
-column, else `expects.expected_fuel_per_lap_l`. Pass `fuel_burns` to set it.
+this block**: it is `fuel_burns.full` on a full-revs lap and `fuel_burns.save`
+on a saving lap - so `fuel_burns.full` is REQUIRED on every plan and
+`fuel_burns.save` on any fuel-saving strategy (see the fuel-save section).
 
-Anything left out is **filled from practice at stamp and labelled
-`practice`** (an author figure is labelled `author`); the reply's `warnings`
-names every planned compound whose lap time Ludo did not pass. A malformed
-field or unknown key is **refused** at every door.
+**The desk doors refuse a plan missing any required figure** -
+`write_strategy`, `propose_strategy` and the CLI, by name
+(`strategy/targets.desk_target_problems`), e.g. *"no target lap time for RH:
+pass targets.compounds.RH.lap_time_ms"*, *"no burn per lap: pass
+fuel_burns.full"*, *"stint 2 is a fuel-save stint on RH with no fuel-saving
+target lap time"*. A malformed field or unknown key is refused too. The
+optional fields (`wear_per_lap`, and for the app's own plans everything) are
+filled from practice at stamp and labelled `practice`; Ludo's are `author`.
+
+**Checklist before the write call** - the table in `SKILL.md` §`race plan`
+step 0. Every figure measured off this car at this circuit on the current
+game version, and each one's source and sample count in `assumptions`:
+
+```text
+[ ] lap_time_ms            for every compound a stint runs
+[ ] reference_load_l       the mean fuel aboard those laps
+[ ] fuel_burns.full        every plan
+[ ] fuel_burns.save        if any stint is fuel_save: true
+[ ] save_lap_time_ms       for every compound a fuel_save: true stint runs
+```
+
+**On a fuel-saving strategy George calls both figures against the saving
+column and the board draws them**: the VS TARGET box is the lap against
+`save_lap_time_ms`, the burn line under it is against `fuel_burns.save`, and
+the note says "target saving 1:41.7". When George moves the beep to full revs
+on the run to the flag, the next lap is judged against `lap_time_ms` and
+`fuel_burns.full`.
 
 George's words each lap, inside the heartbeat: *"Pace two tenths slow."* /
 *"Pace on target."* (within 0.2 s) and *"Burn 0.2 litres over."* / *"Burn on

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pytest
 
+from ._desk import with_desk_figures
+
 from pitcrew.strategy.handover import (
     ACTIONS,
     FORBIDDEN_ACTIONS,
@@ -25,11 +27,12 @@ from pitcrew.strategy.handover import (
 
 
 def a_plan() -> dict:
-    return {"stints": [{"laps": 14, "compound": "RS", "fuel_l": 90.0,
-                        "start_lap": 1},
-                       {"laps": 6, "compound": "RS", "fuel_l": 40.0,
-                        "start_lap": 15, "tyres": True}],
-            "binding_constraint": "evidence"}
+    return with_desk_figures(
+        {"stints": [{"laps": 14, "compound": "RS", "fuel_l": 90.0,
+                     "start_lap": 1},
+                    {"laps": 6, "compound": "RS", "fuel_l": 40.0,
+                     "start_lap": 15, "tyres": True}],
+         "binding_constraint": "evidence"})
 
 
 def an_entry(**over) -> PlaybookEntry:

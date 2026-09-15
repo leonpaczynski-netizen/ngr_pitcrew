@@ -136,6 +136,69 @@ def target_problems(plan) -> list[str]:
     return problems
 
 
+def desk_target_problems(plan) -> list[str]:
+    """What a plan from the desk must pass so George can judge every lap.
+
+    **Refused at the desk's doors, not warned about** (the driver, 16 Sep
+    2026: *"so it's never missed and fuel burn per lap for fuel saving strat
+    must be passed"*). A warning was tried first and it is the shape that
+    fails: a target filled from practice looks exactly like Ludo's on the
+    board and in George's voice, so a missed figure is invisible at the only
+    moment it could be fixed. Read by `Handover.validate` (so
+    `write_strategy` and the CLI) and by `propose_strategy`; never by
+    `certify`, because the app's own optimiser writes no desk figures and
+    its plans are priced from practice by design.
+
+    Required:
+
+    * `targets.compounds.<code>.lap_time_ms` for every compound a stint runs;
+    * `fuel_burns.full`, the burn per lap at full revs;
+    * on a strategy with any fuel-save stint, `fuel_burns.save` (already
+      refused by name in `handover.fuel_plan_problems`) and
+      `targets.compounds.<code>.save_lap_time_ms` for every compound a
+      saving stint runs.
+    """
+    if not isinstance(plan, dict):
+        return []
+    stints = [s for s in (plan.get("stints") or []) if isinstance(s, dict)]
+    block = plan.get(TARGETS_KEY)
+    compounds = (block.get("compounds") if isinstance(block, dict) else None)
+    compounds = compounds if isinstance(compounds, dict) else {}
+    problems: list[str] = []
+    asked_full: list[str] = []
+    asked_save: list[str] = []
+    for index, stint in enumerate(stints, 1):
+        code = stint.get("compound")
+        if not isinstance(code, str) or not code:
+            problems.append(f"stint {index} names no compound, so no target "
+                            f"lap time can be keyed to it")
+            continue
+        entry = compounds.get(code)
+        entry = entry if isinstance(entry, dict) else {}
+        if entry.get("lap_time_ms") is None and code not in asked_full:
+            asked_full.append(code)
+            problems.append(
+                f"no target lap time for {code}: pass targets.compounds."
+                f"{code}.lap_time_ms - George judges every {code} lap "
+                f"against it")
+        if (stint.get("fuel_save") is True
+                and entry.get("save_lap_time_ms") is None
+                and code not in asked_save):
+            asked_save.append(code)
+            problems.append(
+                f"stint {index} is a fuel-save stint on {code} with no "
+                f"fuel-saving target lap time: pass targets.compounds.{code}"
+                f".save_lap_time_ms - George judges its laps against it")
+    # Missing only: a malformed `fuel_burns` is named by `fuel_plan_problems`.
+    burns = plan.get("fuel_burns")
+    if burns is None or (isinstance(burns, dict) and "full" not in burns):
+        problems.append(
+            "no burn per lap: pass fuel_burns.full (and fuel_burns.save for "
+            "a fuel-saving strategy) - George judges every lap's burn "
+            "against it")
+    return problems
+
+
 def _practice_lap_ms(inputs, code: str) -> int | None:
     """The practice lap on this compound, the way the optimiser prices it:
     the reference median plus the compound's measured pace delta. None where
@@ -246,26 +309,6 @@ def targets_answered(plan) -> bool:
                 f"{key}_source" not in entry for key in COMPOUND_FIELDS):
             return False
     return True
-
-
-def not_passed_by_author(plan: dict) -> list[str]:
-    """The planned compounds whose lap target the author did not pass.
-
-    For the handover doors to say so: the driver asked for Ludo's figures to
-    reach George, and a target quietly filled from practice looks the same on
-    the board as one Ludo wrote.
-    """
-    compounds = ((plan.get(TARGETS_KEY) or {}).get("compounds") or {}
-                 if isinstance(plan, dict) else {})
-    said = []
-    for stint in plan.get("stints") or []:
-        code = stint.get("compound") if isinstance(stint, dict) else None
-        entry = compounds.get(code) if code else None
-        if entry is None:
-            continue
-        if entry.get("lap_time_ms_source") != SOURCE_AUTHOR and code not in said:
-            said.append(code)
-    return said
 
 
 @dataclass(frozen=True)

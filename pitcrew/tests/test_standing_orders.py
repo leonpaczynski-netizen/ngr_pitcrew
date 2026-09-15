@@ -994,7 +994,11 @@ def test_a_plan_with_only_stints_is_read_for_its_stops():
     bring a planned stop forward" about a plan with no stop in it."""
     from pitcrew.strategy.handover import Handover, _stops_planned
 
-    bare = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}]}
+    from ._desk import with_desk_figures
+
+    # With the per-lap targets every desk plan carries (16 Sep 2026).
+    bare = with_desk_figures(
+        {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}]})
     assert Handover(plan=bare).validate() == []
     assert _stops_planned(bare) == 0
 

@@ -163,6 +163,25 @@ symptom→cause chain built on nothing is this mode's whole failure.
 
 ### `race plan` — the race
 
+0. ⛔ **Every plan carries George's per-lap targets, or it does not load.** The driver,
+   16 Sep 2026: *"so it's never missed and fuel burn per lap for fuel saving strat must be
+   passed and called by George as well as on board with lap time delta."* George judges
+   EVERY lap against these, out loud and on the board ("Pace two tenths slow. Burn 0.3
+   litres over."), so before `write_strategy` tick all of them, from measured laps:
+
+   | Field | When | From |
+   |---|---|---|
+   | `targets.compounds.<code>.lap_time_ms` | **every compound any stint runs** | clean full-revs laps on a fresh set, this car, this circuit, current game version |
+   | `targets.compounds.<code>.reference_load_l` (or `targets.reference_load_l`) | every plan | the mean fuel aboard on those laps (`(fuel_start + fuel_end) / 2`) - omit it and the target has no fuel term |
+   | `fuel_burns.full` | **every plan** | median L/lap at full revs |
+   | `fuel_burns.save` | **any `fuel_save: true` stint** | median L/lap on the fuel-saving beep |
+   | `targets.compounds.<code>.save_lap_time_ms` | **every compound a `fuel_save: true` stint runs** | clean laps on the fuel-saving beep - slower than `lap_time_ms` |
+   | `targets.compounds.<code>.wear_per_lap` | optional | the gauge rate; practice fills it if absent |
+
+   `write_strategy`, `propose_strategy` and the CLI **refuse** a plan missing any bold row,
+   naming the field (`strategy/targets.desk_target_problems`). A refusal is not the
+   check - this table is. Say each figure's source and sample count in `assumptions`, and
+   the recipe is `references/race-planner.md` §"Per-lap targets".
 1. **The binding constraint must come from the same expression that produced the
    decision.** `strategy.model.binding_limit` takes the `min()` across the
    ceilings; a plan capped by *"nobody has run a stint this long"* is capped by

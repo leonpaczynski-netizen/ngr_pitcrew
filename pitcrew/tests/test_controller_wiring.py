@@ -20,6 +20,7 @@ from pitcrew.strategy.handover import Handover, PlaybookEntry, accept
 from pitcrew.telemetry.session_state import EventKind, Lap, SessionEvent
 from pitcrew.ui.strategy_screen import LoadedCard
 
+from ._desk import with_desk_figures
 from .test_race_wiring import a_lap, green, raced, voice  # noqa: F401
 from .test_controller import qt_app  # noqa: F401
 
@@ -169,10 +170,11 @@ def test_the_regulations_reach_the_coordinator(raced):
 
 def a_handover() -> Handover:
     return Handover(
-        plan={"stints": [{"laps": 12, "compound": "RM", "fuel_l": 80.0},
-                         {"laps": 8, "compound": "RM", "fuel_l": 50.0,
-                          "tyres": True}],
-              "stops": 1, "pit_laps": [12], "binding_constraint": "fuel"},
+        plan=with_desk_figures(
+            {"stints": [{"laps": 12, "compound": "RM", "fuel_l": 80.0},
+                        {"laps": 8, "compound": "RM", "fuel_l": 50.0,
+                         "tyres": True}],
+             "stops": 1, "pit_laps": [12], "binding_constraint": "fuel"}),
         playbook=[PlaybookEntry(trigger="fuel_short", action="short_shift",
                                 when="more than 0.5 laps short")])
 

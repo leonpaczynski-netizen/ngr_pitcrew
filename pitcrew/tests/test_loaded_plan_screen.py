@@ -17,17 +17,19 @@ George may move inside, which the driver has to know before the green.
 from __future__ import annotations
 
 from pitcrew.strategy.handover import Handover, PlaybookEntry, accept
+from ._desk import with_desk_figures
 from .test_controller import qt_app  # noqa: F401
 from pitcrew.ui.strategy_screen import LoadedCard, PlanCard, StrategyScreen
 
 
 def a_handover() -> Handover:
     return Handover(
-        plan={"stints": [{"laps": 15, "compound": "RM", "fuel_l": 92.0,
-                          "start_lap": 1},
-                         {"laps": 5, "compound": "RM", "fuel_l": 32.0,
-                          "start_lap": 16, "tyres": True}],
-              "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"},
+        plan=with_desk_figures(
+            {"stints": [{"laps": 15, "compound": "RM", "fuel_l": 92.0,
+                         "start_lap": 1},
+                        {"laps": 5, "compound": "RM", "fuel_l": 32.0,
+                         "start_lap": 16, "tyres": True}],
+             "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"}),
         playbook=[PlaybookEntry(trigger="fuel_short", action="short_shift",
                                 when="more than 0.5 laps short to the flag",
                                 until="the deficit clears")],

@@ -69,9 +69,12 @@ def test_a_refused_plan_is_journalled(tmp_path, monkeypatch):
         "stops": 1, "stints": [{"laps": 10, "compound": "RS", "fuel_l": 60.0,
                                  "start_lap": 1}]})))
     assert reply["written"] is False
+    from ._desk import with_desk_figures
+
     reply = json.loads(server.write_strategy(event_id, json.dumps({
-        "stops": 1, "stints": [{"laps": 10, "compound": "RS", "fuel_l": 60.0,
-                                 "start_lap": 1}],
+        **with_desk_figures({
+            "stops": 1, "stints": [{"laps": 10, "compound": "RS",
+                                     "fuel_l": 60.0, "start_lap": 1}]}),
         "playbook": [{"trigger": "incident", "action": "recost_stints",
                       "when": "x"}]})))
     assert reply["written"] is False
