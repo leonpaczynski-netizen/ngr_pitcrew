@@ -77,13 +77,15 @@ def test_the_diff_is_green_ahead_and_amber_behind_and_names_its_tyre(qt_app):
     panel = view.lap_panel_top
     assert panel.diff.value.text() == "-0.500"
     assert GOOD in panel.diff.value.styleSheet()
-    assert "RS session best 1:30.000" in panel.note.text()
-    assert "RS on file 1:29.000 (+0.500)" in panel.note.text()
+    # **The line the panel was GIVEN**: it is elided to a width now, and the
+    # offscreen face is 27 px a character where the rig's is 16.
+    assert "RS session best 1:30.000" in panel.note.full_text()
+    assert "RS on file 1:29.000 (+0.500)" in panel.note.full_text()
     view.update_state(DriverState(delta_s=0.25, reference_compound="RS"))
     assert NEAR in panel.diff.value.styleSheet()
     view.update_state(DriverState(delta_why="compound not set"))
     assert panel.diff.value.text() == "--.---"
-    assert "compound not set" in panel.note.text()
+    assert "compound not set" in panel.note.full_text()
 
 
 def test_practice_swaps_the_race_rows_for_the_lead_lap_panel(qt_app):

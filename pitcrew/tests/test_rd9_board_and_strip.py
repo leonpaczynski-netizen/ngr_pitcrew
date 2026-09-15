@@ -163,11 +163,50 @@ def test_the_page_draws_both_rows_on_one_grid():
 
 # ----------------------------------------------------------- the ultrawide
 
-def test_a_window_is_held_inside_its_screen():
+def test_a_window_is_never_bigger_than_its_screen_and_stays_where_he_put_it():
+    """The first version also pulled it wholly on screen, every tick - and
+    parked partly off the edge is how he reaches the app behind it. It could
+    not be moved at all, and he had to quit the app (15 Sep 2026)."""
     screen = (1920, 0, 2560, 1080)
-    assert fit_on_screen((1682, 237, 2716, 1055), screen) == (1920, 25, 2560, 1055)
+    assert fit_on_screen((1682, 237, 2716, 1055), screen) == (1682, 237, 2560, 1055)
     assert fit_on_screen((2000, 10, 2480, 1050), screen) == (2000, 10, 2480, 1050)
-    assert fit_on_screen((4400, -40, 800, 400), screen) == (3680, 0, 800, 400)
+    assert fit_on_screen((4400, -40, 800, 400), screen) == (4400, -40, 800, 400)
+
+
+def test_a_board_he_dragged_part_off_the_edge_is_not_pulled_back(app):
+    from pitcrew.ui.driver_view import DriverWindow
+
+    window = DriverWindow()
+    screen = QApplication.instance().primaryScreen().geometry()
+    window.show()
+    app.processEvents()
+    window.move(screen.x() + 40, screen.y() + screen.height() - 120)
+    app.processEvents()
+    before = window.pos()
+    for _ in range(4):                      # the board's 250 ms tick
+        window.update_state(racing(session_kind="race"))
+        app.processEvents()
+    assert window.pos() == before
+    window.close()
+
+
+def test_a_reason_nobody_wrote_short_does_not_widen_the_board(app):
+    """Sardegna practice: the analysis's own diagnostic under S1/S2/S3 took
+    the board to 2,702 px, twice in one evening."""
+    from pitcrew.race.board_live import SectorsView
+
+    reason = ("the car jumped 167 m in one frame (2x) - a reset or a garage "
+              "return, so every distance after it is against a different axis "
+              "than the lines were drawn on")
+    view = DriverView()
+    view.update_state(DriverState(session_kind="practice"))
+    plain = view.sector_panel.minimumSizeHint().width()
+    view.update_state(DriverState(session_kind="practice", sectors=SectorsView(
+        why=reason, cut="thirds of the lap - not GT7's")))
+    note = view.sector_panel.note
+    assert reason in note.full_text() and reason in note.toolTip()
+    assert note.width() <= note.MAX_W
+    assert view.sector_panel.minimumSizeHint().width() <= max(plain, note.MAX_W)
 
 
 def test_the_phone_dropping_does_not_grow_the_board(app):

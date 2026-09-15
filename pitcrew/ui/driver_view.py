@@ -1510,6 +1510,47 @@ class _Box(QWidget):
             f"font-weight:600;color:{ink};background:transparent;")
 
 
+class _NoteLine(QLabel):
+    """The dim line under a panel, bounded in width and elided past it.
+
+    **A panel's width must not be a property of its reason string.** Sardegna
+    practice, 15 Sep 2026: a lap with no sector times put the analysis's own
+    diagnostic under S1/S2/S3 - "the car jumped 167 m in one frame (2x) - a
+    reset or a garage return, so every distance after it is against a
+    different axis..." - and the board's minimum went to 2,702 px on his
+    2,560 panel, twice in one evening. The same lesson `_Stat.set_sub_width`
+    records for the sub-lines, one panel over. The whole sentence stays on
+    the tooltip; the board carries what fits.
+    """
+
+    # The widest ordinary note - "last lap · vs RH session bests · sectors at
+    # the circuit's timing lines" - needs about 1,000 px on the rig's faces.
+    MAX_W = 1040
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:24px;color:{INK_DIM};"
+            f"background:transparent;")
+        self.setMaximumWidth(self.MAX_W)
+        self._full = ""
+
+    def set_note(self, text: str) -> None:
+        from PyQt6.QtGui import QFontMetrics
+
+        if text == self._full and self.text():
+            return
+        self._full = text
+        self.ensurePolished()
+        self.setText(QFontMetrics(self.font()).elidedText(
+            text, Qt.TextElideMode.ElideRight, self.MAX_W - 8))
+        self.setToolTip(text if self.text() != text else "")
+
+    def full_text(self) -> str:
+        return self._full
+
+
 class _LapTimePanel(QWidget):
     """Laptime | Time Diff | Pred. Time, and what the diff is against.
 
@@ -1534,12 +1575,8 @@ class _LapTimePanel(QWidget):
         for box in (self.lap, self.diff, self.pred):
             row.addWidget(box)
         column.addLayout(row)
-        self.note = QLabel("")
-        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.note.setStyleSheet(
-            f"font-family:{NUMBER_FACE};font-size:24px;color:{INK_DIM};"
-            f"background:transparent;")
-        column.addWidget(self.note)
+        self.note = _NoteLine()
+        column.addWidget(self.note, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def show_state(self, state: "DriverState") -> None:
         self.lap.set_value(format_lap_ms(state.lap_time_ms), INK)
@@ -1547,7 +1584,7 @@ class _LapTimePanel(QWidget):
         ink = INK if delta is None else GOOD if delta < 0 else NEAR if delta > 0 else INK
         self.diff.set_value(format_delta(delta), ink)
         self.pred.set_value(format_lap_ms(state.predicted_ms), INK)
-        self.note.setText(lap_reference_note(state))
+        self.note.set_note(lap_reference_note(state))
 
 
 class _SectorPanel(QWidget):
@@ -1577,12 +1614,8 @@ class _SectorPanel(QWidget):
             self.subs.append(sub)
             row.addWidget(box)
         column.addLayout(row)
-        self.note = QLabel("")
-        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.note.setStyleSheet(
-            f"font-family:{NUMBER_FACE};font-size:24px;color:{INK_DIM};"
-            f"background:transparent;")
-        column.addWidget(self.note)
+        self.note = _NoteLine()
+        column.addWidget(self.note, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def show_state(self, state: "DriverState") -> None:
         blocks, note = sector_blocks(state)
@@ -1593,7 +1626,7 @@ class _SectorPanel(QWidget):
             sub.setStyleSheet(
                 f"font-family:{NUMBER_FACE};font-size:26px;color:{ink};"
                 f"background:transparent;")
-        self.note.setText(note)
+        self.note.set_note(note)
 
 
 class _Light(_Face):
@@ -1922,10 +1955,8 @@ class DriverWindow(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:    # noqa: N802 - Qt naming
         self._drag_from = None
-        # A drag is free to cross monitors; where it ends, it lands whole.
-        self.keep_on_screen()
 
-    # -- held inside the monitor it is on -------------------------------------
+    # -- never bigger than the monitor it is on ------------------------------
 
     def showEvent(self, event) -> None:            # noqa: N802 - Qt naming
         super().showEvent(event)
@@ -1936,22 +1967,26 @@ class DriverWindow(QWidget):
         self.keep_on_screen()
 
     def keep_on_screen(self) -> None:
-        """Pull the window back inside the screen it is mostly on.
+        """Shrink the window to the screen it is mostly on. Never move it.
 
-        **Rd 9, 15 Sep 2026: the board was 2716 px wide on a 2560 panel, and
-        157 px of it was off the right-hand edge.** Nothing on the board needed
-        that width that night - its widest state measured 2016 px on the rig's
-        faces. The saved geometry did: Qt grows a frameless window to any
-        layout minimum bigger than it, never shrinks it back, and
-        `geometry_text` wrote the grown size away at every race's end, so one
-        wide state on some earlier night came back at every race after. It
-        had been 1806 px wide on every backup up to 14 Sep.
+        **Rd 9, 15 Sep 2026: the board was 2716 px wide on a 2560 panel.** Qt
+        grows a frameless window to any layout minimum bigger than it, never
+        shrinks it back, and `geometry_text` wrote the grown size away at every
+        race's end, so one wide moment came back at every race after. So the
+        SIZE is an answer to the monitor, not a memory.
 
-        So the window's size and place are now answers to the monitor, not
-        memories: never wider or taller than the screen, never hanging off
-        it. What Qt will not allow - content whose minimum exceeds the screen
-        - is logged with its size, because that is a board with a number
-        missing and he cannot see which.
+        **The PLACE is his, and it was taken from him once.** The first version
+        of this also pulled the window wholly onto the screen - after every
+        drag and four times a second from `update_state`. The main app sits
+        maximised on the same monitor behind this always-on-top board, and he
+        reaches it by dragging the board partly off the edge (his saved spot
+        was y=237, bottom 212 px off-screen). Clamped back every tick, the
+        board could not be moved at all and he had to quit the app to get
+        past it (15 Sep 2026, the same evening). A window that is lost off
+        every screen is `restore_geometry`'s to refuse, not this method's.
+
+        What Qt will not allow - content whose minimum exceeds the screen - is
+        logged with its size, because that is a board with a number missing.
         """
         if getattr(self, "_placing", False):
             return
@@ -1972,12 +2007,12 @@ class DriverWindow(QWidget):
                     "the driver board needs %dx%d and its screen is %dx%d - "
                     "part of it is off the monitor", need.width(),
                     need.height(), bounds.width(), bounds.height())
-        if (x, y, width, height) == (rect.x(), rect.y(), rect.width(),
-                                     rect.height()):
+        if (width, height) == (rect.width(), rect.height()):
             return
         self._placing = True
         try:
-            self.setGeometry(x, y, width, height)
+            # `resize`, not `setGeometry`: the top-left stays where he put it.
+            self.resize(width, height)
         finally:
             self._placing = False
 
@@ -2045,17 +2080,17 @@ class DriverWindow(QWidget):
 def fit_on_screen(rect: tuple[int, int, int, int],
                   bounds: tuple[int, int, int, int]
                   ) -> tuple[int, int, int, int]:
-    """`(x, y, w, h)` no bigger than `bounds` and wholly inside it.
+    """`(x, y, w, h)` no bigger than `bounds`, **left where it was**.
+
+    Only the size is fitted. Where the window sits is his - partly off the
+    edge is how he gets to the app behind it (see `keep_on_screen`).
 
     Pure, so the rule is testable without a monitor: the offscreen platform
     the suite runs on has one 800x600 screen and a board far wider than it.
     """
     x, y, width, height = rect
-    bx, by, bw, bh = bounds
-    width, height = min(width, bw), min(height, bh)
-    x = min(max(x, bx), bx + bw - width)
-    y = min(max(y, by), by + bh - height)
-    return x, y, width, height
+    _, _, bw, bh = bounds
+    return x, y, min(width, bw), min(height, bh)
 
 
 def _screen_for(rect):
