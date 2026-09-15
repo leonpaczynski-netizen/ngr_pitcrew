@@ -429,6 +429,12 @@ class GapTrend:
         self.subject = subject
         self.seen = seen
 
+    @property
+    def readings(self) -> int:
+        """How many readings have ever been noted - moves on every one, so a
+        reader can tell whether the board has been read since a moment."""
+        return self._order
+
     def latest(self) -> float | None:
         """The most recent gap, or `None` where nothing has been read.
 

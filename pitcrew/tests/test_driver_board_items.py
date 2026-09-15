@@ -851,7 +851,11 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
             view.update_state(state)
             app.processEvents()
             size = view.minimumSizeHint()
-            worst = max(worst, (size.width(), size.height()))
+            # Per leg. `max` over (w, h) tuples is lexicographic: it kept
+            # the widest state's height, so a taller, narrower state was
+            # never held to the panel's height at all.
+            worst = (max(worst[0], size.width()),
+                     max(worst[1], size.height()))
         print(json.dumps({"w": worst[0], "h": worst[1]}))
     """)
     run = subprocess.run([sys.executable, "-c", probe],

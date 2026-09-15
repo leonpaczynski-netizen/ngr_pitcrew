@@ -339,7 +339,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRectF, Qt, pyqtProperty
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from pitcrew.diagnostics import log
 from PyQt6.QtWidgets import (
     QApplication,
@@ -399,6 +400,11 @@ LABEL_FACE = f"'{theme.STENCIL_CONDENSED}','{theme.STENCIL_FAMILY}',sans-serif"
 
 PAIRS = {"fl": "fr", "fr": "fl", "rl": "rr", "rr": "rl"}
 CORNERS = ("fl", "fr", "rl", "rr")
+
+# What an empty neighbour block says. Not "no gap read": nothing failed, there
+# is simply no car there (`RaceState.nobody_on`).
+NOBODY_AHEAD = "nobody ahead · P1"
+NOBODY_BEHIND = "nobody behind"
 
 
 @dataclass(frozen=True)
@@ -784,12 +790,112 @@ class _Tyre(QWidget):
             f"font-weight:600;color:{ink};background:transparent;border:none;")
 
 
-class _Stat(QWidget):
+class _Face(QWidget):
+    """A rounded plate whose fill changes by wiping down, never by cutting.
+
+    **Motion as signal, and only where the meaning changed** (15 Sep 2026).
+    A lamp lighting or a figure turning into an instruction is the moment he
+    needs to catch out of the corner of his eye, and a colour that simply
+    swaps between two frames is the easiest change there is to miss. So the
+    new fill is painted down over the old in 180 ms - the stroke
+    `widgets.CompoundBand` paints a compound with, which is DESIGN.md's one
+    authored motion, and nothing else on this board moves.
+
+    Painted rather than styled: a stylesheet background cannot be part-drawn.
+    Instant where the widget is not on screen, so a hidden page and the tests
+    see the end state, never a frame of the wipe.
+    """
+
+    WIPE_MS = 180
+    RADIUS = 10
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._fill: str | None = None
+        self._under: str | None = None
+        self._border: str | None = None
+        self._wipe = 1.0
+        self._animation = QPropertyAnimation(self, b"wipe", self)
+        self._animation.setDuration(self.WIPE_MS)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def set_face(self, fill: str | None, border: str | None) -> None:
+        """`fill` None is no plate at all; `border` None is no edge."""
+        if fill == self._fill and border == self._border:
+            return
+        self._border = border
+        if fill != self._fill:
+            self._under, self._fill = self._fill, fill
+            if self.isVisible():
+                self._animation.stop()
+                self._wipe = 0.0
+                self._animation.setStartValue(0.0)
+                self._animation.setEndValue(1.0)
+                self._animation.start()
+            else:
+                self._wipe = 1.0
+                self._wiped()
+        self.update()
+
+    def fill_showing(self) -> str | None:
+        """The fill behind most of the face right now, for choosing ink.
+
+        **The ink follows the wipe past halfway, not the request.** Switched
+        when the flood was asked for, the figure went to ground ink over a
+        fill still at the top of the plate - dark on dark, and the number
+        blinked out for the length of the wipe (first render, 15 Sep 2026).
+        """
+        return self._fill if self._wipe >= 0.5 else self._under
+
+    def _wiped(self) -> None:
+        """The fill behind the face has changed over; re-ink to match."""
+
+    # Declared in the class body: PyQt builds the meta-object when the class
+    # is created, and an animation cannot find a property added afterwards.
+    @pyqtProperty(float)
+    def wipe(self) -> float:
+        return self._wipe
+
+    @wipe.setter
+    def wipe(self, value: float) -> None:
+        crossed = self._wipe < 0.5 <= value
+        self._wipe = value
+        if crossed:
+            self._wiped()
+        self.update()
+
+    def paintEvent(self, event) -> None:            # noqa: N802 - Qt naming
+        if self._fill is None and self._under is None and self._border is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, self.RADIUS, self.RADIUS)
+        painter.setClipPath(path)
+        wipe = max(0.0, min(1.0, self._wipe))
+        edge = rect.top() + rect.height() * wipe
+        if self._under is not None and wipe < 1.0:
+            # What is left of the old fill, below the edge coming down.
+            painter.fillRect(QRectF(rect.left(), edge, rect.width(),
+                                    rect.bottom() - edge), QColor(self._under))
+        if self._fill is not None:
+            painter.fillRect(QRectF(rect.left(), rect.top(), rect.width(),
+                                    edge - rect.top()), QColor(self._fill))
+        painter.setClipping(False)
+        if self._border is not None:
+            painter.setPen(QPen(QColor(self._border), 2))
+            painter.drawPath(path)
+
+
+class _Stat(_Face):
     """One large number with a caption under it."""
 
     def __init__(self, label: str, parent: QWidget | None = None, *,
                  value_px: int | None = None) -> None:
         super().__init__(parent)
+        self._floods = False
+        self._flooded = False
         self.VALUE_PX = value_px or self.VALUE_PX
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
@@ -800,10 +906,7 @@ class _Stat(QWidget):
         self._restyle()
         self.caption = QLabel(label.upper())
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.caption.setStyleSheet(
-            f"font-family:{LABEL_FACE};font-size:{self.CAPTION_PX}px;"
-            f"font-weight:600;letter-spacing:7px;color:{INK_DIM};"
-            f"background:transparent;")
+        self._recaption(INK_DIM)
         self.sub = QLabel("")
         self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sub.setStyleSheet(
@@ -873,6 +976,31 @@ class _Stat(QWidget):
     GAP_SUB_W = 1100
     BOX_SUB_W = 620
 
+    # The side room a flooded plate needs so its figure does not touch the
+    # edge. Horizontal only: the board is 25 px inside his panel's height and
+    # has hundreds of pixels spare across it.
+    FLOOD_SIDE_PX = 26
+
+    def set_flood(self, floods: bool = True) -> None:
+        """Let an urgent reading fill this block, not only colour its ink.
+
+        **Only for a figure that asks for an action** - laps to the stop at
+        NOW, fuel short, the release countdown. A neighbour catching is urgent
+        too, but it is a trend to weigh, not a thing to do this lap, and two
+        plates flooding at once would be two claims on one glance. The room
+        is reserved whether or not it is flooded, so the board never reflows
+        when a plate lights.
+        """
+        self._floods = floods
+        side = self.FLOOD_SIDE_PX if floods else 0
+        self.layout().setContentsMargins(side, 0, side, 0)
+
+    def _recaption(self, ink: str) -> None:
+        self.caption.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:{self.CAPTION_PX}px;"
+            f"font-weight:600;letter-spacing:7px;color:{ink};"
+            f"background:transparent;")
+
     def set_sub_width(self, pixels: int) -> None:
         """Cap the reason line, and elide anything past it.
 
@@ -910,23 +1038,46 @@ class _Stat(QWidget):
             f"font-weight:600;color:{self._ink};background:transparent;")
 
     def show_value(self, text: str, sub: str = "", *,
-                   urgent: bool = False, good: bool = False) -> None:
+                   urgent: bool = False, good: bool = False,
+                   act: bool | None = None) -> None:
         """`urgent` and `good` are the two ends of one reading, not two flags.
 
         Both false is the honest middle - steady, or too few laps to say -
         and it stays white. `urgent` wins if somehow both arrive, because the
         cost of missing bad news is higher than the cost of missing good.
+
+        `act` is whether this urgent reading is an instruction for now, and
+        only then does a flooding block flood. None takes it from `urgent`;
+        laps to the stop passes it explicitly, because it is amber from two
+        laps out and a plate that fills two laps early teaches him to ignore
+        the plate.
         """
         self.value.setText(text)
         self._sub_text = sub
         self._resub()
-        ink = NEAR if urgent else GOOD if good else INK
+        flooded = self._floods and urgent and (urgent if act is None else act)
+        self._urgent, self._good = urgent, good
+        if flooded != self._flooded:
+            self._flooded = flooded
+            self.set_face(NEAR if flooded else None, NEAR if flooded else None)
+        self._reink()
+
+    def _wiped(self) -> None:
+        self._reink()
+
+    def _reink(self) -> None:
+        # On the plate every line is the ground ink, which is 12:1 against
+        # the amber; the dim ink would be lost on it.
+        plate = self.fill_showing() is not None
+        urgent, good = getattr(self, "_urgent", False), getattr(self, "_good", False)
+        ink = GROUND if plate else NEAR if urgent else GOOD if good else INK
         if ink != self._ink:
             self._ink = ink
             self._restyle()
+            self._recaption(GROUND if plate else INK_DIM)
         self.sub.setStyleSheet(
             f"font-family:{NUMBER_FACE};font-size:{self.SUB_PX}px;"
-            f"color:{ink if (urgent or good) else INK_DIM};"
+            f"color:{ink if (plate or urgent or good) else INK_DIM};"
             f"background:transparent;")
         # The stylesheet is re-applied above, which can change the face the
         # metrics resolve to; the elide has to be redone against it.
@@ -1083,8 +1234,11 @@ def gap_block(gap: "GapView | None") -> Block:
         # **A dash is the expected state, not a fault.** The gap boxes
         # these come from have never once returned a number in a real
         # race - see `race/gaps.py` - so this says why rather than
-        # sitting blank and making him wonder what broke.
-        return Block("--", "no gap read")
+        # sitting blank and making him wonder what broke. A view with no
+        # seconds and a note is an empty side (`NOBODY_AHEAD`), which is
+        # its own reason.
+        return Block("--", (gap.note if gap is not None and gap.note
+                            else "no gap read"))
     return Block(f"{gap.seconds:.1f}", gap.note, _tone(gap.urgent, gap.good))
 
 
@@ -1442,15 +1596,18 @@ class _SectorPanel(QWidget):
         self.note.setText(note)
 
 
-class _Light(QWidget):
-    """A box that lights: a word, its ink, and one line under it."""
+class _Light(_Face):
+    """A box that lights: a word, its ink, and one line under it.
+
+    The fill is painted by `_Face`, so a lamp lighting wipes down rather than
+    blinking on - and a lit lamp still never draws its dark word on the dark
+    ground, which was the first render's fault when the fill was a styled
+    background that was not being painted at all.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("light")
-        # Without a styled background the lit fill is never painted and a lit
-        # lamp draws its dark word on the dark ground - invisible (first render).
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         column = QVBoxLayout(self)
         column.setContentsMargins(18, 6, 18, 8)
         column.setSpacing(0)
@@ -1469,15 +1626,24 @@ class _Light(QWidget):
         self.lit = ink is not None
         fill = ink if self.lit else PANEL
         border = ink if self.lit else EDGE
-        word_ink = GROUND if self.lit else INK_DIM
-        self.setStyleSheet(
-            f"#light {{ border:2px solid {border}; border-radius:10px;"
-            f" background:{fill}; }}")
+        self.set_face(fill, border)
         self.word.setText(word.upper())
+        self.sub.setText(sub)
+        self._reink()
+
+    def _wiped(self) -> None:
+        self._reink()
+
+    def _reink(self) -> None:
+        """Dark on a lit fill, dim on the panel - whichever is behind the
+        word now, which during a wipe is not yet the one asked for."""
+        word_ink = INK_DIM if self.fill_showing() in (None, PANEL) else GROUND
+        if word_ink == getattr(self, "_word_ink", None):
+            return
+        self._word_ink = word_ink
         self.word.setStyleSheet(
             f"font-family:{LABEL_FACE};font-size:44px;font-weight:700;"
             f"letter-spacing:6px;color:{word_ink};background:transparent;")
-        self.sub.setText(sub)
         self.sub.setStyleSheet(
             f"font-family:{NUMBER_FACE};font-size:20px;"
             f"color:{word_ink};background:transparent;")
@@ -1739,6 +1905,10 @@ class DriverWindow(QWidget):
 
     def update_state(self, state: "DriverState") -> None:
         self.view.update_state(state)
+        # A belt for the next transient nobody has found: a layout that grows
+        # the window for one call leaves it grown, so it is measured back
+        # onto the monitor after every state. Returns at once when it fits.
+        self.keep_on_screen()
 
     # -- dragging, because a frameless window has no title bar to grab -------
 
@@ -1752,6 +1922,64 @@ class DriverWindow(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:    # noqa: N802 - Qt naming
         self._drag_from = None
+        # A drag is free to cross monitors; where it ends, it lands whole.
+        self.keep_on_screen()
+
+    # -- held inside the monitor it is on -------------------------------------
+
+    def showEvent(self, event) -> None:            # noqa: N802 - Qt naming
+        super().showEvent(event)
+        self.keep_on_screen()
+
+    def resizeEvent(self, event) -> None:          # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self.keep_on_screen()
+
+    def keep_on_screen(self) -> None:
+        """Pull the window back inside the screen it is mostly on.
+
+        **Rd 9, 15 Sep 2026: the board was 2716 px wide on a 2560 panel, and
+        157 px of it was off the right-hand edge.** Nothing on the board needed
+        that width that night - its widest state measured 2016 px on the rig's
+        faces. The saved geometry did: Qt grows a frameless window to any
+        layout minimum bigger than it, never shrinks it back, and
+        `geometry_text` wrote the grown size away at every race's end, so one
+        wide state on some earlier night came back at every race after. It
+        had been 1806 px wide on every backup up to 14 Sep.
+
+        So the window's size and place are now answers to the monitor, not
+        memories: never wider or taller than the screen, never hanging off
+        it. What Qt will not allow - content whose minimum exceeds the screen
+        - is logged with its size, because that is a board with a number
+        missing and he cannot see which.
+        """
+        if getattr(self, "_placing", False):
+            return
+        screen = _screen_for(self.geometry())
+        if screen is None:
+            return
+        bounds = screen.geometry()
+        rect = self.geometry()
+        x, y, width, height = fit_on_screen(
+            (rect.x(), rect.y(), rect.width(), rect.height()),
+            (bounds.x(), bounds.y(), bounds.width(), bounds.height()))
+        need = self.minimumSizeHint()
+        if need.width() > bounds.width() or need.height() > bounds.height():
+            key = (need.width(), need.height())
+            if key != getattr(self, "_overflow_logged", None):
+                self._overflow_logged = key
+                log("ui").warning(
+                    "the driver board needs %dx%d and its screen is %dx%d - "
+                    "part of it is off the monitor", need.width(),
+                    need.height(), bounds.width(), bounds.height())
+        if (x, y, width, height) == (rect.x(), rect.y(), rect.width(),
+                                     rect.height()):
+            return
+        self._placing = True
+        try:
+            self.setGeometry(x, y, width, height)
+        finally:
+            self._placing = False
 
     def closeEvent(self, event) -> None:            # noqa: N802 - Qt naming
         """Tell the feeder, however it was closed."""
@@ -1810,7 +2038,38 @@ class DriverWindow(QWidget):
                 "so it opens on this one instead")
             return False
         self.setGeometry(wanted)
+        self.keep_on_screen()
         return True
+
+
+def fit_on_screen(rect: tuple[int, int, int, int],
+                  bounds: tuple[int, int, int, int]
+                  ) -> tuple[int, int, int, int]:
+    """`(x, y, w, h)` no bigger than `bounds` and wholly inside it.
+
+    Pure, so the rule is testable without a monitor: the offscreen platform
+    the suite runs on has one 800x600 screen and a board far wider than it.
+    """
+    x, y, width, height = rect
+    bx, by, bw, bh = bounds
+    width, height = min(width, bw), min(height, bh)
+    x = min(max(x, bx), bx + bw - width)
+    y = min(max(y, by), by + bh - height)
+    return x, y, width, height
+
+
+def _screen_for(rect):
+    """The screen holding most of `rect`, or the primary where none does."""
+    app = QApplication.instance()
+    if app is None:
+        return None
+    best, area = None, 0
+    for screen in app.screens():
+        overlap = screen.geometry().intersected(rect)
+        size = overlap.width() * overlap.height() if not overlap.isEmpty() else 0
+        if size > area:
+            best, area = screen, size
+    return best or app.primaryScreen()
 
 
 def format_release(seconds: float | None) -> str:
@@ -1877,6 +2136,9 @@ class _BoxPanel(QWidget):
             stat.set_sub_width(_Stat.BOX_SUB_W)
             row.addWidget(stat)
             row.addStretch(1)
+        # The countdown he is holding the trigger on - urgent from ten
+        # seconds, and the one figure on this page that is an instruction.
+        self.release_stat.set_flood()
         outer.addLayout(row)
 
     def show_state(self, state: DriverState) -> None:
@@ -2051,6 +2313,7 @@ class DriverView(QWidget):
         for stat in (self.box_stat, self.stop_stat,
                      self.flag_stat, self.position_stat):
             stat.set_sub_width(_Stat.MIDDLE_SUB_W)
+            stat.set_flood()
             middle.addStretch(1)
             middle.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
         middle.addStretch(1)
@@ -2139,6 +2402,7 @@ class DriverView(QWidget):
         phone_lead.setSpacing(70)
         for stat in (self.stop_lead, self.flag_lead, self.position_lead):
             stat.set_sub_width(_Stat.MIDDLE_SUB_W)
+            stat.set_flood()
             phone_lead.addStretch(1)
             phone_lead.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
         phone_lead.addStretch(1)
@@ -2225,7 +2489,9 @@ class DriverView(QWidget):
 
         # The words are `box_block`'s, shared with the strip page.
         box = box_block(state)
-        self.box_stat.show_value(box.value, box.sub, urgent=box.urgent)
+        self.box_stat.show_value(box.value, box.sub, urgent=box.urgent,
+                                 act=state.laps_past_box is not None
+                                 and not state.finished)
 
         self._show_gap(self.ahead_stat, state.ahead)
         self._show_gap(self.behind_stat, state.behind)
@@ -2317,5 +2583,15 @@ class DriverView(QWidget):
         # The gap-led page is today's board exactly, and its row has no room
         # for a third panel beside the lap panel - so the sectors are on the
         # phone page and in practice, not on the fallback.
-        self.lap_panel_top.setVisible(racing and not on_phone)
-        self.sector_panel.setVisible(not (racing and not on_phone))
+        #
+        # **Hide first, then show - the order is the fix, not a style.** Shown
+        # first, both panels stood in the row together for one call: the
+        # minimum went to 2,730 px, Qt grew the window to it on the spot, and
+        # a window is never shrunk back. Every time the phone dropped the
+        # board became wider than his monitor, and `geometry_text` saved the
+        # width at the flag - Rd 9 closed at 2,716 (15 Sep 2026).
+        top = racing and not on_phone
+        hide, show = ((self.sector_panel, self.lap_panel_top) if top
+                      else (self.lap_panel_top, self.sector_panel))
+        hide.setVisible(False)
+        show.setVisible(True)

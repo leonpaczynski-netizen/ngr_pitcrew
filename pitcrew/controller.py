@@ -6773,8 +6773,14 @@ class PitCrewController(QObject):
         """
         from pitcrew.race.gaps import trend_words
         from pitcrew.race.rival_calls import _snapshot
-        from pitcrew.ui.driver_view import GapView
+        from pitcrew.ui.driver_view import NOBODY_AHEAD, NOBODY_BEHIND, GapView
 
+        # **An empty side says it is empty**, not "no gap read" - leading is
+        # not a reader fault, and a dash without its reason is one he stops
+        # trusting (`RaceState.nobody_on`).
+        if self.race.state.nobody_on(side):
+            return GapView(note=NOBODY_AHEAD if side == "ahead"
+                           else NOBODY_BEHIND)
         trend = _snapshot(getattr(self.race.state, f"gap_{side}", None))
         if trend is None:
             return None

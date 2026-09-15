@@ -12,132 +12,297 @@
 <!--
   The strip page. A dumb renderer on purpose: every word, number and tone on
   it is decided by `pitcrew/ui/strip.py` from the same functions the Qt board
-  uses, so this file only lays out and colours what it is handed. The one
-  judgement it makes is staleness, and even that number comes from the server
-  (`stale_after_s`). Numbers are never left on screen once they stop updating.
+  uses, so this file only lays out, colours and moves what it is handed. The
+  one judgement it makes is staleness, and even that number comes from the
+  server (`stale_after_s`). Numbers are never left on screen once they stop
+  updating.
+
+  **Motion as signal** (his pick, 15 Sep 2026). Three movements, and each one
+  means exactly one thing, so none of them is decoration:
+
+  * **A number that changes slot slides there.** Each block carries a
+    `subject` - what the number is about - and when a car inside a second
+    pushes LAPS TO THE STOP out of the centre, that block travels to the flank
+    while the car's gap travels in (View Transitions). The centre changing
+    meaning is the rule-13 hazard; seeing it move is what makes it safe.
+  * **A digit that changes rolls**, up when the figure grew and down when it
+    shrank, so a gap closing reads as closing before it is read at all.
+  * **An instruction floods its slot.** An urgent centre in a race - NOW, fuel
+    short, the release count - and a lamp lighting wipe their fill down in
+    180 ms: the stroke the app paints a compound band with (DESIGN.md), and
+    the same one the ultrawide's lamps now use.
+
+  Everything degrades to a plain swap: no View Transitions, reduced motion,
+  or a page in the background all render the same numbers without moving.
 -->
 <style>
   :root {
     --ground: #0C0B09; --panel: #1E1B17; --edge: #38332B;
     --ink: #E8E4DC; --dim: #9A948A; --near: #F2C230; --good: #4FB06A; --over: #FF6B63;
-    --label: "Bahnschrift Condensed", "SF Pro Display", -apple-system, system-ui, sans-serif;
-    --number: "Cascadia Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    /* DIN 1451, on both screens: Bahnschrift is Windows' cut of it, and iOS
+       ships DIN Condensed - so the phone letters its captions in the board's
+       own lettering rather than in whatever sans the phone has. */
+    --label: "Bahnschrift Condensed", "DIN Condensed", "Arial Narrow", sans-serif;
+    --number: "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --gap-x: 1.1vw; --gap-y: 1.5vh;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --wipe: 180ms cubic-bezier(0.33, 1, 0.68, 1);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink);
     overflow: hidden; -webkit-user-select: none; user-select: none;
-    -webkit-text-size-adjust: 100%; }
+    -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
   body { padding: env(safe-area-inset-top) env(safe-area-inset-right)
                   env(safe-area-inset-bottom) env(safe-area-inset-left); }
-  #app { height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 1.2vh; padding: 1.5vh 1.5vw; }
-  #main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr) minmax(0, 1fr); gap: 1.2vw; min-height: 0; }
-  .item { display: flex; flex-direction: column; align-items: center; justify-content: center;
-    min-width: 0; min-height: 0; border-radius: 12px; padding: 0.5vh 0.6vw; }
-  .item.centre { background: var(--panel); border: 3px solid var(--edge); }
-  .item.centre.urgent { border-color: var(--near); }
-  .item.centre.good { border-color: var(--good); }
-  .cap { font-family: var(--label); font-weight: 600; color: var(--dim); letter-spacing: 0.18em;
-    font-size: 4.2vh; line-height: 1.1; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 100%; }
-  .val { font-family: var(--number); font-weight: 700; line-height: 1; white-space: nowrap;
-    font-variant-numeric: tabular-nums; font-size: 24vh; max-width: 100%; }
-  .centre .val { font-size: 34vh; }
-  .sub { font-family: var(--label); color: var(--dim); font-size: 3.8vh; line-height: 1.15;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+  /* **One grid, so the two rows share their edges.** The lamps span the
+     left flank and the centre; fuel in hand sits under the right flank. Two
+     separate rows laid out on their own let the bar drift out from under the
+     slots above it, and a caption overran a lamp. */
+  #app { height: 100%; display: grid; gap: var(--gap-y) var(--gap-x); padding: 1.6vh 1.4vw;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.38fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 22vh; }
+  #left { grid-area: 1 / 1; } #centre { grid-area: 1 / 2; } #right { grid-area: 1 / 3; }
+  #lights { grid-area: 2 / 1 / 3 / 3; display: grid; gap: var(--gap-x);
+    grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; }
+  #extra { grid-area: 2 / 3; }
+
+  .slot { position: relative; isolation: isolate; min-width: 0; min-height: 0;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    border: 2px solid var(--edge); border-radius: 10px; padding: 0.6vh 0.8vw;
+    transition: border-color 180ms linear; }
+  /* The flood: a fill that wipes down over the slot and retracts up. */
+  .slot::before { content: ""; position: absolute; inset: 0; z-index: -1;
+    background: var(--fill, transparent); clip-path: inset(0 0 100% 0);
+    transition: clip-path var(--wipe); }
+  .slot.flooded::before { clip-path: inset(0 0 0 0); }
+  .slot.centre { background: var(--panel); border-width: 3px; --fill: var(--near); }
+
+  .face { display: flex; flex-direction: column; align-items: center; max-width: 100%; min-width: 0; }
+  .cap { font-family: var(--label); font-weight: 700; color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.14em; font-size: 4.6vh; line-height: 1; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding-top: 0.15em; }
+  .val { font-family: var(--number); font-weight: 700; line-height: 1.06; white-space: nowrap;
+    font-variant-numeric: tabular-nums; font-size: 25vh; max-width: 100%;
+    margin: 0.5vh 0 0.2vh; }
+  .centre .val { font-size: 37vh; }
+  .sub { font-family: var(--label); font-weight: 700; color: var(--dim); font-size: 4vh;
+    line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+    min-height: 1.1em; }
+
+  .ch { display: inline-block; position: relative; overflow: hidden; vertical-align: top; white-space: pre; }
+  .ch > .g { display: inline-block; }
+  .ch > .g.out { position: absolute; left: 0; top: 0; }
+
+  .urgent { border-color: var(--near); }
   .urgent .val, .urgent .sub { color: var(--near); }
+  .good { border-color: var(--good); }
   .good .val, .good .sub { color: var(--good); }
-  #bar { display: flex; gap: 1.2vw; align-items: stretch; height: 20vh; }
-  .light { flex: 0 0 auto; min-width: 15vw; border: 3px solid var(--edge); border-radius: 10px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 1vw; }
-  .light .word { font-family: var(--label); font-weight: 700; letter-spacing: 0.12em; font-size: 7vh; color: var(--dim); line-height: 1; }
-  .light .lsub { font-family: var(--label); font-size: 3vh; color: var(--dim); white-space: nowrap; }
-  #extra { flex: 1 1 auto; flex-direction: row; gap: 2vw; justify-content: flex-end; padding-right: 1vw; }
-  #extra .val { font-size: 13vh; }
-  #extra .cap { font-size: 3.6vh; }
+  /* On the flood every line is ground ink - 12:1 on the amber. */
+  .flooded .val, .flooded .sub, .flooded .cap { color: var(--ground); transition: color 0s 70ms; }
+
+  .light { flex-direction: column; }
+  .light .word { font-family: var(--label); font-weight: 700; letter-spacing: 0.1em; font-size: 7.4vh;
+    color: var(--dim); line-height: 1; white-space: nowrap; text-transform: uppercase; padding-top: 0.12em; }
+  .light .lsub { font-family: var(--label); font-weight: 700; font-size: 3.3vh; color: var(--dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; min-height: 1.15em;
+    line-height: 1.15; }
+  .light.flooded .word, .light.flooded .lsub { color: var(--ground); transition: color 0s 70ms; }
+
+  /* Fuel in hand: caption and reason on the left, the figure on the right. */
+  #extra .face { display: grid; width: 100%; align-items: center; column-gap: 0.9vw;
+    grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; }
+  #extra .cap { grid-area: 1 / 1; justify-self: start; font-size: 3.5vh; letter-spacing: 0.1em; }
+  #extra .sub { grid-area: 2 / 1; justify-self: start; font-size: 3.3vh; }
+  #extra .val { grid-area: 1 / 2 / 3 / 3; font-size: 14vh; margin: 0; }
+
   #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
     justify-content: center; background: var(--ground); text-align: center; padding: 4vh 4vw; }
   #cover.on { display: flex; }
   #cover .big { font-family: var(--label); font-weight: 700; letter-spacing: 0.1em; font-size: 22vh; line-height: 1; }
-  #cover .why { font-family: var(--label); color: var(--dim); font-size: 5vh; margin-top: 2vh; }
+  #cover .why { font-family: var(--label); font-weight: 700; color: var(--dim); font-size: 5vh; margin-top: 2vh; }
   #cover.fault .big { color: var(--over); }
+
+  ::view-transition-group(*) { animation-duration: 380ms; animation-timing-function: var(--ease-out); }
+  ::view-transition-old(*), ::view-transition-new(*) { width: 100%; height: 100%; object-fit: contain;
+    animation-duration: 240ms; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+
   @media (orientation: portrait) {
-    #main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr); }
-    .item.centre { grid-column: 1 / 3; grid-row: 1; }
-    .val { font-size: 9vh; } .centre .val { font-size: 14vh; }
-    .cap { font-size: 2vh; } .sub { font-size: 1.8vh; }
-    #bar { height: 12vh; flex-wrap: wrap; } .light .word { font-size: 3.5vh; } .light .lsub { font-size: 1.5vh; }
-    #extra .val { font-size: 6vh; } #extra .cap { font-size: 1.8vh; }
-    #cover .big { font-size: 10vh; } #cover .why { font-size: 2.4vh; }
+    #app { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) 11vh 11vh; }
+    #centre { grid-area: 1 / 1 / 2 / 3; } #left { grid-area: 2 / 1; } #right { grid-area: 2 / 2; }
+    #lights { grid-area: 3 / 1 / 4 / 3; } #extra { grid-area: 4 / 1 / 5 / 3; }
+    .cap { font-size: 4vw; } .val { font-size: 19vw; } .centre .val { font-size: 30vw; }
+    .sub { font-size: 3.6vw; } .light .word { font-size: 5vw; } .light .lsub { font-size: 2.8vw; }
+    #extra .cap { font-size: 3.4vw; } #extra .sub { font-size: 3.2vw; } #extra .val { font-size: 12vw; }
+    #cover .big { font-size: 14vw; } #cover .why { font-size: 4vw; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .slot, .slot::before, .flooded .val, .flooded .sub, .flooded .cap,
+    .light.flooded .word, .light.flooded .lsub { transition: none; }
   }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="main">
-    <div class="item" id="left"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
-    <div class="item centre" id="centre"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
-    <div class="item" id="right"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
+  <section class="slot" id="left"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
+  <section class="slot centre" id="centre"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
+  <section class="slot" id="right"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
+  <div id="lights">
+    <div class="slot light" id="l0"><div class="word"></div><div class="lsub"></div></div>
+    <div class="slot light" id="l1"><div class="word"></div><div class="lsub"></div></div>
+    <div class="slot light" id="l2"><div class="word"></div><div class="lsub"></div></div>
   </div>
-  <div id="bar">
-    <div class="light" id="l0"><div class="word"></div><div class="lsub"></div></div>
-    <div class="light" id="l1"><div class="word"></div><div class="lsub"></div></div>
-    <div class="light" id="l2"><div class="word"></div><div class="lsub"></div></div>
-    <div class="item" id="extra"><div><div class="cap"></div><div class="sub"></div></div><div class="val"></div></div>
-  </div>
+  <section class="slot" id="extra"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
 </div>
 <div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
 <script>
 (function () {
   "use strict";
-  var POLL_MS = 250, TIMEOUT_MS = 1000;
+  var POLL_MS = 250, TIMEOUT_MS = 1000, ROLL_MS = 260;
   var staleAfter = 1.5;                 // replaced by the server's own figure
   var lastOk = null;                    // performance.now() of the last good answer
   var cover = document.getElementById("cover");
+  var covered = true;                   // numbers come back without moving
+  var arrangement = null;               // which subject sits in which slot
+  var morphing = false;
+  var reduce = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
+  function $(id) { return document.getElementById(id); }
+  function moving() { return !(reduce && reduce.matches) && !document.hidden; }
 
   function show(big, why, fault) {
     cover.querySelector(".big").textContent = big;
     cover.querySelector(".why").textContent = why;
     cover.className = "on" + (fault ? " fault" : "");
+    covered = true;
+    arrangement = null;
   }
-  function hideCover() { cover.className = ""; }
 
-  // Shrink a value until it fits its block, from the CSS size down.
-  // Only when the text or the room changed: refitting four times a second
-  // resets the size and reflows the page on every poll.
-  function fit(el) {
-    var box = el.parentElement, room = box.clientWidth * 0.96;
-    var key = el.textContent + "|" + Math.round(room) + "|" + window.innerHeight;
+  // ---------------------------------------------------------------- fitting
+  // Shrink text until it fits the room it has, from its CSS size down to a
+  // floor, then let the ellipsis take over. Only when the text or the room
+  // changed: refitting four times a second reflows the page on every poll.
+  function fit(el, room, floor) {
+    var key = (el.dataset.text || el.textContent) + "|" + Math.round(room) + "|" +
+              window.innerWidth + "x" + window.innerHeight;
     if (el.dataset.fitted === key) return;
     el.style.fontSize = "";
-    var size = parseFloat(getComputedStyle(el).fontSize);
-    while (el.scrollWidth > room && size > 8) { size *= 0.92; el.style.fontSize = size + "px"; }
+    var css = parseFloat(getComputedStyle(el).fontSize), size = css;
+    while (el.scrollWidth > room && size > css * floor) {
+      size *= 0.93; el.style.fontSize = size + "px";
+    }
     el.dataset.fitted = key;
   }
 
-  function item(id, data) {
-    var el = document.getElementById(id);
-    if (!data) { el.style.visibility = "hidden"; return; }
-    el.style.visibility = "visible";
-    el.classList.remove("urgent", "good");
-    if (data.tone === "urgent" || data.tone === "good") el.classList.add(data.tone);
-    el.querySelector(".cap").textContent = data.caption || "";
-    el.querySelector(".sub").textContent = data.sub || "";
-    var val = el.querySelector(".val");
-    if (val.textContent !== data.value) val.textContent = data.value;
-    fit(val);
+  function fitSlot(slot) {
+    var face = slot.querySelector(".face");
+    var cap = face.querySelector(".cap"), val = face.querySelector(".val"), sub = face.querySelector(".sub");
+    var room = slot.clientWidth * 0.94;
+    if (slot.id === "extra") {
+      fit(val, room * 0.5, 0.5);
+      var left = face.clientWidth - val.offsetWidth - 12;
+      fit(cap, left, 0.6); fit(sub, left, 0.6);
+    } else {
+      fit(val, room, 0.3); fit(cap, room, 0.6); fit(sub, room, 0.6);
+    }
+  }
+
+  // ---------------------------------------------------------------- digits
+  function glyph(ch) {
+    var g = document.createElement("span");
+    g.className = "g"; g.textContent = ch;
+    return g;
+  }
+  function cell(ch) {
+    var c = document.createElement("span");
+    c.className = "ch"; c.appendChild(glyph(ch));
+    return c;
+  }
+  function number(text) {
+    var n = parseFloat(String(text).replace(/[^0-9.+\-]/g, ""));
+    return isFinite(n) ? n : null;
+  }
+  function rollCell(c, ch, dir) {
+    var old = c.lastElementChild, next = glyph(ch);
+    old.classList.add("out");
+    c.appendChild(next);
+    var timing = { duration: ROLL_MS, easing: "cubic-bezier(0.16, 1, 0.3, 1)" };
+    old.animate([{ transform: "translateY(0)", opacity: 1 },
+                 { transform: "translateY(" + (-dir * 100) + "%)", opacity: 0 }], timing)
+       .onfinish = function () { old.remove(); };
+    next.animate([{ transform: "translateY(" + (dir * 100) + "%)", opacity: 0 },
+                  { transform: "translateY(0)", opacity: 1 }], timing);
+  }
+  // A changed figure rolls only where it is the same figure in the same slot
+  // and the same shape; anything else - a dash becoming a number, 9.8
+  // becoming 10.2 - is simply set.
+  function setValue(el, text, roll) {
+    var prev = el.dataset.text;
+    if (prev === text) return;
+    el.dataset.text = text;
+    if (!(roll && moving() && prev != null && prev.length === text.length &&
+          el.children.length === text.length && el.animate)) {
+      el.replaceChildren();
+      for (var i = 0; i < text.length; i++) el.appendChild(cell(text[i]));
+      return;
+    }
+    var a = number(prev), b = number(text);
+    var dir = (a !== null && b !== null && b < a) ? -1 : 1;
+    for (var j = 0; j < text.length; j++) {
+      if (prev[j] !== text[j]) rollCell(el.children[j], text[j], dir);
+    }
+  }
+
+  // ---------------------------------------------------------------- slots
+  function item(id, data, kind, roll) {
+    var slot = $(id), face = slot.querySelector(".face");
+    if (!data) {
+      slot.style.visibility = "hidden";
+      face.style.viewTransitionName = "none";
+      slot.classList.remove("urgent", "good", "flooded");
+      slot.dataset.subject = "";
+      return;
+    }
+    slot.style.visibility = "visible";
+    var subject = data.subject || "";
+    var same = slot.dataset.subject === subject;
+    slot.dataset.subject = subject;
+    face.style.viewTransitionName = subject ? "strip-" + subject : "none";
+    var urgent = data.tone === "urgent", good = data.tone === "good";
+    slot.classList.toggle("urgent", urgent);
+    slot.classList.toggle("good", good && !urgent);
+    // Only an instruction floods (`strip.ACT_NOW`, decided server-side):
+    // two laps to the stop is amber to watch, not a thing to do yet.
+    slot.classList.toggle("flooded", id === "centre" && data.act === true);
+    face.querySelector(".cap").textContent = data.caption || "";
+    face.querySelector(".sub").textContent = data.sub || "";
+    setValue(face.querySelector(".val"), data.value || "", roll && same);
+    fitSlot(slot);
   }
 
   function light(id, data) {
-    var el = document.getElementById(id);
-    if (!data) { el.style.visibility = "hidden"; return; }
-    el.style.visibility = "visible";
+    var slot = $(id);
+    if (!data) { slot.style.visibility = "hidden"; return; }
+    slot.style.visibility = "visible";
     var lit = !!data.ink;
-    el.style.background = lit ? data.ink : "transparent";
-    el.style.borderColor = lit ? data.ink : "";
-    var word = el.querySelector(".word"), sub = el.querySelector(".lsub");
-    word.textContent = data.word;
-    sub.textContent = data.sub || "";
-    word.style.color = sub.style.color = lit ? "var(--ground)" : "";
+    // The ink stays set when the lamp goes out, so the fill it retracts is
+    // the colour it was.
+    if (lit) { slot.style.setProperty("--fill", data.ink); slot.style.borderColor = data.ink; }
+    else { slot.style.borderColor = ""; }
+    slot.classList.toggle("flooded", lit);
+    slot.querySelector(".word").textContent = data.word;
+    slot.querySelector(".lsub").textContent = data.sub || "";
+  }
+
+  function subjectOf(data) { return data ? (data.subject || data.caption || "") : "-"; }
+
+  function apply(d, roll) {
+    item("left", d.left, d.kind, roll); item("centre", d.centre, d.kind, roll);
+    item("right", d.right, d.kind, roll); item("extra", d.extra, d.kind, roll);
+    var lights = d.lights || [];
+    light("l0", lights[0]); light("l1", lights[1]); light("l2", lights[2]);
   }
 
   function render(d) {
@@ -147,12 +312,25 @@
     if (d.age_s === null || d.age_s > staleAfter) {
       show("NO DATA", "Pit Crew has stopped updating", true); return;
     }
-    item("centre", d.centre); item("left", d.left); item("right", d.right);
-    item("extra", d.extra);
-    var lights = d.lights || [];
-    light("l0", lights[0]); light("l1", lights[1]); light("l2", lights[2]);
-    hideCover();
+    var now = [d.kind, subjectOf(d.left), subjectOf(d.centre), subjectOf(d.right),
+               subjectOf(d.extra)].join("|");
+    var rearranged = arrangement !== null && now !== arrangement;
+    var fresh = covered;
+    arrangement = now;
+    if (rearranged && !morphing && moving() && document.startViewTransition) {
+      // **The slots trade places on screen.** Each block's face carries its
+      // subject as its transition name, so the browser flies it from where
+      // it was to where it is.
+      morphing = true;
+      var t = document.startViewTransition(function () { apply(d, false); });
+      t.finished.then(done, done);
+    } else {
+      apply(d, !fresh && !rearranged);
+    }
+    cover.className = "";
+    covered = false;
   }
+  function done() { morphing = false; }
 
   function poll() {
     var ctl = window.AbortController ? new AbortController() : null;
@@ -172,6 +350,13 @@
       show("NO DATA", "lost the connection to the PC", true);
     }
   }, POLL_MS);
+
+  // A turn of the phone changes the room every figure was fitted to.
+  window.addEventListener("resize", function () {
+    ["left", "centre", "right", "extra"].forEach(function (id) {
+      if ($(id).style.visibility !== "hidden") fitSlot($(id));
+    });
+  });
 
   // Keep the screen on where the browser allows it (secure pages only, so
   // usually not here - set Auto-Lock to Never on the phone instead).

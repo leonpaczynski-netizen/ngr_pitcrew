@@ -63,7 +63,28 @@ CENTRE_CAR_BEHIND = "car_behind"
 CENTRE_LAPS_TO_STOP = "laps_to_stop"
 CENTRE_TIME_DIFF = "time_diff"
 
+# **The centre states that are an instruction, not a reading.** Only these
+# flood the slot on the page. Laps to the stop is amber from two laps out,
+# which is right for a number to watch and wrong for a slot turning solid
+# amber two laps before there is anything to do - a flood that fires early
+# teaches him to ignore the flood.
+ACT_NOW = (CENTRE_RELEASE, CENTRE_BOX, CENTRE_FUEL_SHORT)
+
 PAYLOAD_VERSION = 1
+
+
+# **What a block is ABOUT, whichever slot it is in.** `id` names why the
+# centre holds what it holds; `subject` names the number itself, and the same
+# number keeps the same subject as it moves - laps to the stop in the centre,
+# then in the flank a car pushed it to. The page morphs a subject from its old
+# slot to its new one, so a change of meaning is something he SEES happen
+# rather than a different number that is simply there on the next glance
+# (his pick, 15 Sep 2026: "motion as signal"). No two blocks on one payload
+# share a subject.
+SUBJECT_LAPS_TO_STOP = "laps_to_stop"
+SUBJECT_AHEAD = "ahead"
+SUBJECT_BEHIND = "behind"
+SUBJECT_FUEL_TO_STOP = "fuel_to_stop"
 
 
 @dataclass(frozen=True)
@@ -72,21 +93,27 @@ class Item:
     caption: str
     block: Block
     id: str = ""
+    subject: str = ""
 
     def to_json(self) -> dict:
-        return {"id": self.id, "caption": self.caption,
+        return {"id": self.id, "subject": self.subject,
+                "caption": self.caption,
                 "value": self.block.value, "sub": self.block.sub,
-                "tone": self.block.tone}
+                "tone": self.block.tone,
+                "act": self.id in ACT_NOW and self.block.urgent}
 
 
 def _laps_to_stop(state: DriverState) -> Item:
-    return Item("LAPS TO THE STOP", box_block(state), CENTRE_LAPS_TO_STOP)
+    return Item("LAPS TO THE STOP", box_block(state), CENTRE_LAPS_TO_STOP,
+                SUBJECT_LAPS_TO_STOP)
 
 
 def _gap(state: DriverState, side: str) -> Item:
     gap = state.ahead if side == "ahead" else state.behind
+    ahead = side == "ahead"
     return Item(side.upper(), gap_block(gap),
-                CENTRE_CAR_AHEAD if side == "ahead" else CENTRE_CAR_BEHIND)
+                CENTRE_CAR_AHEAD if ahead else CENTRE_CAR_BEHIND,
+                SUBJECT_AHEAD if ahead else SUBJECT_BEHIND)
 
 
 def _seconds(state: DriverState, side: str) -> float | None:
@@ -138,9 +165,11 @@ class StripComposer:
             return {
                 "kind": "box",
                 "centre": Item("RELEASE IN", release_block(state),
-                               CENTRE_RELEASE).to_json(),
-                "left": Item("FUEL TO", fuel_target_block(state)).to_json(),
-                "right": Item("TYRES", tyres_block(state)).to_json(),
+                               CENTRE_RELEASE, "release").to_json(),
+                "left": Item("FUEL TO", fuel_target_block(state),
+                             subject="fuel_target").to_json(),
+                "right": Item("TYRES", tyres_block(state),
+                              subject="tyres").to_json(),
                 "extra": None,
             }
 
@@ -151,9 +180,11 @@ class StripComposer:
                 and state.laps_to_box is not None:
             # The same block and caption as the default - `box_block` has
             # already turned it into NOW - with its own id for the page.
-            centre = Item("LAPS TO THE STOP", box_block(state), CENTRE_BOX)
+            centre = Item("LAPS TO THE STOP", box_block(state), CENTRE_BOX,
+                          SUBJECT_LAPS_TO_STOP)
         elif state.fuel_to_stop is not None and state.fuel_to_stop < 0:
-            centre = Item("IN HAND TO THE STOP", stop, CENTRE_FUEL_SHORT)
+            centre = Item("IN HAND TO THE STOP", stop, CENTRE_FUEL_SHORT,
+                          SUBJECT_FUEL_TO_STOP)
         elif not state.finished and (side := self._near_side(state)):
             centre = _gap(state, side)
             # The flank it came from shows the default instead, so the
@@ -167,7 +198,8 @@ class StripComposer:
         self._held_side = side
         # Fuel sits in the extra slot unless it has taken the centre.
         extra = (None if centre.id == CENTRE_FUEL_SHORT
-                 else Item("IN HAND TO THE STOP", stop).to_json())
+                 else Item("IN HAND TO THE STOP", stop,
+                           subject=SUBJECT_FUEL_TO_STOP).to_json())
         return {"kind": "race", "centre": centre.to_json(),
                 "left": left.to_json(), "right": right.to_json(),
                 "extra": extra}
@@ -179,11 +211,13 @@ class StripComposer:
         return {
             "kind": state.session_kind,
             "centre": Item("TIME DIFF", delta_block(state),
-                           CENTRE_TIME_DIFF).to_json(),
+                           CENTRE_TIME_DIFF, "time_diff").to_json(),
             "left": Item("LAPTIME",
-                         Block(format_lap_ms(state.lap_time_ms))).to_json(),
+                         Block(format_lap_ms(state.lap_time_ms)),
+                         subject="laptime").to_json(),
             "right": Item("PRED. TIME",
-                          Block(format_lap_ms(state.predicted_ms))).to_json(),
+                          Block(format_lap_ms(state.predicted_ms)),
+                          subject="pred_time").to_json(),
             "extra": None,
         }
 

@@ -104,13 +104,22 @@ def test_practice_swaps_the_race_rows_for_the_lead_lap_panel(qt_app):
 
 def test_a_lit_lamp_paints_its_fill(qt_app):
     """The first render drew a lit TCS lamp's dark word on an unpainted
-    background - invisible. The styled background is what paints the fill."""
-    from PyQt6.QtCore import Qt
+    background - invisible. **Asserted against rendered pixels**, not against
+    the mechanism: the fill was a styled background then and is painted by
+    `_Face` now (the wipe, 15 Sep 2026), and a test of the attribute would
+    have passed on a lamp that painted nothing either way."""
+    from PyQt6.QtGui import QColor
+
+    from pitcrew.ui.driver_view import NEAR
 
     view = DriverView()
-    assert view.tcs_light.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     view.update_state(DriverState(tcs_active=True))
     assert view.tcs_light.lit
+    lamp = view.tcs_light
+    lamp.resize(300, 90)
+    image = lamp.grab().toImage()
+    middle = image.pixelColor(image.width() // 8, image.height() // 2)
+    assert middle.name() == QColor(NEAR).name()
 
 
 # ------------------------------------------------------------ the controller

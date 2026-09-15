@@ -1697,6 +1697,28 @@ class RaceState:
         """One completed lap's measured axle means, in order driven."""
         self.temp_history.append((lap, front_c, rear_c))
 
+    def nobody_on(self, side: str) -> bool:
+        """True where the feed itself says there is no car on that side.
+
+        **P1 has nobody ahead, and the last car has nobody behind.** Rd 9,
+        15 Sep 2026: two cars ahead boxed on lap 16 and put him P1, and for
+        the next eight laps the board, the phone and the voice all went on
+        reporting "Car 124 0.1 ahead" - the last interval box read before the
+        lead, because an unread box is (rightly) no reading and `GapTrend`
+        keeps its latest one. A gap to a car that does not exist is rule 9's
+        shape: a confident, well-formed number whose reference is gone.
+
+        Decided from `position` and `field_size`, which come off every packet,
+        not from the board reader, whose row numbers are a window around us
+        rather than places. Read through `gap_ahead` / `gap_behind` and their
+        names - see `_neighbour_field` - so no consumer can miss it.
+        """
+        if not self.position or self.position < 1:
+            return False
+        if side == "ahead":
+            return self.position == 1
+        return bool(self.field_size) and self.position >= self.field_size
+
     def laps_since_anything_said(self) -> int | None:
         """Laps since the engineer last spoke, or None if he never has.
 
@@ -1794,6 +1816,56 @@ class RaceState:
             self.incident_lap = None
             self.incident_cost_ms = None
             self.incident_reported = False
+
+
+def _neighbour_hidden(state: RaceState, side: str) -> bool:
+    """Whether the gap on `side` must read as absent right now.
+
+    Absent while `nobody_on(side)`, **and after it, until the board has been
+    read again.** The trend is the pit wall's live object and it is not told
+    about the lead: when he drops back to P2 its newest reading is still the
+    one from before he took P1, about a car that may be anywhere. So the
+    trend's reading count is remembered while the side is empty, and nothing
+    is shown until that count moves.
+    """
+    trend = state.__dict__.get(f"_gap_{side}")
+    count = getattr(trend, "readings", None)
+    vacated = state.__dict__.setdefault("_vacated_at", {})
+    if state.nobody_on(side):
+        vacated[side] = count
+        return True
+    if side in vacated:
+        if count is None or count == vacated[side]:
+            return True
+        del vacated[side]
+    return False
+
+
+def _neighbour_field(side: str, suffix: str) -> property:
+    """`gap_<side><suffix>`, retired in the one expression every reader uses.
+
+    **A property over the dataclass field, not a guard at each consumer.**
+    Eight places read these - the board, the phone, the chase, the tow, the
+    undercut, the rejoin seat, push-to-talk and the rival calls - and
+    `feedback: a guard at each consumer` is one chance to miss per consumer.
+    The field stays a field: the generated `__init__` still takes
+    `gap_ahead=`, and assigns through the setter.
+    """
+    slot = f"_gap_{side}{suffix}"
+
+    def read(self):
+        return None if _neighbour_hidden(self, side) else self.__dict__.get(slot)
+
+    def write(self, value):
+        self.__dict__[slot] = value
+
+    return property(read, write)
+
+
+for _side in ("ahead", "behind"):
+    setattr(RaceState, f"gap_{_side}", _neighbour_field(_side, ""))
+    setattr(RaceState, f"gap_{_side}_name", _neighbour_field(_side, "_name"))
+del _side
 
 
 def fuel_frame(state: RaceState) -> tuple[float | None, str]:

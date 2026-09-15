@@ -81,6 +81,12 @@ class _State:
     stint_ends_on_lap: int | None = None
     finished: bool = False
     _to_stop: int | None = 3
+    field_size: int | None = None
+
+    def nobody_on(self, side):
+        # Production's own rule, not a copy (Rd 9: the leader's car ahead).
+        from pitcrew.race.calls import RaceState
+        return RaceState.nobody_on(self, side)
 
     # **What the two fuel figures read, added 8 Sep 2026.** The board no
     # longer computes a fuel number of its own - it asks `race/calls.py`,
