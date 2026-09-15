@@ -2520,3 +2520,32 @@ yet is know the stints are fuel-save stints - filed as app work (declared fuel-s
 reach and clock on the measured saving burn, and the fuel-save beep armed for them).
 Playbook: fuel_short -> short_shift · tyre_short -> bring_stop_forward (stint 1, not before lap 11)
 · stop_missed -> recost_to_flag · fuel_long, incident, rain -> report_only.
+
+## 49. George now runs the fuel-save beep and the 29-lap ceiling - strategy 34 ARMED. 15 Sep 2026
+
+`[DRIVER]` *"Georges fuel number recommended was 96L not even close ... the race can never be more
+than 29 laps ... write the fuel save into George it's critical and set the shift beeps for fuel
+save ..."*
+
+**Why 96 L:** George counts laps left as `ceil(clock left / lap)` while the clock still holds the
+stop (~16-17 laps), and in a timed race whose count is "not firm" adds a whole spare lap. 23.1 L in,
+15 laps left, installed burn 5.519 -> 82.8 L needed at pit exit. Replayed with the ceiling:
+**84.4 L** (15 laps + 1.6 L measured spread).
+
+**Built (commit f3eea5a):** plan fields `max_race_laps`, `fuel_burns {save, full}`, stint
+`fuel_save`; certify reaches fuel-save stints on the saving burn; George caps laps at the ceiling
+(count firm, no spare lap), starts each declared stint on the fuel-saving points (7,400 in 1st-5th,
+`shift_points` id 1), goes to full revs on the run to the flag when the tank reaches at the full
+burn with the fill's margin + 1 L, and back to saving when it stops reaching; says *"Full beeps.
+Fuel reaches the flag."* / *"Fuel-save beeps."* A box or any other call no longer releases the
+saving beep. The beep returns to full revs at race close.
+
+**Strategy 34 (approved, supersedes 33):** RM 12 -> RH 17, both `fuel_save`, `max_race_laps` 29,
+`fuel_burns` save 5.25 [MEASURED s156/s157 at the beep] / full 6.76 [MEASURED s158/s159] - replaced
+by this race's own burn after two clean laps on a column. Certified with one warning (clock model
+allows ~28; ceiling 29).
+
+**Predictions for the next sim:** (1) the stop fill George names lands within ~2 L of laps left x
+stint-1 burn; (2) no "Full beeps" in stint 1; in stint 2 it comes only once the tank reaches 29 at
+full revs; (3) the beep is on 7,400 from the grid. **Proves it wrong:** a fill 5 L+ over; a full-revs
+switch followed by a fuel-short call inside three laps; the beep at 8,500 on lap 1.
