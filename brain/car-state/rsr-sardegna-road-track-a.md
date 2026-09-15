@@ -2589,3 +2589,10 @@ build is the route if he wants it.
 **No setup change.** One evening's report against a control that shows the same looseness in daylight is not a
 basis for moving a slider on both compounds. Asked: rank zero, where the slip is felt and on which pedal,
 whether the dark matters at the blind left, and who switched to full revs at lap 25.
+
+**§50 answers, same night.** Full revs from lap 25 was his call off the fuel readout. The hard "felt looser as
+the stint went on" - wheelspin out of corners rose with wear the same way the daylight hard's did (s156), so that
+trend is wear-shaped; the evening still cannot be separated from it. **Lap 29** (143): the offs cost L9 6.5 s,
+L18 11.4 s, L26 22.2 s against a race that ended lap 28 26.9 s past the clock. No single off lost the lap; lap 26
+with either other did. Lap 26 alone: 4.7 s short - inside George's ~6 s spare-lap fuel. Had 29 been on, full revs
+from lap 25 would have run dry (32.6 L with 5 to go).
