@@ -2388,3 +2388,100 @@ the tyre - so as things stand he would save with no cue.
 **Until the certifier is fixed:** race without an armed plan (the Race screen
 offers it), short-shift from the beep table by hand, and George still sizes the
 fill from the stint-1 burn.
+
+---
+
+# Session 177 - 29-lap race sim, RM/RM one stop, 15 Sep 2026. **P1 laps 17-26, finished P8.**
+
+**Rank zero:** gearbox byte-identical to s159 (FEED). The other values rest on the Rev H sheet
+(`arb_r` 4) and are **not re-confirmed** - screenshot asked for. **MFD read off the OBS capture**
+(video t = race elapsed + ~15 s), not from memory or the event row:
+
+| laps | brake balance | TCS |
+|---|---|---|
+| 1-8 | +3 (never shown on screen - his word) | 1 from the green |
+| 8-11 | +2 | 1 |
+| 11-22 (across the stop) | +1 | 1 (3 on the in-lap, back to 1 on the out-lap) |
+| 23-29 | 0 | 1 -> **3 at L27** -> **5 during L28** |
+
+## 42. What happened
+
+- Stint 1 RM laps 1-13 + in-lap 14, P14 -> P3 by lap 6. Fill **60.6 L**. Stint 2 RM laps 15-29.
+- **P1 from lap 17 to 26.** Car #89 (RH, stopped L15) closed **25 s -> 4.5 s** laps 18-25.
+- **L27 (RR 89 %):** off at **the blind left** (~3,748 m) - right-hand pair on the grass first,
+  then the spin. Third time on file in that corner (s159 L3). Track limits, not the car. -> P5.
+- **L28 (RR 97 %):** 106.8 s, every sector slow, TCS 5 intervening on 16.7 % of the lap.
+- **L29 (RR 100 %):** **three spins on tarmac**, all four wheels on the road, each at 0-7 %
+  throttle - the cliff. **And the tank ran dry.** 162 s lap, P4 -> P8.
+
+## 43. The medium cannot do 14-15 laps - §40 open item 1 CLOSED, and §41's warning came true
+
+`[MEASURED]` measurement ids 129-131. RR 0.068/lap to ~80 %, then **3 gauge ticks a lap instead
+of 2** in both stints. Past 89 % the medium goes: an off on the first lap past it, +4.5 s on the
+next, undriveable on the last. §41 predicted "15 laps projects to ~97-100 % on the rear-right, at
+the flag, with no stop left" - **confirmed, and the consequence was worse than the wording.**
+Usable life on this car at this pace: **12 laps (~81 %)**, 13 at the outside (~89 %).
+
+`[MEASURED]` id 133: **RH at the saving beep ran 19 laps to 94 % with no pace loss** (s156).
+
+## 44. Fuel - the fill was margin-free
+
+`[DERIVED]` id 136. Installed burn at the stop 5.519 L/lap x 15 laps = 82.8 L against 83.7 L aboard.
+Stint 2 burned **5.60**: laps 20, 21 and 28 were shifted at ~8,000 rpm (the chase), plus the
+L29 spins. Short by ~0.5 L; it cost ~60 s and four places. George logged *"Fuel reaches the flag
+now. Plan stands."* and *"Save fuel from here. 9 litres light - about 1.6 laps."* four seconds
+apart after the stop - **app work**, not a car finding. **Who chose 60.6 L is asked.**
+
+## 45. TCS and brake balance - what the frames can and cannot say
+
+- **TCS** (id 134): on 1 the flag fires on ~0.4 % of a lap. 3 and 5 came on a dead tyre and did
+  not prevent the L29 spins, which were **off throttle, where TCS does not act**. Resolves the
+  Sardegna half of `reference_gt7_flags_and_abs_signature`: **TCS 1 was in the car.**
+- **Brake balance** (id 135), +3 laps 2-7 against +1 laps 16-21, same tyre age: rear p5 slip
+  under heavy braking **0.9321 -> 0.9417**, rear in the ABS band **1.8 % -> 0.0 %** - less rear
+  braking work, ~1.6x the floor, the direction a forward move should give. **Confounded:** +3 was
+  passing cars, +1 was leading in free air, 16 L lighter. `[DRIVER REPORT]` *"I think +1 is
+  best."* **His report decides; the frames lean the same way and cannot separate it from traffic.**
+  ⚠️ `bb +3` was confirmed on **RH** on 5 Sep (s130); +1 is from **RM** - whether the hard wants
+  +1 or +3 is asked, not assumed.
+
+## 46. RACE PLAN PROPOSED - RM 12 -> RH to the flag. Awaiting his yes. 15 Sep 2026
+
+**[DRIVER]** *"need a combo of RH + RM not sure which order."*
+
+**The binding limit is the tyre** - the medium's cliff - in both orders; fuel binds only in the
+RH-first order's opening stint (below). The app's planner cannot rank this: `pace_delta_s = 0.0`
+for every compound, so it picks RH/RH. Measured gap at the saving beep **+1.14 s/lap** (id 132).
+
+| plan | tyre on the last lap | cost against RM12/RH17 `[DERIVED]` |
+|---|---|---|
+| **RM 12 -> RH 16-17** | RH ~81-87 % (no cliff on file to 94 %) | - |
+| RH 16 -> RH 13 (planner's pick) | RH ~66 % | +13 s (12 more laps on the hard) |
+| RM 10/10/9, two stops | RM ~68 % | +13 s (second stop ~32 s off today's pit lap, against 19 s of hard) |
+| RH 17 -> RM 12 | **RM ~81-89 %, the cliff at the flag** | ~0 s on pace; see why not |
+| RM 14/15 (the §41 plan) | RM 97-100 % | **refuted today** |
+
+**Why the medium first:** (1) the tyre with the cliff runs while a stop is still available -
+box a lap early and the hard has two measured laps in hand; (2) a 17-lap opening stint on the
+hard needs 94-99 L of the 100 L he starts with and nothing can top it up - on a windy day it runs
+dry before the stop; the medium-first long stint gets a fill sized off his own stint-1 burn; (3)
+he starts in traffic, which is when the faster tyre earns most (P14 -> P3 in six laps today).
+**The price:** he defends on the slower tyre at the end.
+
+**Window:** box end of lap 12; earliest 11 (hard to ~92 %), latest 13 (medium to ~89 %).
+**Fill:** laps left x stint-1 burn + **3 L** (~3 s in the box, bought against today's 60 s).
+**Lap count is on a knife edge:** today lap 28 ended 3.1 s before the clock with ~14.5 s of
+incidents in it; 17 laps on the hard adds ~19 s. **28 or 29 - fuel for 29.**
+
+**Certifier dry run (nothing written):** RM 12 / RH 16 at 28 laps -> *Driveable* (stint length
+unchecked: no wear rate). RM 12 / RH 17 at 29 -> refused (clock allows ~28; tank reserve caps
+16). RH 17 / RM 12 -> refused (stint 1 on a tank that reaches 16).
+
+## 47. Open predictions
+
+| Prediction | What would prove it wrong |
+|---|---|
+| RM to the end of lap 12 stays above today's stint-1 pace with no off-track caused by the tyre | a tyre-led slide on tarmac before the stop, or RR past 89 % by lap 12 |
+| RH 16-17 laps at the saving beep reaches the flag under 90 % with lap times flat | RR past 90 % before the last lap, or the last three laps >1 s off the stint median |
+| A +3 L fill reaches the flag with 2-4 L left | dry again, or more than ~6 L left |
+| +1 brake balance holds on the hard | he reaches for the MFD in the hard stint |

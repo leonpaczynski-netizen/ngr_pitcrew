@@ -216,3 +216,19 @@ Surfaced, not averaged (`CLAUDE.md` §4 rule 1). The latest is kept as the outco
   rows rest partly or wholly on silence: Shelby Rev B row 4 (S3), the Bathurst beep row (B3), and
   Sardegna Rev A's platform row ("Driver reported no harshness", though that row also has a
   body-height measurement). Kept as scored, flagged.
+
+### 3c. 15 Sep: the 29-lap race sim (session 177)
+
+```csv
+date,session_ids,key,direction,delta_pct_range,instrument,measured_floor,control,prediction,falsifier,outcome,source,car_state_rev
+2026-09-11,s177,n/a (RM rear-right past 89 % worn),n/a,n/a,HUD wear gauge; lap time; spins on tarmac,gauge tick 0.0278,stint 1 of the same race,rear-right survives ~97-100 % at the flag,falls away past 90 %,refuted,"§40 open item 1; §43 (L27 off at 89 %, L28 +4.5 s at 97 %, L29 three tarmac spins at 100 %); measurement 131",Rev H
+2026-09-11,s177,n/a (15-lap RM stint projects 97-100 % at the flag with no stop left),n/a,n/a,HUD wear gauge,gauge tick 0.0278,n/a,15 laps on RM reach 97-100 % RR at the flag,RR under 90 % at the flag,confirmed,"§41; §43 (L29 1.0)",Rev H
+2026-09-15,s177 L2-7 -> L16-21,bb,forward,-20.0,rear p5 slip heavy braking; rear share inside the ABS band; driver report,0.003-0.006,matched tyre age (RR 14-47 % both arms),less rear braking work and he prefers it,rear p5 unmoved or he reports the entry lazier,open,"§45; measurement 135 (0.9321 -> 0.9417; 1.8 -> 0.0 %; confounded by traffic and 16 L of fuel); [DRIVER REPORT] '+1 is best' - on RM only; +3 was confirmed on RH (row bb +20.0 s130)",Rev H
+2026-09-15,none yet (race),n/a (race plan RM 12 -> RH 16-17 one stop fuel-save),n/a,n/a,race result; RR at the flag; fuel at the flag,n/a,s177 RM/RM,RM to lap 12 without a tyre-led slide; RH reaches the flag under 90 % with flat laps; +3 L fill lands 2-4 L at the flag,a tyre-led slide on either set; RH past 90 % before the last lap; dry or >6 L left,open,"§46-47; proposed, awaiting his yes",Rev H
+2026-09-15,s177,n/a (TCS level vs a worn medium),n/a,n/a,flags_raw bit 11 by MFD level (read off the video); throttle at each spin,not established,TCS 1 laps 1-26,raising TCS keeps a 97-100 % medium on the road,spins happen off throttle where TCS cannot act,refuted,"§45; measurement 134 (L29 spins at 0-7 % throttle, flag off)",Rev H
+```
+
+**Notes, 3c**
+
+- bb +3 -> +1 is two clicks forward: -2 / 10 span = -20.0 pp (the file's 10 % a click; `+` rearward on this car).
+- The TCS row carries no key because TCS is an in-car aid, not a slider on the sheet.
