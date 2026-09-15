@@ -1195,6 +1195,20 @@ class PitCrewController(QObject):
         self._board_failures_total = 0
         self._board_timer = QTimer(self)
         self._board_timer.timeout.connect(self._push_driver_board)
+        # Whether the Qt board is on screen. Escape closes the window but the
+        # strip may still be ticking on the same timer, so the push has to
+        # know not to draw into a closed window.
+        self._board_showing = False
+        # **The phone strip** (15 Sep 2026): the same state, served as a web
+        # page. Up for the life of the app, so the phone can stay on the page
+        # between sessions and says "no session" rather than going dark.
+        from pitcrew.ui.strip import StripComposer
+
+        self.strip = None
+        self._strip_composer = StripComposer()
+        self._strip_was_live = False
+        self._strip_failures = 0
+        self._start_strip()
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -2269,6 +2283,11 @@ class PitCrewController(QObject):
                       or new.feed_source != self.settings.feed_source
                       or new.ps5_ip.strip() != self.settings.ps5_ip.strip())
         self.settings = new
+        # The phone strip follows its tick-box straight away, not next launch.
+        if new.strip_enabled and self.__dict__.get("strip") is None:
+            self._start_strip()
+        elif not new.strip_enabled and self.__dict__.get("strip") is not None:
+            self._stop_strip()
         self._apply_audio_devices(new)
         if self._port_override is None:
             self.port = new.udp_port
@@ -6292,7 +6311,19 @@ class PitCrewController(QObject):
         The same shape as `LiveWearSampler.new_session` and
         `strategy/handover` - written, documented, and called only from tests.
         """
-        if not self.settings.driver_board_enabled:
+        board_wanted = self.settings.driver_board_enabled
+        strip = self.__dict__.get("strip")
+        if not board_wanted and strip is None:
+            return
+        # **The strip's held neighbour belongs to this session too** (rule
+        # 11): a car that was close when the last one ended is not close now.
+        composer = self.__dict__.get("_strip_composer")
+        if composer is not None:
+            composer.new_session()
+        if not board_wanted:
+            # The phone still wants the numbers with the board switched off.
+            self._push_driver_board()
+            self._board_timer.start(250)
             return
         # **The failure counts belong to this race, and this is their caller.**
         # CLAUDE.md rule 11: without it a race that ended on eleven
@@ -6316,6 +6347,7 @@ class PitCrewController(QObject):
         self.driver_board.on_closed = self._board_was_closed
         self.driver_board.show()
         self.driver_board.raise_()
+        self._board_showing = True
         self._push_driver_board()
         # **Ticks on its own while the tank is filling.** Everything else on
         # this board is refreshed by a lap crossing, and during a stop there
@@ -6331,8 +6363,13 @@ class PitCrewController(QObject):
         because a window closed this way is still the position he chose - and
         `_open_driver_board` can put it back on the same spot if a later race
         arms.
+
+        **The timer keeps running while a strip is served** - Escape closes a
+        window on the ultrawide, not the phone's feed.
         """
-        self._board_timer.stop()
+        self._board_showing = False
+        if self.__dict__.get("strip") is None:
+            self._board_timer.stop()
         if self.driver_board is not None:
             self.settings.driver_board_geometry = \
                 self.driver_board.geometry_text()
@@ -6340,6 +6377,10 @@ class PitCrewController(QObject):
     def _close_driver_board(self) -> None:
         """Take it away, remembering where he had it."""
         self._board_timer.stop()
+        self._board_showing = False
+        # The session is over: the phone says so rather than holding the last
+        # numbers it was sent (rule 11).
+        self._strip_idle()
         if self.driver_board is None:
             return
         # **Written straight to the store, not through `save_settings`.**
@@ -6354,11 +6395,84 @@ class PitCrewController(QObject):
                 "could not remember where the driver board was: %s", exc)
         self.driver_board.hide()
 
+    # -- the phone strip ------------------------------------------------------
+
+    def _start_strip(self) -> None:
+        """Serve the strip page, if it is wanted and we are not under test.
+
+        Tests build a controller dozens of times; each binding a real port on
+        every interface would collide and would ask Windows for a firewall
+        exception mid-suite. The server is tested on its own, on port 0.
+        """
+        import os
+
+        if not self.settings.strip_enabled or "PYTEST_CURRENT_TEST" in os.environ:
+            return
+        from pitcrew.ui.strip_server import StripServer
+
+        server = StripServer(port=self.settings.strip_port)
+        if server.start():
+            self.strip = server
+            self._strip_idle()
+
+    def _stop_strip(self) -> None:
+        strip, self.strip = self.__dict__.get("strip"), None
+        if strip is not None:
+            strip.stop()
+
+    def _strip_idle(self) -> None:
+        strip = self.__dict__.get("strip")
+        if strip is None:
+            return
+        self._strip_composer.new_session()
+        strip.publish(self._strip_composer.compose(None))
+
+    def _publish_strip(self):
+        """Build the board's state once, hand it to the phone, and return it
+        with `strip_live` set - or None, logged, if building it raised.
+
+        **Guarded on its own.** The strip is an output; a fault here must not
+        take the Qt board with it, and the Qt board's own failure counting
+        below is left exactly as it was.
+        """
+        strip = self.__dict__.get("strip")
+        if strip is None:
+            return None
+        try:
+            live = strip.live()
+            if live != self._strip_was_live:
+                # **The accepts are logged, not only the losses** (rule 10):
+                # which device was reading is the first question when the
+                # gaps went missing off the ultrawide.
+                if live:
+                    log("ui").info("phone strip connected from %s - gaps and "
+                                   "laps to the stop move to it",
+                                   strip.last_client)
+                else:
+                    log("ui").warning("phone strip stopped polling - gaps and "
+                                      "laps to the stop are back on the board")
+                self._strip_was_live = live
+            state = replace(self._driver_board_state(), strip_live=live)
+            strip.publish(self._strip_composer.compose(state))
+            self._strip_failures = 0
+            return state
+        except Exception as exc:                            # noqa: BLE001
+            # Nothing is published, so the page goes stale and says NO DATA
+            # within `STALE_AFTER_S` - the honest failure. Logged once and then
+            # every twentieth tick, not four times a second.
+            if self._strip_failures % BOARD_TRACEBACK_EVERY == 0:
+                log("ui").warning("the phone strip could not be built: %s: %s",
+                                  type(exc).__name__, exc)
+            self._strip_failures += 1
+            return None
+
     def _push_driver_board(self) -> None:
-        if self.driver_board is None:
+        state = self._publish_strip()
+        if self.driver_board is None or not self.__dict__.get("_board_showing", True):
             return
         try:
-            self.driver_board.update_state(self._driver_board_state())
+            self.driver_board.update_state(
+                state if state is not None else self._driver_board_state())
         except Exception as exc:                            # noqa: BLE001
             # **One bad frame is not a broken board.** The teardown below is
             # right for a board that cannot draw at all, and wrong for a
@@ -6399,7 +6513,9 @@ class PitCrewController(QObject):
             log("ui").error(
                 "the driver board raised and has been taken down for this "
                 "race: %s: %s", type(exc).__name__, exc, exc_info=True)
-            self._board_timer.stop()
+            # The phone's feed rides the same timer and is guarded on its own.
+            if self.__dict__.get("strip") is None:
+                self._board_timer.stop()
             board, self.driver_board = self.driver_board, None
             # **Closed first, in a try of its own.** We are here because the
             # board is in a broken state, so `geometry_text()` is exactly the
@@ -8056,6 +8172,7 @@ class PitCrewController(QObject):
         # added to prevent. Same three-caller shape as `_stop_pit_wall` below.
         self.bridge.board_live = None
         self._close_driver_board()
+        self._stop_strip()
         self._stop_pit_wall()
         self._stop_hud_sampler()
         if self.listener is not None:

@@ -122,6 +122,12 @@ bottom edge is the shortest eye travel and the lead rank sits there.
                             the flag | position
     rank 1 (bottom, 180px)  gap ahead | gap behind
 
+**With the phone strip reading** (15 Sep 2026, `ui/strip.py`) rank 1 and
+LAPS TO THE STOP leave this board for his phone on the game monitor, and come
+back the moment the phone stops polling (`DriverState.strip_live`). Every
+block's words live in the `*_block` functions below so the two surfaces
+cannot word one number twice.
+
 **In practice and qualifying** (the board opens for them from 14 Sep 2026)
 ranks 1 and 2 are race-only and hidden, and the lap-time panel takes rank 1:
 
@@ -585,6 +591,13 @@ class DriverState:
     # None once the race is over, which it also is when no plan exists - and
     # "no plan" is the wrong thing to tell a man who has just finished.
     finished: bool = False
+    # **A strip page is receiving this board right now** - his phone on the
+    # game monitor (15 Sep 2026). While it is, the neighbour gaps and laps to
+    # the stop are read off the phone and leave this board; the moment it
+    # stops polling they come back here. Set by the controller from
+    # `StripServer.live()`, never assumed: a phone that went flat mid-race
+    # must not take two numbers off both screens at once.
+    strip_live: bool = False
 
 
 def onset_for(compound: str | None) -> float | None:
@@ -933,6 +946,283 @@ def format_delta(seconds: float | None) -> str:
     return f"{seconds:+.3f}"
 
 
+# ============================================================================
+# **What a block says, apart from how it is drawn.** Two surfaces draw these
+# now - the Qt board on the ultrawide and the strip page on his phone
+# (`ui/strip.py`) - and a number worded twice is a number that drifts: the
+# fuel block already carried "-7.1 in hand" once for want of one expression.
+# So the words, the value and whether it is bad news are decided here, once,
+# and each surface only chooses a size and an ink.
+# ============================================================================
+
+TONE_PLAIN = "plain"
+TONE_URGENT = "urgent"
+TONE_GOOD = "good"
+
+
+@dataclass(frozen=True)
+class Block:
+    """One number as a surface draws it: the value, the line under it, and
+    which of the three readings it is. `urgent` wins over `good`, as
+    `_Stat.show_value` has always had it."""
+    value: str
+    sub: str = ""
+    tone: str = TONE_PLAIN
+
+    @property
+    def urgent(self) -> bool:
+        return self.tone == TONE_URGENT
+
+    @property
+    def good(self) -> bool:
+        return self.tone == TONE_GOOD
+
+
+def _tone(urgent: bool, good: bool = False) -> str:
+    return TONE_URGENT if urgent else TONE_GOOD if good else TONE_PLAIN
+
+
+def tyre_clause(state: "DriverState", head: str) -> str:
+    """`head` with the plan's tyre decision appended, or `head` alone.
+
+    **One expression for both captions.** The countdown and the "NOW"
+    that replaces it are the same block saying the same thing about the
+    same stop, and the decision went missing from the second because they
+    were written twice.
+
+    `· fuel only` rather than `· no tyres`: it is the box panel's own
+    word for this decision, and on the running board the pair has to be
+    told apart in the dimmest ink on the screen at 200 km/h - where
+    `no tyres` and `new set` differ only in a two-word tail.
+    """
+    if state.tyres_at_stop is False:
+        return f"{head} · fuel only"
+    if state.tyres_at_stop and state.next_compound:
+        return f"{head} · fit {state.next_compound.upper()}"
+    if state.tyres_at_stop:
+        return f"{head} · fit a set"
+    # None: the plan did not say. Silence, because "fuel only" and "the
+    # plan is quiet about it" are different answers and only one of them
+    # is a decision he can act on.
+    return head
+
+
+def box_caption(state: "DriverState") -> str:
+    """What sits under the laps-to-box figure: the lap, and the decision.
+
+    **The tyre decision moved here from the box panel**, where he could
+    only read it once he was stationary and it was already being
+    executed. "Fit RS" and "fuel only" ask for different in-laps and
+    different brake balance, and the plan has said which since before the
+    green.
+    """
+    if state.box_on_lap is None:
+        return ""
+    return tyre_clause(state, f"plan: lap {state.box_on_lap}")
+
+
+def box_block(state: "DriverState") -> Block:
+    """LAPS TO THE STOP: the countdown, NOW, FLAG, or a dash that says why."""
+    if state.finished:
+        return Block("FLAG", RACE_OVER)
+    if state.laps_to_box is None and state.has_plan:
+        # **A plan with no further stop is not "no plan".**
+        # `laps_to_stop()` is None exactly when `stint_ends_on_lap` is,
+        # and `_apply_stint` sets that to None on the LAST stint - so
+        # this block told him the engineer had no plan for laps 12-20 of
+        # every one-stop race, and for the whole of a zero-stop one,
+        # while `IN HAND TO THE FLAG` two blocks along was live and
+        # right. He has no reason to trust a number on a board that says
+        # nobody is planning.
+        #
+        # This is the third page this same defect has been fixed on -
+        # `_BoxPanel` carries "the board said 'no plan' while a plan was
+        # being executed" and the `finished` branch carries "'no plan' is
+        # the wrong thing to tell a man who has just finished". The words
+        # are `race/calls.py`'s, so the board and the fuel block say the
+        # same thing about the same fact (rule 13).
+        return Block("--", NO_STOP_TO_COME)
+    if state.laps_to_box is None:
+        # The same constant the fuel block beside it uses for the same
+        # fact - with no plan running both say "no plan".
+        return Block("--", NO_PLAN)
+    if state.laps_past_box is not None:
+        # **`laps_to_stop()` clamps at zero**, so a driver three laps past
+        # his box lap read "0 laps to box, box on lap 15" - the current
+        # lap, every lap, with nothing saying he was late.
+        # `RaceState.laps_overdue` carries the sign the clamp discards:
+        # 0 on the in-lap, N once N in-laps have gone by.
+        # **The tyre word survives the in-lap.** This branch is taken on
+        # the in-lap, so `box_caption` is not called on the one lap the
+        # decision is executed - and the whole case for putting it on
+        # this block is that "fit a set" and "fuel only" ask for
+        # different in-laps and different brake balance. The voice says
+        # "Box this lap. RS on." here; the board said nothing.
+        late = ("box this lap" if state.laps_past_box <= 0 else
+                f"{state.laps_past_box} past the box lap")
+        return Block("NOW", tyre_clause(state, late), TONE_URGENT)
+    # **Urgent inside two laps**, which is where the number stops being
+    # background and starts being a thing to act on.
+    return Block(f"{state.laps_to_box:.0f}", box_caption(state),
+                 _tone(state.laps_to_box <= 2))
+
+
+def gap_block(gap: "GapView | None") -> Block:
+    """One neighbour: the gap large, what it is doing underneath.
+
+    **The seconds are the big number and the trend is the caption**, not
+    the other way round. The gap is what he can act on immediately - a car
+    1.2 s up is in DRS-ish range and one 12 s up is not - and the trend
+    tells him whether acting is worth it. Both at a glance, in that order.
+    """
+    if gap is None or gap.seconds is None:
+        # **A dash is the expected state, not a fault.** The gap boxes
+        # these come from have never once returned a number in a real
+        # race - see `race/gaps.py` - so this says why rather than
+        # sitting blank and making him wonder what broke.
+        return Block("--", "no gap read")
+    return Block(f"{gap.seconds:.1f}", gap.note, _tone(gap.urgent, gap.good))
+
+
+def fuel_stop_block(state: "DriverState") -> Block:
+    """IN HAND TO THE STOP. **Not urgent above zero** - see `_show_fuel`."""
+    aboard = (None if state.laps_of_fuel is None
+              else f"{state.laps_of_fuel:.1f} laps aboard")
+    if state.fuel_to_stop is None:
+        return Block("--", state.fuel_to_stop_why or aboard or "not measured")
+    return Block(f"{state.fuel_to_stop:.1f}", aboard or "",
+                 _tone(state.fuel_to_stop < 0))
+
+
+def release_block(state: "DriverState") -> Block:
+    """RELEASE IN, the seconds he is holding the trigger on.
+
+    **Urgent the whole way down from ten seconds**, not only at zero. He has
+    to move his hand to the trigger, and a release that turns red at the
+    moment it is due is a release he is late for.
+    """
+    seconds = state.release_in_s
+    if seconds is None:
+        # **The dash says why.** This is the one figure the driver is
+        # holding the trigger on, and it was the only one on the panel
+        # showing a bare dash with an empty caption under it.
+        # **`is not None`, not truthiness.** `fuel_target_l` is
+        # deliberately unclamped and returns a real `0.0` where the stop
+        # covers no laps, so the truthy test made RELEASE IN say
+        # "nothing sized it" while FUEL TO one block along drew `0` -
+        # two adjacent blocks contradicting each other about whether the
+        # stop had been sized. CLAUDE.md rule 3, and the same shape as
+        # the capacity hole already fixed in `calls.py`.
+        reason = ("no fill rate here" if state.fuel_target_l is not None
+                  else "nothing sized it")
+        return Block("--", reason)
+    return Block(format_release(seconds),
+                 "seconds" if seconds > 0 else "release now",
+                 _tone(seconds <= 10))
+
+
+def fuel_target_block(state: "DriverState") -> Block:
+    """FUEL TO: what the tank should read at release, litres."""
+    if state.fuel_target_l is None:
+        # Nothing sized the stop. Silence rather than a number the app
+        # invented - the same refusal `RefuelWatch.note` makes, and for
+        # the same reason: he is holding the trigger on this figure.
+        return Block("--", "nothing sized it")
+    parts = []
+    if state.fuel_l is not None:
+        # **"aboard", not a bare unit.** This block draws a big
+        # target with the tank under it, and `31 L` under `63` does
+        # not say which is which - `aboard` is the word separating
+        # what is in the tank now from what is going in, and the
+        # running board uses `laps aboard` for the same idea. It was
+        # shortened to fit a bound computed from the wrong font.
+        parts.append(f"{state.fuel_l:.0f} aboard")
+    # Which rate the seconds beside it were priced at. A rate measured
+    # at this pump and one typed on the event page are not the same
+    # claim, and the countdown is only as good as whichever it used.
+    if state.fill_rate_note:
+        parts.append(state.fill_rate_note)
+    return Block(f"{state.fuel_target_l:.0f}", " · ".join(parts))
+
+
+def tyres_block(state: "DriverState") -> Block:
+    """TYRES in the box: the plan's decision, not a reading off the car.
+
+    Nothing here knows how worn the set coming off is, because no packet
+    format carries wear at all.
+
+    **"No plan" used to cover two different facts.** `next_compound` is
+    also None when a plan IS running and simply does not name a compound
+    for the next stint - which is the honest state after a mid-race
+    replan - so the board told him there was no plan while one was being
+    executed.
+    """
+    if state.tyres_at_stop is False:
+        # The plan's decision in the box is "fuel only". Said as the
+        # decision, not as a compound - the compound on the car is what
+        # stays on it.
+        return Block("NO TYRES", "plan · fuel only")
+    if state.next_compound:
+        # **`next_compound`, not `compound`.** They are two claims - the
+        # set going on and the set coming off - and this panel wants the
+        # first. It read `compound` and was right only because the
+        # controller overwrote that field with `next_compound` on the
+        # in-box branch, so one field meant two things depending on a
+        # boolean set in another module. That is the defect fixed one
+        # page over in `box_caption`, not the fix for it.
+        return Block(state.next_compound,
+                     "plan · new set" if state.tyres_at_stop else "plan")
+    if state.tyres_at_stop:
+        # **A set IS going on and the plan did not name which.** This
+        # rendered a bare dash - on the one panel he reads with his hands
+        # on the MFD, while the same board had said "new set" on the
+        # straight and the voice had said "Tyres on." `handover.validate`
+        # permits `tyres` with no `compound`, so it is plan-reachable, and
+        # a dash where the opposite decision gets the word NO TYRES is how
+        # he takes a fuel-only stop the plan did not ask for.
+        return Block("NEW SET", "plan · set not named")
+    if state.past_the_plan:
+        # **Past the end of the stint list is not "the plan did not name
+        # a compound".** An unplanned splash sets `past_the_plan` and
+        # leaves `next_tyres` and `next_compound` None, and this block
+        # said the plan had asked for a stop and not named a tyre while
+        # the block beside it said the plan does not reach this stop at
+        # all. He fits tyres nobody asked for - three seconds and a cold
+        # out-lap (CLAUDE.md 5.4).
+        return Block("--", "past the plan")
+    if state.has_plan:
+        return Block("--", "plan: no compound")
+    return Block("--", "no plan")
+
+
+def delta_block(state: "DriverState") -> Block:
+    """TIME DIFF: live minus the reference at the same point on the lap.
+    Negative is faster and good; positive is slower and drawn in the warning
+    ink, as `_LapTimePanel` has it."""
+    delta = state.delta_s
+    tone = (TONE_PLAIN if delta is None or delta == 0
+            else TONE_GOOD if delta < 0 else TONE_URGENT)
+    return Block(format_delta(delta), lap_reference_note(state), tone)
+
+
+def lap_reference_note(state: "DriverState") -> str:
+    """What the diff is against, named - rule 13: a delta that does not say
+    what it is against is two numbers pretending to be one."""
+    parts = []
+    tyre = f"{state.reference_compound} " if state.reference_compound else ""
+    if state.session_best_ms is not None:
+        parts.append(f"vs {tyre}session best "
+                     f"{format_lap_ms(state.session_best_ms)}")
+    elif state.delta_why:
+        parts.append(f"{tyre}{state.delta_why}" if tyre else state.delta_why)
+    if state.file_best_ms is not None:
+        on_file = f"{tyre}on file {format_lap_ms(state.file_best_ms)}"
+        if state.delta_file_s is not None:
+            on_file += f" ({format_delta(state.delta_file_s)})"
+        parts.append(on_file)
+    return "  ·  ".join(parts)
+
+
 class _Box(QWidget):
     """A framed title-over-value box, as on the driver's reference image."""
 
@@ -1005,19 +1295,7 @@ class _LapTimePanel(QWidget):
         ink = INK if delta is None else GOOD if delta < 0 else NEAR if delta > 0 else INK
         self.diff.set_value(format_delta(delta), ink)
         self.pred.set_value(format_lap_ms(state.predicted_ms), INK)
-        parts = []
-        tyre = f"{state.reference_compound} " if state.reference_compound else ""
-        if state.session_best_ms is not None:
-            parts.append(f"vs {tyre}session best "
-                         f"{format_lap_ms(state.session_best_ms)}")
-        elif state.delta_why:
-            parts.append(f"{tyre}{state.delta_why}" if tyre else state.delta_why)
-        if state.file_best_ms is not None:
-            on_file = f"{tyre}on file {format_lap_ms(state.file_best_ms)}"
-            if state.delta_file_s is not None:
-                on_file += f" ({format_delta(state.delta_file_s)})"
-            parts.append(on_file)
-        self.note.setText("  ·  ".join(parts))
+        self.note.setText(lap_reference_note(state))
 
 
 class _Light(QWidget):
@@ -1458,100 +1736,16 @@ class _BoxPanel(QWidget):
         outer.addLayout(row)
 
     def show_state(self, state: DriverState) -> None:
-        # **The countdown is urgent the whole way down from ten seconds**, not
-        # only at zero. He has to move his hand to the trigger, and a release
-        # that turns red at the moment it is due is a release he is late for.
-        seconds = state.release_in_s
-        if seconds is None:
-            # **The dash says why.** This is the one figure the driver is
-            # holding the trigger on, and it was the only one on the panel
-            # showing a bare dash with an empty caption under it.
-            # **`is not None`, not truthiness.** `fuel_target_l` is
-            # deliberately unclamped and returns a real `0.0` where the stop
-            # covers no laps, so the truthy test made RELEASE IN say
-            # "nothing sized it" while FUEL TO one block along drew `0` -
-            # two adjacent blocks contradicting each other about whether the
-            # stop had been sized. CLAUDE.md rule 3, and the same shape as
-            # the capacity hole already fixed in `calls.py`.
-            reason = ("no fill rate here" if state.fuel_target_l is not None
-                      else "nothing sized it")
-            self.release_stat.show_value("--", reason)
-        else:
-            self.release_stat.show_value(
-                format_release(seconds),
-                "seconds" if seconds > 0 else "release now",
-                urgent=seconds <= 10)
+        # The countdown's words and urgency are `release_block`'s, shared
+        # with the strip page so the two cannot count differently.
+        release = release_block(state)
+        self.release_stat.show_value(release.value, release.sub,
+                                     urgent=release.urgent)
 
-        if state.fuel_target_l is None:
-            # Nothing sized the stop. Silence rather than a number the app
-            # invented - the same refusal `RefuelWatch.note` makes, and for
-            # the same reason: he is holding the trigger on this figure.
-            self.fuel_stat.show_value("--", "nothing sized it")
-        else:
-            parts = []
-            if state.fuel_l is not None:
-                # **"aboard", not a bare unit.** This block draws a big
-                # target with the tank under it, and `31 L` under `63` does
-                # not say which is which - `aboard` is the word separating
-                # what is in the tank now from what is going in, and the
-                # running board uses `laps aboard` for the same idea. It was
-                # shortened to fit a bound computed from the wrong font.
-                parts.append(f"{state.fuel_l:.0f} aboard")
-            # Which rate the seconds beside it were priced at. A rate measured
-            # at this pump and one typed on the event page are not the same
-            # claim, and the countdown is only as good as whichever it used.
-            if state.fill_rate_note:
-                parts.append(state.fill_rate_note)
-            self.fuel_stat.show_value(f"{state.fuel_target_l:.0f}",
-                                      " \u00b7 ".join(parts))
-
-        # The plan's decision, not a reading off the car. Nothing here knows
-        # how worn the set coming off is, because no packet format carries
-        # wear at all.
-        #
-        # **"No plan" used to cover two different facts.** `next_compound` is
-        # also None when a plan IS running and simply does not name a compound
-        # for the next stint - which is the honest state after a mid-race
-        # replan - so the board told him there was no plan while one was being
-        # executed.
-        if state.tyres_at_stop is False:
-            # The plan's decision in the box is "fuel only". Said as the
-            # decision, not as a compound - the compound on the car is what
-            # stays on it.
-            self.tyre_stat.show_value("NO TYRES", "plan · fuel only")
-        elif state.next_compound:
-            # **`next_compound`, not `compound`.** They are two claims - the
-            # set going on and the set coming off - and this panel wants the
-            # first. It read `compound` and was right only because the
-            # controller overwrote that field with `next_compound` on the
-            # in-box branch, so one field meant two things depending on a
-            # boolean set in another module. That is the defect fixed one
-            # page over in `_box_caption`, not the fix for it.
-            self.tyre_stat.show_value(
-                state.next_compound,
-                "plan · new set" if state.tyres_at_stop else "plan")
-        elif state.tyres_at_stop:
-            # **A set IS going on and the plan did not name which.** This
-            # rendered a bare dash - on the one panel he reads with his hands
-            # on the MFD, while the same board had said "new set" on the
-            # straight and the voice had said "Tyres on." `handover.validate`
-            # permits `tyres` with no `compound`, so it is plan-reachable, and
-            # a dash where the opposite decision gets the word NO TYRES is how
-            # he takes a fuel-only stop the plan did not ask for.
-            self.tyre_stat.show_value("NEW SET", "plan · set not named")
-        elif state.past_the_plan:
-            # **Past the end of the stint list is not "the plan did not name
-            # a compound".** An unplanned splash sets `past_the_plan` and
-            # leaves `next_tyres` and `next_compound` None, and this block
-            # said the plan had asked for a stop and not named a tyre while
-            # the block beside it said the plan does not reach this stop at
-            # all. He fits tyres nobody asked for - three seconds and a cold
-            # out-lap (CLAUDE.md 5.4).
-            self.tyre_stat.show_value("--", "past the plan")
-        elif state.has_plan:
-            self.tyre_stat.show_value("--", "plan: no compound")
-        else:
-            self.tyre_stat.show_value("--", "no plan")
+        fuel = fuel_target_block(state)
+        self.fuel_stat.show_value(fuel.value, fuel.sub)
+        tyres = tyres_block(state)
+        self.tyre_stat.show_value(tyres.value, tyres.sub)
 
         if state.out_position is None:
             # **A dash, and it says why.** The gap boxes this rests on have
@@ -1812,15 +2006,9 @@ class DriverView(QWidget):
         1.2 s up is in DRS-ish range and one 12 s up is not - and the trend
         tells him whether acting is worth it. Both at a glance, in that order.
         """
-        if gap is None or gap.seconds is None:
-            # **A dash is the expected state, not a fault.** The gap boxes
-            # these come from have never once returned a number in a real
-            # race - see `race/gaps.py` - so this says why rather than
-            # sitting blank and making him wonder what broke.
-            stat.show_value("--", "no gap read")
-            return
-        stat.show_value(f"{gap.seconds:.1f}", gap.note,
-                        urgent=gap.urgent, good=gap.good)
+        block = gap_block(gap)
+        stat.show_value(block.value, block.sub,
+                        urgent=block.urgent, good=block.good)
 
     def update_state(self, state: DriverState) -> None:
         self.states.setCurrentWidget(self.box if state.in_box else self.running)
@@ -1852,52 +2040,9 @@ class DriverView(QWidget):
         self.tcs_light.show_light(*tcs_light(state.tcs_active))
         self.last_call.show_call(state.last_call)
 
-        if state.finished:
-            self.box_stat.show_value("FLAG", RACE_OVER)
-        elif state.laps_to_box is None and state.has_plan:
-            # **A plan with no further stop is not "no plan".**
-            # `laps_to_stop()` is None exactly when `stint_ends_on_lap` is,
-            # and `_apply_stint` sets that to None on the LAST stint - so
-            # this block told him the engineer had no plan for laps 12-20 of
-            # every one-stop race, and for the whole of a zero-stop one,
-            # while `IN HAND TO THE FLAG` two blocks along was live and
-            # right. He has no reason to trust a number on a board that says
-            # nobody is planning.
-            #
-            # This is the third page this same defect has been fixed on -
-            # `_BoxPanel` carries "the board said 'no plan' while a plan was
-            # being executed" and the `finished` branch carries "'no plan' is
-            # the wrong thing to tell a man who has just finished". The words
-            # are `race/calls.py`'s, so the board and the fuel block say the
-            # same thing about the same fact (rule 13).
-            self.box_stat.show_value("--", NO_STOP_TO_COME)
-        elif state.laps_to_box is None:
-            # The same constant the fuel block beside it uses for the same
-            # fact - with no plan running both say "no plan".
-            self.box_stat.show_value("--", NO_PLAN)
-        elif state.laps_past_box is not None:
-            # **`laps_to_stop()` clamps at zero**, so a driver three laps past
-            # his box lap read "0 laps to box, box on lap 15" - the current
-            # lap, every lap, with nothing saying he was late.
-            # `RaceState.laps_overdue` carries the sign the clamp discards:
-            # 0 on the in-lap, N once N in-laps have gone by.
-            # **The tyre word survives the in-lap.** This branch is taken on
-            # the in-lap, so `_box_caption` is not called on the one lap the
-            # decision is executed - and the whole case for putting it on
-            # this block is that "fit a set" and "fuel only" ask for
-            # different in-laps and different brake balance. The voice says
-            # "Box this lap. RS on." here; the board said nothing.
-            late = ("box this lap" if state.laps_past_box <= 0 else
-                    f"{state.laps_past_box} past the box lap")
-            self.box_stat.show_value(
-                "NOW", self._tyre_clause(state, late), urgent=True)
-        else:
-            self.box_stat.show_value(
-                f"{state.laps_to_box:.0f}",
-                self._box_caption(state),
-                # **Urgent inside two laps**, which is where the number stops
-                # being background and starts being a thing to act on.
-                urgent=state.laps_to_box <= 2)
+        # The words are `box_block`'s, shared with the strip page.
+        box = box_block(state)
+        self.box_stat.show_value(box.value, box.sub, urgent=box.urgent)
 
         self._show_gap(self.ahead_stat, state.ahead)
         self._show_gap(self.behind_stat, state.behind)
@@ -1916,44 +2061,10 @@ class DriverView(QWidget):
                 f"P{state.position}",
                 f"of {state.field_size}" if state.field_size else "")
 
-    @staticmethod
-    def _tyre_clause(state: DriverState, head: str) -> str:
-        """`head` with the plan's tyre decision appended, or `head` alone.
-
-        **One expression for both captions.** The countdown and the "NOW"
-        that replaces it are the same block saying the same thing about the
-        same stop, and the decision went missing from the second because they
-        were written twice.
-
-        `· fuel only` rather than `· no tyres`: it is the box panel's own
-        word for this decision, and on the running board the pair has to be
-        told apart in the dimmest ink on the screen at 200 km/h - where
-        `no tyres` and `new set` differ only in a two-word tail.
-        """
-        if state.tyres_at_stop is False:
-            return f"{head} · fuel only"
-        if state.tyres_at_stop and state.next_compound:
-            return f"{head} · fit {state.next_compound.upper()}"
-        if state.tyres_at_stop:
-            return f"{head} · fit a set"
-        # None: the plan did not say. Silence, because "fuel only" and "the
-        # plan is quiet about it" are different answers and only one of them
-        # is a decision he can act on.
-        return head
-
-    @staticmethod
-    def _box_caption(state: DriverState) -> str:
-        """What sits under the laps-to-box figure: the lap, and the decision.
-
-        **The tyre decision moved here from the box panel**, where he could
-        only read it once he was stationary and it was already being
-        executed. "Fit RS" and "fuel only" ask for different in-laps and
-        different brake balance, and the plan has said which since before the
-        green.
-        """
-        if state.box_on_lap is None:
-            return ""
-        return DriverView._tyre_clause(state, f"plan: lap {state.box_on_lap}")
+    # Kept as names on the view for the tests that reach for them; the
+    # expressions are the module's `tyre_clause` and `box_caption`.
+    _tyre_clause = staticmethod(tyre_clause)
+    _box_caption = staticmethod(box_caption)
 
     def _show_fuel(self, state: DriverState) -> None:
         """The two in-hand figures, each against the distance it names.
@@ -1978,15 +2089,8 @@ class DriverView(QWidget):
         readings of one tank on the screen, none reconciling with the others.
         The litres live on the box panel, where the stop is priced off them.
         """
-        aboard = (None if state.laps_of_fuel is None
-                  else f"{state.laps_of_fuel:.1f} laps aboard")
-        if state.fuel_to_stop is None:
-            self.stop_stat.show_value("--", state.fuel_to_stop_why or aboard
-                                      or "not measured")
-        else:
-            self.stop_stat.show_value(
-                f"{state.fuel_to_stop:.1f}", aboard or "",
-                urgent=state.fuel_to_stop < 0)
+        stop = fuel_stop_block(state)
+        self.stop_stat.show_value(stop.value, stop.sub, urgent=stop.urgent)
 
         # **The reference first, then the burn.** The reference is the half
         # that has to survive a cut, because it is what says whether the
@@ -2033,3 +2137,9 @@ class DriverView(QWidget):
         # Width only: the top panel shares the corners' row, whose height the
         # corner grid sets, so hiding it cannot move the board's height.
         self.lap_panel_top.setVisible(racing)
+        # **Moved to the strip, not copied** - and only while a strip page is
+        # actually polling (`DriverState.strip_live`). Hiding can only shrink
+        # the laid-out minimum, so it cannot push the board off his panel.
+        on_strip = racing and state.strip_live
+        self.leading.setVisible(not on_strip)
+        self.box_stat.setVisible(not on_strip)

@@ -151,6 +151,12 @@ class Settings:
     # without this it is re-dragged every race. Checked against the screens
     # that actually exist on restore - see `DriverWindow.restore_geometry`.
     driver_board_geometry: str = ""
+    # **The strip: the quick-reference numbers as a web page** for his phone
+    # on the game monitor (15 Sep 2026), served on the local network so the
+    # phone needs no cable. Read-only - the page has no controls. See
+    # `ui/strip.py` for what it shows and `ui/strip_server.py` for how.
+    strip_enabled: bool = True
+    strip_port: int = 8765
 
     # --- push to talk
     ptt_enabled: bool = True

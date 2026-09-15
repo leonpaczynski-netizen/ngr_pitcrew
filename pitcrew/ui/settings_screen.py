@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QSpinBox,
     QVBoxLayout,
@@ -253,6 +254,25 @@ class SettingsScreen(QWidget):
             "Drag it onto the monitor you want it on and it reopens there. "
             "Escape closes it without stopping the race.")
         plate.body.addWidget(self.driver_board_enabled)
+
+        # **The phone strip, and the address to type into the phone.** The
+        # address is the one thing he needs from this screen to use it, so it
+        # is printed here rather than left in a log file.
+        self.strip_enabled = QCheckBox(
+            "Serve the phone strip on the local network")
+        self.strip_enabled.setToolTip(
+            "The quick-reference numbers - the changeable centre number, the "
+            "gaps, fuel in hand and the WET / ABS / TCS lights - as a web page "
+            "for a phone on the same Wi-Fi. Read-only: the page has no "
+            "controls. While a phone is showing it, the gaps and laps to the "
+            "stop leave the driver board; if the phone drops they come back.\n\n"
+            "Windows asks once whether to allow it through the firewall - "
+            "allow it on private networks.")
+        plate.body.addWidget(self.strip_enabled)
+        self.strip_address = QLabel("")
+        self.strip_address.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        plate.body.addWidget(self.strip_address)
 
         self.test_feed_button = MarkButton("Test the feed", compact=True)
         self.test_feed_button.setToolTip(
@@ -808,6 +828,11 @@ class SettingsScreen(QWidget):
         self.ps5_ip.setText(settings.ps5_ip)
         self.banner_enabled.setChecked(settings.banner_enabled)
         self.driver_board_enabled.setChecked(settings.driver_board_enabled)
+        self.strip_enabled.setChecked(settings.strip_enabled)
+        from pitcrew.ui.strip_server import lan_address
+        self.strip_address.setText(
+            f"On the phone, open  http://{lan_address() or 'this-pc'}:"
+            f"{settings.strip_port}/")
         self._sync_feed_source()
         self.game_version.setText(settings.game_version)
         for combo, chosen in ((self.audio_output, settings.audio_output_device),
@@ -855,6 +880,7 @@ class SettingsScreen(QWidget):
             ps5_ip=self.ps5_ip.text().strip(),
             banner_enabled=self.banner_enabled.isChecked(),
             driver_board_enabled=self.driver_board_enabled.isChecked(),
+            strip_enabled=self.strip_enabled.isChecked(),
             # `driver_board_geometry` deliberately has no line here: it has no
             # control on this screen, and the `replace` above is exactly what
             # carries such a field through untouched.
