@@ -2230,6 +2230,32 @@ class DriverView(QWidget):
         self._show_gap(self.ahead_stat, state.ahead)
         self._show_gap(self.behind_stat, state.behind)
         self._show_fuel(state)
+        self._relayout_if_the_page_changed()
+
+    def _relayout_if_the_page_changed(self) -> None:
+        """Re-measure everything once whenever a different page is showing.
+
+        **A label whose text changes while its page is hidden keeps the size
+        it had when it was last shown.** `QWidget.updateGeometry` does nothing
+        for a hidden widget, so the layouts above it hold a stale size hint -
+        and when the page comes back Qt lays it out from that. Measured on the
+        rig's fonts, 15 Sep 2026: the lap panel beside the corners came back
+        at 199 px against a 272 px `1:11.412` and drew `:11.41`. It happened
+        going from practice to a race in one app run before the phone strip
+        existed; the strip made it a mid-race event, because the phone
+        dropping swaps the race pages. So on any page or panel change the
+        whole view is invalidated once - not every tick, which would reflow
+        the board four times a second.
+        """
+        shown = (self.states.currentWidget(), self.lower.currentWidget(),
+                 self.lap_panel_top.isHidden(), self.sector_panel.isHidden())
+        if shown == getattr(self, "_shown_pages", None):
+            return
+        self._shown_pages = shown
+        for widget in (self, *self.findChildren(QWidget)):
+            if widget.layout() is not None:
+                widget.layout().invalidate()
+            widget.updateGeometry()
 
     # Kept as names on the view for the tests that reach for them; the
     # expressions are the module's `tyre_clause` and `box_caption`.

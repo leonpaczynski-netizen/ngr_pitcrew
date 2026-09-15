@@ -144,6 +144,72 @@ def test_the_sectors_show_in_practice_and_on_the_phone_page_not_the_fallback(app
     assert not view.lap_panel_top.isHidden()
 
 
+def test_a_page_that_comes_back_is_measured_again_not_drawn_clipped():
+    """15 Sep 2026: after the phone page, the fallback's lap panel came back
+    at 199 px against a 272 px lap time and drew `:11.41`. The same happened
+    going from practice to a race - a label's text changed while its page was
+    hidden, and Qt kept the old size.
+
+    **Measured on the real faces, in a subprocess**, for the reason
+    `test_the_board_fits_his_monitor_on_the_faces_he_actually_has` gives: the
+    offscreen test face is 27 px a character, the row is squeezed at 2560
+    either way, and the defect cannot be seen there at all (checked - the
+    offscreen version passed with the fix removed). Compared against a board
+    that opened on the fallback, so the claim is only that arriving at a page
+    lays it out as opening on it does.
+    """
+    import json
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    probe = textwrap.dedent("""
+        import json, sys
+        from dataclasses import replace
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtGui import QFontDatabase
+        app = QApplication([])
+        from pitcrew.ui import theme
+        theme.apply(app)
+        if not QFontDatabase.families():
+            print(json.dumps({"skip": "empty font database"})); sys.exit(0)
+        from pitcrew.ui.driver_view import DriverView
+        from pitcrew.ui.preview import sample_board
+
+        def widths(view):
+            view.resize(2560, 1080)
+            app.processEvents()
+            view.grab()
+            return [getattr(view.lap_panel_top, n).value.width()
+                    for n in ("lap", "diff", "pred")]
+
+        fallback = replace(sample_board(), strip_live=False)
+        fresh = DriverView()
+        fresh.update_state(fallback)
+        out = {"fresh": widths(fresh)}
+        for name, first in (("phone", replace(sample_board(), strip_live=True)),
+                            ("practice", sample_board(session_kind="practice"))):
+            view = DriverView()
+            view.update_state(first)
+            widths(view)
+            view.update_state(fallback)
+            out[name] = widths(view)
+        print(json.dumps(out))
+    """)
+    run = subprocess.run([sys.executable, "-c", probe],
+                         capture_output=True, text=True,
+                         cwd=str(Path(__file__).resolve().parents[2]),
+                         env={k: v for k, v in os.environ.items()
+                              if k != "QT_QPA_PLATFORM"})
+    assert run.returncode == 0, run.stderr[-2000:]
+    got = json.loads(run.stdout.strip().splitlines()[-1])
+    if "skip" in got:
+        pytest.skip(f"no real faces to measure: {got['skip']}")
+    assert got["phone"] == got["fresh"], got
+    assert got["practice"] == got["fresh"], got
+
+
 def test_the_panel_draws_what_the_words_say(app):
     view = DriverView()
     view.update_state(DriverState(session_kind="practice", sectors=SectorsView(

@@ -785,6 +785,7 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
 
     probe = textwrap.dedent("""
         import json, sys
+        from dataclasses import replace
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtGui import QFontDatabase
         app = QApplication([])
@@ -836,6 +837,16 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
             file_best_ms=599_999, reference_compound="RS", wet="wet",
             abs_setting="Weak", front_lock=True, tcs_active=True,
             temps_c={"fl": 99.0, "fr": 99.0, "rl": 99.0, "rr": 99.0}))
+        # **And the phone page** (15 Sep 2026): the fuel and position at the
+        # lead size, the lap panel above, and the sector panel beside the
+        # lights carrying its longest line - every page counts, because a
+        # stack is as tall as its tallest page.
+        from pitcrew.race.board_live import SectorsView
+        states.append(replace(states[0], strip_live=True, sectors=SectorsView(
+            times_ms=(599_999, 599_999, 599_999),
+            best_ms=(599_998, 599_998, 599_998),
+            set_best=(False, False, False),
+            cut="thirds of the lap - not GT7's", compound="RS")))
         for state in states:
             view.update_state(state)
             app.processEvents()
