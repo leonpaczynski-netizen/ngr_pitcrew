@@ -2666,3 +2666,282 @@ reopened for his call, strategy 34 unchanged.
 
 **Tonight, pooled over both sessions:** 7 of 15 flying/out laps put a wheel on the grass at the blind-left exit.
 [MEASURED, pooled, no input marker issued - CLAUDE.md 23 Aug amendment.]
+
+## 54. Per-lap targets issued to George - strategy 36 ARMED. 16 Sep 2026, race day
+
+`[DRIVER]` *"the lap time delta for each compound and fuel burn rates for George to manage me to"*.
+
+**NO SETUP CHANGE.** The plan is strategy 34's, unchanged: RM 12 -> RH 17, both stints on the 7,400
+beep, pit lap 12, 29-lap ceiling. What is new is the four lap times George judges every lap against
+and two burns re-measured off last night's race. Written as **strategy 36, approved and armed**
+(measurements 145-151; `race_knowledge` for event 11 filled the same turn).
+
+### The four targets, and where each came from
+
+| | full revs (8,500) | on the beep (7,400) | at |
+|---|---|---|---|
+| **RM** | 101.300 s `[DERIVED]` | **102.300 s** `[MEASURED]` | 46 L |
+| **RH** | 102.210 s `[MEASURED]` | **103.260 s** `[MEASURED]` | 49 L |
+
+- **RM saving** - s177 laps 17-26, free air at P1 on the current bar, n=8, sd 0.62 s. Those laps
+  shifted ~7,550, ~150 rpm above the issued beep, so on the beep it is if anything a touch quick.
+- **RH saving** - s179 laps 19-24, free air at P1, n=6, sd **0.22 s**: the tightest lap-time set on
+  file for this car and circuit.
+- **RH full revs** - s179 laps 25, 27, 28, three laps after the saving laps on the *same set*.
+  Implies a beep-to-full-revs delta of **1.05 s/lap**, which reproduces s157's within-stint 1.00 s
+  on the medium. The method validates itself here.
+- **RM full revs is the weak one.** Three readings, 0.8 s apart: 101.300 `[DERIVED]` from the saving
+  target minus the 1.00 s within-stint delta; 101.774 `[MEASURED]` racing (s159, n=9, 10 Sep);
+  100.985 `[MEASURED]` in practice (s158 laps 12-19, n=8). The derived one was passed because a
+  *within-session* delta is immune to the day-to-day pace drift that separates the other two
+  (§50: 15 Sep was looser all night on both tyres). **Three full-revs laps in tonight's practice
+  settle it.**
+- Compound gap from these four: **RH is 0.96 s/lap slower on the beep, 0.91 s at full revs.**
+  Measurement 132 put it at 1.14 s on the old rear bar.
+
+### ⛔ NO WEAR TERM ON EITHER TARGET, and that is deliberate
+
+The app's `pace_loss_s` charges **1.00 s** across the 50-90 % band. Measured on this car it is
+**+0.10 s** (RM, s177 laps 17-26, free air) and **+0.23 s** (RH, s179 laps 14-24) - and on s156 the
+curve over-charged a 94 % hard by **4.2 s** on a lap that lost nothing. Both stints tonight finish
+at 81-83 %, which is exactly where the curve is worst, so a wear term would have George calling him
+~0.8 s slow on the last third of every stint. Passed as `wear_per_lap_source: "author"` with no
+value - answered, not zeroed (rule 3). **The wear RATES are unchanged and still size the stints.**
+
+Honest caveat: within-session learning and traffic push the measured slope both ways (s177 stint 1
+gives **-0.62 s** across the band), so the real finding is that **pace loss is not resolvable on
+these laps** - not that it is zero. Measurement 151.
+
+### Burns, re-measured off s179
+
+- **Saving 5.33 L/lap** `[MEASURED]` - 19 green laps actually on the beep (7,390-7,444 rpm): RM 5.34,
+  RH 5.32. Replaces strategy 34's 5.25, which came from the 10 Sep practice pair on the **old bar**.
+  s177's 5.49 was driven 150-230 rpm above the beep, which is the whole difference.
+- **Full revs 6.86 L/lap** `[MEASURED]` - s179 laps 25/27/28, the only full-revs laps in a race on
+  this car this week and at the load band where the release actually happens. Heavier-load figures
+  are 6.75 (s159 n=10) and 6.76 (s158 n=8). The richer figure holds the beep slightly longer, the
+  safe direction after §50 (full revs from lap 25 would have run dry on a 29-lap race).
+- **Saving costs 1.00-1.05 s/lap and buys 1.53 L/lap.**
+
+### Replayed against the two race sims before arming
+
+s179 free air at P1, laps 19-25 and 27: delta **within +/-0.06 s** every lap, saving and full revs
+alike, burn within 0.03 L. Traffic laps read correctly slow (lap 2 from P17: +3.1 s). s177 free-air
+stint 2 median +0.1 s; its burn reads +0.1 to +0.3 L over, which is the session shifting above the
+beep showing up exactly as it should.
+
+## 55. Open predictions from §54
+
+| Prediction | Falsified if |
+|---|---|
+| In free air on the beep he runs within 0.3 s of 102.30 (RM) and 103.26 (RH) | he is consistently more than 0.5 s either side with no traffic and no incident |
+| The hard's target holds flat to the flag with no wear term | his clean hard laps drift more than 0.5 s slower over the stint |
+| Saving burns 5.33 +/- 0.10 L/lap on the 7,400 beep | two clean saving laps come in outside 5.2-5.45 |
+| RM at full revs lands nearer 101.3 than 101.8 | three clean full-revs medium laps median 101.7 or slower |
+
+## 56. Rank zero CLOSED and the compound order CLOSED - 16 Sep 2026, before the lunchtime sim
+
+`[DRIVER]` *"settings haven't changed bb +1"* · *"RM to RH"* · *"I am doing another full race sim at lunch today"*
+
+- **Rank zero 1a answered.** No value has moved since the s177 settings-screen photograph (§48),
+  and brake balance is **+1**. That photo plus his confirmation is the ground truth for tonight;
+  no new screenshot needed unless something moves. Rank zero 1b (FFB after 1.71) was closed 5 Sep.
+- **§51 and §53 CLOSED: medium first.** He has taken RM 12 -> RH 17. §53's falsifier - *"a practised
+  swap still produces an off on the hard"* - fired on s180, and it is recorded as fired; his call
+  stands over it, and the reason it survives is §51's arithmetic, which the falsifier does not
+  touch: a hard-first opening stint is tank-capped at 17 laps, which forces the medium to 12 at the
+  flag with one lap left before its cliff. **Strategy 36 is the plan, unchanged.**
+- **The lunchtime sim is the falsification run for §55.** Run on the Race screen so strategy 36 arms
+  and George calls the targets; every one of §55's four predictions is scored by it.
+
+### ⚠️ What the sim cannot answer, and one thing to check before the green
+
+- **It cannot produce a full-revs MEDIUM lap.** George holds the saving beep to the stop on a
+  fuel-save stint, so stint 1 will be entirely on the beep. §54's weak figure (RM at full revs,
+  three readings 0.8 s apart) therefore stays open unless a separate 4-lap run is driven - and it is
+  only ever used if the medium becomes the run to the flag, so it is a contingency number, not a
+  race number.
+- **It will add n to the HARD at full revs for free**, because George releases the beep on the run to
+  the flag. Present n is 3.
+- **⚠️ THE GAME CLOCK IS UNVERIFIED FOR THE RACE.** Both race sims greened at in-game **17:33** and
+  ran to the 21:00 pin (s177, s179 - `tod_start_ms`). The event row says **19:22**, `clock_source`
+  `typed`, and the hub publishes no start time at all for this round - only
+  `variableTimeSpeedRate: 6`, which matches. So **every target on file was measured from a 17:33
+  green.** If the league lobby greens at 19:22 the whole race runs about two hours later in game
+  than anything measured, and his *"the hard feels slippery into the cold in the evening"* (§50)
+  would land on the entire race rather than its last third. **Asked.** Because `clock_source` is
+  `typed`, `record_measured_clock` will never overwrite it from the feed - the latch
+  `hub/calendar.py` names. App work if it needs clearing, not car work.
+
+# Session 183 - 29-lap race sim on strategy 36, 16 Sep 2026 lunchtime. **WON IT, P1.** Race day.
+
+**Rank zero:** `[DRIVER]` nothing moved since the s177 screen; `bb` **+1** (§56). Gearbox by FEED unchanged.
+
+## 57. Debrief - the targets held, the fill did not, and TCS 3 cost nothing
+
+`[DRIVER]` *"still too much fuel advised"* · *"had to go to TCS 3 at end of race"*
+
+P10 -> P1 from lap 6, stop end of lap 12, P20 -> P1 by lap 16, lap 25 spin to P3, back to **P1 at the
+flag**. 29 laps - the ceiling ran. Measurements 153-162; **strategy 37 written and armed** off it.
+
+### ⛔ The fill: 6 L over, and the cause is in the app, not the plan
+
+George, lap 12: *"Fuel to 97 litres. 17 laps after the box, **at the practice burn**."* Seventeen laps
+at the measured beep burn is **91.2 L**. He asked for 97: **6 L, and therefore ~6 s standing at the
+pump** at 1.00 L/s. **Identical to s179's 97 L, and now the cause is known.**
+
+`ExpectationTracker.note_lap` flags any lap carrying `short_shift_rpm` as a saving lap and `_clean()`
+drops it - correct for a one-off engineer instruction, which is what it was written for. But since
+the `fuel_save` plan field a whole stint declares the beep, and then **every lap carries it**: 500.0
+on all 29 laps here, including laps 27-29 which he drove at full revs. So `green_laps()` never
+reaches `BURN_LAPS_NEEDED`, **`"burn installed on lap N"` logged ZERO times**, and
+`state.fuel_per_lap_l` held practice's ~5.586 for the whole race. Every fuel sentence rested on it.
+
+⇒ **CLAUDE.md rule 10 again**: a filter that on this class of plan can never be satisfied, failing
+silently - the only clue in the whole race was four words inside one spoken call. App work, filed.
+
+**What he actually drove, and why 97 was not punished:** laps 13-26 on the beep burned **5.346**
+L/lap; laps 27-29 at full revs burned **6.865**. He finished on **1.07 L**. The 6 L of over-fill was
+spent on a full-revs endgame he chose after the lap-25 spin - so it was used, not wasted, but by
+accident rather than by plan. **The arithmetic says do not plan it:** 3 full-revs laps cost
+3 x 1.52 = **4.5 L = 4.5 s at the pump** and buy 3 x 0.835 = **2.5 s on track**. Net **-2 s**.
+Strategy 37 therefore fills stint 2 to **93 L** and stays on the beep.
+
+### ✅ The targets held. The hard's apparent 0.9 s is off-track time, not pace
+
+| | scored against strategy 36 | |
+|---|---|---|
+| RM saving | **+0.30 s** median, n=10 | §55 row 1 **HELD** |
+| RH saving, all green | +0.92 s median, n=14 | looks falsified |
+| RH saving, **no wheel off the road** | **+0.15 s**, n=5 | §55 row 1 **HELD** |
+| burn on the beep | RM 5.421, RH 5.370 against a 5.33 target | §55 row 3 **HELD** |
+| flat target, no wear term | hard's clean laps did not drift over 13 laps | §55 row 2 **HELD** |
+
+**The hard stint spent 14.15 s off the road over 16 laps, against 2.37 s over 10 medium laps**, and
+13 of the race's 27 excursions fall in the 3,550-3,850 m band - the blind left and its approach.
+That corner is still where the road position goes. Pooled; no input marker issued.
+
+Targets re-derived pooled over all three race sims and re-issued as **strategy 37**: RM
+**102.370** saving / 101.535 full at 52 L; RH **103.387** saving / **102.552** full at 50 L; burns
+**5.365** on the beep and **6.88** at full revs. §54's weak figure is now bracketed by its two direct
+readings (101.00 practice, 101.79 racing) where it was not before.
+
+### ✅ TCS 3 cost nothing - and it does not protect against what actually bit him
+
+TCS 3 from lap 25 is **visible in the feed**: flag bit 11 on 6.8-9.2 % of moving frames against
+0.1-1.9 % on TCS 1 (measurement 159). His report is corroborated - **exit wheelspin rose 4.71 %
+(lap 14) to 8.40 % (lap 24)** across the hard stint against 3.23-6.10 % on the medium, with the
+rear-right surface up 69.5 -> 76.4 degC. Endogenous with wear and temperature; the s183 wear gauge
+FAILED (read 1.00 on laps 1-4 of a fresh medium, then nothing), so it ties to no wear number.
+
+**Cost:** 2nd/3rd full-throttle 80-160 km/h gave **5.43 m/s2 on TCS 3 against 5.08 on TCS 1, on an
+older tyre**. Raw that is 2.9x the 0.125 lap-to-lap floor - but the TCS 1 laps rise +0.033/lap on
+their own, and once that trend is carried forward the residual is +0.11, **inside the floor**.
+⇒ **TCS 3 cost no acceleration.** Any gain is not resolvable. Same direction as measurement 137.
+
+### ⚠️ The lap-25 spin was NOT the blind left, and it is the same input as s179 L18
+
+At ~700 m, the left after the opening right. Throttle **77 -> 9 -> 2 -> 1 %** while the steering ran
+to -61.7 deg; **yaw reversed and doubled on the lift** (+0.234 -> -0.775, lat g 2.75), then all four
+onto the grass at 711 m, spin to a stop, U-turn, rejoin. P1 -> P3, 11.1 s.
+
+s179 L18, at 3,700 m: throttle 89 -> 81 -> **14 %** at ~55 deg lock, yaw doubled on the lift, off.
+**Two of the three largest losses on file are the same thing at two different corners: an
+off-throttle rear release at high lock.** So the failure mode is **the lift, not the corner** - and
+**TCS cannot act on a closed throttle**, which is why TCS 3 did not stop it and will not tonight.
+
+**No setup change.** One mechanism, two instances, seven hours before a race is not a basis for
+moving a slider. The coast side of the diff (`lsd_b`) is the direct lever and has never been swept
+on this car; the LSD sweep is already open in the ledger. **Offered for after the race.**
+
+## 58. Open predictions from §57
+
+| Prediction | Falsified if |
+|---|---|
+| Filling stint 2 to 93 L reaches the flag with 1-2 L in hand on the beep | he finishes under 0.5 L or over 4 L with no full-revs laps |
+| George says ~97 L again at tonight's stop, from the practice burn | he says 91-93, or the log carries "burn installed on lap N" |
+| Free air on the beep lands within 0.3 s of 102.370 (RM) and 103.387 (RH) | consistently more than 0.5 s either side, clean and unimpeded |
+| The next big loss is an off-throttle rear release at high lock, wherever it happens | it is a braking lock-up, or a mid-corner slide with throttle applied |
+
+## 59. 6th gear - ISSUED 1.348 -> 1.318, for the tow, NOT for the fuel. 16 Sep 2026, race day
+
+`[DRIVER]` *"6th gear is close to revving out I want to lengthen it to reduce fuel burn more"*
+
+**Rank zero, FEED:** ratios byte-identical to 9 Sep - 3.041 / 2.329 / 1.900 / 1.621 / 1.446 /
+**1.348**, `top` 240, final 3.050. Nothing has moved; he has got quicker on the same box.
+
+### His premise is confirmed, and it belongs to ONE stint (measurement 164)
+
+| | 6th top rpm, s183 | 6th top speed | headroom to the cut |
+|---|---|---|---|
+| **Medium**, free air (L6-11) | 8,390-8,439 | 268.3-269.5 km/h | **7.5 km/h** |
+| Medium, in traffic (L3) | 8,491 | 271.4 km/h | 5.1 km/h |
+| **Hard** (L14-26) | 8,083-8,332 | ~258-266 km/h | 10-18 km/h |
+
+Cut ~8,515-8,589 (this session's own limiter frames, gears 1-5); 6th tops at **276.5 km/h**.
+**Zero limiter frames in 6th all race.** The Rev F box was cut for ~11 km/h of tow headroom
+(ledger 3a, 9 Sep) and **that intent is no longer met on the medium** - 7.5 km/h and falling as he
+improves. The race runs `slipstream: REALISTIC` in a 26-car field of identical cars.
+
+### ⛔ The FUEL case does not survive its own arithmetic
+
+6th burns **27.1 % of the race's fuel in 18.0 % of the lap time** (measurement 165) - 1.5x its share,
+because it is 95 % full throttle. So it is the right gear to attack. But:
+
+- **Peak power is at or above the cut** (measurement 166): a x v at WOT, drag-corrected by matching
+  the same rpm across gears 3/4/5/6, still RISES to 8,375 rpm in 3rd. **There is no power band above
+  his terminal.** Every metre of lengthening moves terminal DOWN the curve.
+- **The obvious curve is a trap** (measurement 167): fuel rate in 6th runs 0.064 L/s at 7,125 rpm to
+  0.112 at 8,375 - but in a fixed gear rpm and road speed are locked, so that slope is drag as much
+  as fuel flow. Lengthening changes rpm at a given speed and does **not** change the drag. Reading
+  the saving off it would overstate it by an unknown factor.
+- **The prize, sized honestly.** A 4-5 % lengthening is worth about 1.8 L over the race = **1.8 s at
+  the pump**, one-off. It costs perhaps 0.1-0.15 s/lap of drive - which over 29 laps is **3-4 s**.
+  ⇒ **net loss**, and I cannot size the lap-time half from anything on file. `unmeasurable_because`
+  no ratio A/B has ever been driven on this car.
+
+### What is issued, and why 1.318
+
+**6th: 1.348 -> 1.318** (-2.2 %). Nothing else moves - not `top`, not the final drive, not gears 1-5.
+
+- 6th at the cut: 276.5 -> **282.8 km/h**. Tow headroom on the medium 7.5 -> **13.8 km/h**, back past
+  the box's own design intent.
+- Cost: rpm at 269 km/h falls 8,421 -> 8,233; power there 249.3 -> 247.9, **-0.55 %**. Terminal
+  falls about **0.5 km/h** `[DERIVED]`. Below anything he can feel and below the 0.56-2.77 km/h
+  terminal floor on this project.
+- Fuel: about **1 L over the race** `[DERIVED]`, a side effect, not the reason.
+- 5->6 landing on the saving beep: 6,899 -> 6,742 rpm. Still on the strong part of the curve.
+
+**⚠️ THE SHIFT TABLE DOES NOT CHANGE, and here is why rather than "it is fine".** 6th is silent
+because there is no 6->7 to cue, and lengthening 6th cannot change that. It does deepen the 5->6
+drop, which moves the optimal 5->6 upshift LATER - but the performance table already has 5->6 at
+**8,500, the limiter**, so it cannot move later. `shift_points` id 1 stands, both columns, unchanged.
+
+### Prediction and falsifier
+
+**Predicts:** zero limiter frames in 6th all race including behind a car; free-air terminal within
+1 km/h of 269 on the medium; burn 0.02-0.05 L/lap lighter on matched laps.
+**Falsified if:** terminal drops more than 1.5 km/h, or he reports the car going soft onto the
+straight, or 6th tops below 8,000 rpm in free air on the medium - then it goes straight back to 1.348.
+
+**VERIFY BEFORE THE GREEN:** `fitted_ratios` off his first practice lap must read
+3.041 / 2.329 / 1.900 / 1.621 / 1.446 / **1.318** with gears 1-5 untouched. GT7's gear sliders can
+drag their neighbours; the feed is the only honest check and it is the one setup value it can make.
+
+### §59 CONFIRMED BY SCREEN - 16 Sep 2026, before/after photographs of Manual Adjustment
+
+**ISSUED -> SCREEN.** Both screens read: `top` 240, Final **3.050**, and
+1st **3.041**/122 · 2nd **2.329**/160 · 3rd **1.900**/196 · 4th **1.621**/230 · 5th **1.446**/257,
+with 6th **1.348 -> 1.318**. **Gears 1-5 and the final drive did not move** - the thing that had to
+be checked, because GT7's gear sliders can drag their neighbours. PP 746.59 on both, unchanged by
+the ratio (and matching §52's SCREEN). Power 509 BHP / weight 1,243 kg = the round's limits exactly.
+
+**The x1.060 sixth-row anomaly reproduced on both boxes**, which is an independent check that the
+screens are being read correctly: gears 1-5 mean `K = speed x ratio x final` = **1,134.9**
+(spread 5.6; the 5 Sep record is 1,134.5, spread 4.2), while 6th implies 1,200.5 before
+(**x1.0578**) and 1,202.0 after (**x1.0591**) against the recorded x1.0601 / x1.0597.
+
+⇒ **The screen's 299 km/h is not the top of 6th.** Computed from the ratio, as §"Gearbox CONFIRMED"
+says to: **276.0 -> 282.3 km/h at 8,500 rpm, +6.3.** Against today's free-air medium terminal of
+269.0 km/h that is **7.0 -> 13.3 km/h of tow headroom**, and rpm at 269 km/h falls 8,421 -> 8,234.
+Both land inside the §59 prediction (282.8 km/h, 13.8 km/h, 8,233 rpm).
