@@ -5123,6 +5123,13 @@ class PitCrewController(QObject):
         here = circuit_key_for(event)
         table = self.store.shift_points_for(event["car_name"] or "", here)
         self.bridge.set_issued_shift_points(table)
+        # **And the race gets the same table**, because the two columns it
+        # carries are how the burn is told apart afterwards: which one he
+        # actually drove is the midpoint between them, read off the frames.
+        # Without it the race falls back to the app own switch, which since
+        # the `fuel_save` stint is on for every lap and says nothing.
+        if self.race is not None:
+            self.race.note_shift_columns(table)
         self._splits.new_session()
         # **Cleared before the board opens, which it does on the grid.**
         # CLAUDE.md rule 11: anything cached across a session boundary is read

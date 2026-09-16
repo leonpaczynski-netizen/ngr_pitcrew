@@ -43,7 +43,11 @@ from pitcrew.race.calls import (
 )
 from pitcrew.race.clock import RaceClock
 from pitcrew.race.composure import Composure
-from pitcrew.race.expectations import ExpectationTracker
+from pitcrew.race.expectations import (
+    FUEL_BASIS_COLUMN,
+    FUEL_BASIS_COLUMN_HIGHER,
+    ExpectationTracker,
+)
 from pitcrew.race.news import RaceNews
 from pitcrew.store.tyres import gap_association_for
 from pitcrew.strategy.model import PIT_LOSS_MEASURED_EX_FUEL
@@ -311,6 +315,11 @@ class RaceCoordinator:
         # (CLAUDE.md rule 11).
         self._mode_burns: dict[bool, list[float]] = {True: [], False: []}
         self._mode_at_lap_start: bool | None = None
+        # **The upshift rpm that separates the beep two columns**, from the
+        # issued table via `note_shift_columns`. None until it is handed over,
+        # and the column a lap was driven on is then read off the app own
+        # switch instead - see `_lap_column`.
+        self._column_rpm: float | None = None
         # **The bounds the engineer at the desk set on the engineer in the
         # car.** Empty for a plan the app wrote itself, and empty is not the
         # same as absent: see `_may`.
@@ -378,7 +387,8 @@ class RaceCoordinator:
             planned_fuel_per_lap_l=self.planned_fuel_per_lap_l,
             planned_wear_per_lap=wear_per_lap,
             practice_lap_samples=practice_lap_samples,
-            practice_fuel_samples=practice_fuel_samples)
+            practice_fuel_samples=practice_fuel_samples,
+            planned_burns=self._planned_burns)
         self._apply_stint(0)
         # **GT7's own lap counter at the last crossing the app recorded.**
         # None until the first crossing under green. See `note_packet`.
@@ -563,6 +573,7 @@ class RaceCoordinator:
             self.state.fuel_save_planned = planned
             if planned != self.state.fuel_save_engaged:
                 self.state.fuel_save_engaged = planned
+                self.expect.set_column(planned)
                 self.state.fuel_mode_change = (
                     self.state.lap, planned, FUEL_MODE_PLANNED, None)
                 log("race").info("stint %d: beep on its %s points, as the "
@@ -682,6 +693,14 @@ class RaceCoordinator:
         if history is None:
             history = self._driving = []
         history.append((int(lap_num), read))
+        # **The column, corrected where this read arrived after the crossing.**
+        # `_on_lap` and this both run on the Qt thread off two signals emitted
+        # in order, so the read is normally already here - but a lap whose
+        # frames were short has none, and a rule that only holds in the
+        # expected order is a rule that fails silently in the other one.
+        column = self._measured_column(int(lap_num))
+        if column is not None:
+            self.expect.revise_lap_column(int(lap_num), column)
         change = saving_change(history)
         if change is None or change.lap == getattr(self, "_saving_change_lap", None):
             return
@@ -930,7 +949,8 @@ class RaceCoordinator:
         self._dropped_before_lap = self.clock.laps_dropped
         self.clock.note_lap(lap.lap_time_ms, is_pit_lap=bool(lap.is_pit_lap),
                             lap_num=lap.lap_num)
-        self.expect.note_lap(lap)
+        column, off_reference = self._lap_column(lap)
+        self.expect.note_lap(lap, column=column, off_reference=off_reference)
         if (lap.lap_time_ms > 0 and not lap.is_pit_lap
                 and not lap.is_out_lap):
             # Driving, not the box: what `projected_lap_ms` may average.
@@ -956,7 +976,16 @@ class RaceCoordinator:
         # while the stint about to be run burned 8% more. The fill and every
         # "vs plan" sentence size the laps AHEAD, and those are this stint's.
         green, burn_laps, basis = self.expect.current_fuel_basis()
-        if green is not None and self.expect.green_laps() >= self.BURN_LAPS_NEEDED:
+        # **The two column bases carry their own gate, and `green_laps()` is
+        # not it.** It counts the column being driven now, which by
+        # construction has too few laps in exactly the case those two bases
+        # exist for: the laps after George moves the beep, when the burn has
+        # just stepped 30% and a stale figure does the most damage. Both are
+        # priced off `RACE_BURN_LAPS` laps of the other column, and the
+        # `_HIGHER` one off that or more of this one.
+        enough = (self.expect.green_laps() >= self.BURN_LAPS_NEEDED
+                  or basis in (FUEL_BASIS_COLUMN, FUEL_BASIS_COLUMN_HIGHER))
+        if green is not None and enough:
             if (green != self.state.fuel_per_lap_l
                     or basis != self.state.fuel_burn_basis):
                 # **Logged on accept** (rule 10): the burn every fuel call
@@ -964,6 +993,7 @@ class RaceCoordinator:
                 log("race").info("burn installed on lap %s: %.3f L/lap over "
                                  "%d laps of %s", lap.lap_num, green,
                                  burn_laps, basis)
+            self.state.fuel_burn_why = None
             self.state.fuel_per_lap_l = green
             # How many laps the band in `calls.fuel_verdict` is a projection
             # off, and whether they are this stint's yet.
@@ -976,6 +1006,14 @@ class RaceCoordinator:
             # the same terms as the rate - this race's own laps, or nothing.
             self.state.fuel_reference_load_l = (
                 self.expect.current_fuel_reference_load_l())
+        else:
+            # **And logged on refusal too, once per reason** (rule 10). The
+            # Sardegna race that started this ran 29 laps on a practice burn
+            # and the only clue anywhere was the words "at the practice burn"
+            # inside one spoken fill call - `fuel_burn_basis` stayed None all
+            # night and nothing said why. A refusal that never appears is a
+            # silent filter, and a silent filter is the defect.
+            self._refuse_the_burn(lap, green)
         # **And the scatter beside it, because the scatter sizes the fill.**
         # Installed on the same terms as the rate: this race's own laps, or
         # nothing. Where it is None the fill falls back to CLAUDE.md's flat
@@ -2355,6 +2393,98 @@ class RaceCoordinator:
             return asked
         return FUEL_MODE_DROP_RPM if engaged else None
 
+    def note_shift_columns(self, table) -> None:
+        """The issued upshift table, for reading which column he actually drove.
+
+        The threshold is the midpoint of the two issued columns - for this car
+        at Sardegna, performance 8500 and saving 7400, so 7950. **Derived from
+        the table that is in the car**, never a constant: the columns are cut
+        for the gearbox, and a number carried over from another box would sort
+        laps into the wrong population silently.
+
+        None, or a table missing either column, leaves the classifier on the
+        app's own switch, which is what it had before.
+        """
+        self._column_rpm = None
+        perf = [float(r) for r in (getattr(table, "performance", None)
+                                   or {}).values()]
+        save = [float(r) for r in (getattr(table, "fuel_saving", None)
+                                   or {}).values()]
+        if not perf or not save:
+            return
+        from statistics import median
+
+        high, low = median(perf), median(save)
+        if low >= high:
+            return
+        self._column_rpm = (high + low) / 2.0
+        log("race").info(
+            "beep columns read off the issued table: below %.0f rpm is the "
+            "saving column, above it is full revs", self._column_rpm)
+
+    def _measured_column(self, lap_num: int) -> bool | None:
+        """Which column he ACTUALLY drove that lap, off the frames, or None.
+
+        **Never the app's own switch.** `laps.short_shift_rpm` records that
+        the beep was on its saving points, and since the plan gained a
+        `fuel_save` stint that is every lap of the race - 500.0 on all 29 of
+        Sardegna session 183, including laps 27-29 which he drove at full revs
+        off his own fuel readout while the beep sat on its saving column.
+        `analysis/driving.py` says it in as many words: what he actually did is
+        `upshift_rpm`, measured off the frames.
+
+        Measured across sessions 177, 179 and 183: 68 saving laps between 7364
+        and 7877 rpm burning 5.396 L/lap, 9 full-revs laps between 7979 and
+        8442 burning 6.859, and the midpoint of the issued table sorts every
+        one of them correctly.
+        """
+        if self._column_rpm is None:
+            return None
+        for num, read in reversed(getattr(self, "_driving", None) or ()):
+            if num == lap_num:
+                rpm = getattr(read, "upshift_rpm", None)
+                return None if rpm is None else float(rpm) < self._column_rpm
+        return None
+
+    def _lap_column(self, lap) -> tuple[bool | None, bool]:
+        """`(the beep column this lap was driven on, off-reference?)`.
+
+        **A stint the plan declares fuel-save is how this race is being
+        driven, not an order given during it** - and its laps are the only
+        evidence there is about what that column burns. Excluding them, which
+        is what the `short_shift_rpm` test did, emptied every population here
+        for the whole of Sardegna session 183 and left all 29 laps of fuel
+        calls resting on the practice figure.
+
+        So where the plan runs the beep, the lap is filed under the column he
+        drove and nothing is excluded for being a saving lap - a saving lap is
+        exactly the evidence about the saving column. The column is the
+        measured one wherever the frames can say (`_measured_column`);
+        otherwise the one the app asked for, and then the old suspicions
+        stand: a lap that changed column part way, or one whose beep
+        disagreed with the plan, is a clean sample of neither.
+
+        `(None, ...)` where the plan does not run the beep. Nothing changes
+        there at all: one column, and a lap under a one-off short-shift
+        instruction is evidence about the instruction, exactly as before.
+
+        **Read before `_note_mode_burn` moves the latch**, so that
+        `_mode_at_lap_start` is still the column this lap STARTED on.
+        """
+        instructed = bool(getattr(lap, "short_shift_rpm", None))
+        engaged = self.state.fuel_save_engaged
+        if engaged is None:
+            return None, instructed
+        measured = self._measured_column(int(lap.lap_num))
+        if measured is not None:
+            return measured, False
+        before = self._mode_at_lap_start
+        if before is not None and before != engaged:
+            return engaged, True
+        # The beep disagreeing with the plan's column is a one-off order -
+        # a call that named its own drop, or one that released the beep.
+        return engaged, instructed is not bool(engaged)
+
     def _lap_is_saving(self, lap) -> bool | None:
         """Whether this lap was driven on the fuel-saving beep, or None where
         it changed column during the lap.
@@ -2481,6 +2611,10 @@ class RaceCoordinator:
         if why is None or engaged is None:
             return
         self.state.fuel_save_engaged = engaged
+        # **And the burn moves with it, on this crossing.** The laps ahead are
+        # the new column's, and the old column's rate is 30% away from what
+        # they will burn - see `ExpectationTracker.set_column`.
+        self.expect.set_column(engaged)
         self.state.fuel_mode_change = (self.state.lap, engaged, why, litres)
         log("race").info(
             "lap %s: beep to its %s points (%s%s) - burns save %s, full %s "
@@ -2755,6 +2889,41 @@ class RaceCoordinator:
             state.next_compound = None
             state.next_tyres = None
         return call
+
+    def _refuse_the_burn(self, lap, green: float | None) -> None:
+        """Say once why this race's own burn is not sizing the fuel calls.
+
+        Sets `RaceState.fuel_burn_why` - read by the fill wording and by the
+        post-race audit - and logs the same sentence the first time it is
+        true. Re-logged when the reason changes, never on every crossing.
+        """
+        laps = self.expect.green_laps()
+        column = self.state.fuel_save_engaged
+        on = ("" if column is None else
+              " on the %s column" % ("fuel-saving" if column else "full-revs"))
+        if green is None:
+            why = f"no green lap has reported a burn{on}"
+        else:
+            why = (f"{laps} green lap{'' if laps == 1 else 's'}{on}, "
+                   f"{self.BURN_LAPS_NEEDED} needed")
+        # **What the fuel calls are ACTUALLY resting on** - which after an
+        # earlier install is that figure and not practice. Saying "stays on
+        # the practice burn" beside a `fuel_burn_basis` that names a race
+        # figure is two fields disagreeing about one number, which is the
+        # shape rule 12 is about.
+        held = self.state.fuel_per_lap_l
+        basis = self.state.fuel_burn_basis
+        if basis is not None and held:
+            why += f" - fuel calls stay on {basis}, {held:.3f} L/lap"
+        elif self.planned_fuel_per_lap_l:
+            why += (f" - fuel calls stay on the practice burn "
+                    f"{self.planned_fuel_per_lap_l:.3f} L/lap")
+        else:
+            why += " - and there is no practice burn either"
+        if why == self.state.fuel_burn_why:
+            return
+        self.state.fuel_burn_why = why
+        log("race").info("no race burn on lap %s: %s", lap.lap_num, why)
 
     def observed_fuel_per_lap(self) -> float | None:
         """The race's own burn, or None before enough green laps exist.
