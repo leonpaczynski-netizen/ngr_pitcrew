@@ -2945,3 +2945,17 @@ screens are being read correctly: gears 1-5 mean `K = speed x ratio x final` = *
 says to: **276.0 -> 282.3 km/h at 8,500 rpm, +6.3.** Against today's free-air medium terminal of
 269.0 km/h that is **7.0 -> 13.3 km/h of tow headroom**, and rpm at 269 km/h falls 8,421 -> 8,234.
 Both land inside the §59 prediction (282.8 km/h, 13.8 km/h, 8,233 rpm).
+
+## 60. Rd 9 race debrief (s188, 16 Sep; debriefed 17 Sep 2026) - nothing in the car moves
+
+**Nothing on the sheet changes.** Rank zero stands at §59's SCREEN. Ledger 3f carries the rows.
+
+- ⛔ **Dry at the flag.** George: *"Fuel to 89 litres. 17 laps after the box, at this race's burn."*
+  Strategy 37 said 93 L. Tank 88.1 L at L13, race burn 5.21 L/lap, **0.00 L from ~4,976 m of L29**,
+  coasted 245 -> 228 km/h to the line (~0.3 s, no place). "Fuel good to the flag" was said every lap
+  from L14 to L28 on a margin of about nothing. The b51f680 fix installed the race burn and the fill
+  lost its spare litres with it. App work (measurement 168).
+- **Plan held:** RM 12 -> RH 17 as planned, stop 24.3 s ex-fuel, pace RM +0.17 / RH -0.42 s on target.
+- **Race craft:** four places lost up the inside of left-handers off a tow (measurement 170); Rocky
+  closed ~0.9 s/lap from L16 and a catch on lap 25-26 was projectable from L20 (measurement 169).
+- **6th gear:** limiter never touched; terminal speed confounded by wind - unresolvable (measurement 171).
