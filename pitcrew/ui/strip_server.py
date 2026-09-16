@@ -43,6 +43,20 @@ LIVE_WITHIN_S = 2.0
 
 PAGE = Path(__file__).with_name("strip.html")
 
+# **What the home screen needs, beside the page** (16 Sep 2026). Installed as
+# a PWA the page had no icon at all - iOS falls back to a screenshot, which
+# here is a black rectangle - so the manifest and the icons are served from
+# the same folder the page is. Cut from `icon-src.png` by
+# `tools/make_icons.py`; a missing one is logged and 404s rather than
+# stopping the strip, which is the thing he actually races with.
+STATIC = {
+    "/manifest.webmanifest": ("strip.webmanifest",
+                              "application/manifest+json"),
+    "/icon-180.png": ("icon-180.png", "image/png"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+}
+
 
 class _Server(ThreadingHTTPServer):
     """**No address reuse.** `HTTPServer` turns SO_REUSEADDR on, and on
@@ -108,6 +122,15 @@ class StripServer:
         except OSError as exc:
             log("ui").error("the strip page is missing (%s): %s", PAGE, exc)
             return False
+        # Read once, like the page: these change when the icons are re-cut,
+        # which is a restart either way.
+        assets: dict[str, tuple[bytes, str]] = {}
+        for route, (name, kind) in STATIC.items():
+            try:
+                assets[route] = (PAGE.with_name(name).read_bytes(), kind)
+            except OSError as exc:
+                log("ui").error("the strip is missing %s: %s - the phone's "
+                                "home-screen icon will not load", name, exc)
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -115,6 +138,9 @@ class StripServer:
                 path = self.path.split("?", 1)[0]
                 if path in ("/", "/strip"):
                     self._send(200, "text/html; charset=utf-8", page)
+                elif path in assets:
+                    body, kind = assets[path]
+                    self._send(200, kind, body)
                 elif path == "/strip/state":
                     body = server._answer(self.client_address[0])
                     self._send(200, "application/json", body)

@@ -8,6 +8,15 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Pit Crew">
 <meta name="theme-color" content="#0C0B09">
+<!-- **The home-screen icon** (the driver, 16 Sep 2026, having installed the
+     page as a PWA). Without these iOS uses a screenshot of the page, which
+     on this page is a black rectangle. `apple-touch-icon` is the one iOS
+     reads; the manifest is what Android and Chrome read. Both are served by
+     `strip_server` from `pitcrew/ui/`, cut from `icon-src.png` by
+     `tools/make_icons.py`. -->
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>Pit Crew strip</title>
 <!--
   The strip page. A dumb renderer on purpose: every word, number and tone on
