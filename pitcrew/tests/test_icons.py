@@ -58,14 +58,16 @@ def test_the_largest_frame_is_png_because_a_256_bmp_is_a_quarter_megabyte():
     assert dict(frames())[256] == "PNG"
 
 
-def test_the_small_frames_drop_the_lettering():
-    """"PIT CREW" is a grey smudge at 16 px, so the small frames carry the
-    headset and the arc alone - `make_icons.mark()`. The two cuts differ,
-    which is the whole reason an `.ico` holds art per size."""
+def test_the_small_frames_are_the_silhouette_not_the_photograph():
+    """**A photograph is not an icon at 24 px.** Cropping the artwork to the
+    headset was tried and the taskbar drew a dark smudge - the chrome, the
+    arc's gradient and the flag's checks are all under a pixel there. The
+    small frames carry `make_icons.silhouette()`; 48 and up carry the
+    artwork, which is the whole reason an `.ico` holds art per size."""
     pytest.importorskip("PIL")
     from PIL import Image
 
-    from tools.make_icons import TEXT_FROM_SIZE, lockup, mark
+    from tools.make_icons import TEXT_FROM_SIZE, lockup, silhouette
 
     small, large = Image.open(ICON), Image.open(ICON)
     small.size = (32, 32)
@@ -77,8 +79,8 @@ def test_the_small_frames_drop_the_lettering():
         a, b = a.convert("RGB").resize((32, 32)), b.convert("RGB").resize((32, 32))
         return sum(abs(x - y) for x, y in zip(a.tobytes(), b.tobytes()))
 
-    assert close(small, mark()) < close(small, lockup())
-    assert close(large, lockup()) < close(large, mark())
+    assert close(small, silhouette()) < close(small, lockup())
+    assert close(large, lockup()) < close(large, silhouette())
     assert TEXT_FROM_SIZE == 48
 
 

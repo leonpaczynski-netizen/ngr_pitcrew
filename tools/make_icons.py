@@ -32,6 +32,8 @@ PWA_DIR = ROOT / "pitcrew" / "ui"
 # The ground the art was drawn on, and the board's own black behind anything
 # transparent - so a rounded phone icon and a Windows tile show one colour.
 GROUND = (5, 6, 10)
+# The artwork's own green, for the small-size silhouette.
+LIME = "#8BE33C"
 
 # Where the lettering starts, as a fraction of the artwork's height. The
 # headset and the arc live above it; the bar and "PIT CREW" below.
@@ -60,6 +62,38 @@ def lockup(source: Path = SOURCE) -> Image.Image:
     return _square(Image.open(source))
 
 
+def silhouette() -> Image.Image:
+    """The headset as a solid shape, for the frames Windows draws small.
+
+    **A photograph is not an icon at 24 px.** Cropping the artwork to the
+    headset was tried first and the taskbar showed a dark smudge: the chrome,
+    the arc's gradient and the flag's checks all fall below a pixel. A
+    silhouette keeps the one thing that is legible at that size - the
+    outline - in the artwork's own lime on its own black.
+
+    Drawn rather than traced so it stays crisp at every size, and so the
+    boom mic survives: without it the shape reads as music headphones.
+    """
+    from PIL import ImageDraw
+
+    side = 512
+    card = Image.new("RGB", (side, side), GROUND)
+    draw = ImageDraw.Draw(card)
+    band = int(side * 0.115)
+    draw.arc((int(side * 0.17), int(side * 0.14), int(side * 0.83),
+              int(side * 0.80)), 200, 340, fill=LIME, width=band)
+    cup_w, cup_h, top = int(side * 0.20), int(side * 0.34), int(side * 0.40)
+    draw.rounded_rectangle((int(side * 0.13), top, int(side * 0.13) + cup_w,
+                            top + cup_h), radius=int(cup_w * 0.42), fill=LIME)
+    draw.rounded_rectangle((int(side * 0.87) - cup_w, top, int(side * 0.87),
+                            top + cup_h), radius=int(cup_w * 0.42), fill=LIME)
+    draw.line([(int(side * 0.19), int(side * 0.72)),
+               (int(side * 0.30), int(side * 0.86)),
+               (int(side * 0.46), int(side * 0.86))], fill=LIME,
+              width=int(side * 0.055), joint="curve")
+    return card
+
+
 def mark(source: Path = SOURCE) -> Image.Image:
     """The headset and the arc, without the lettering, filling the square.
 
@@ -81,7 +115,7 @@ def mark(source: Path = SOURCE) -> Image.Image:
 
 
 def _frame(size: int) -> Image.Image:
-    art = lockup() if size >= TEXT_FROM_SIZE else mark()
+    art = lockup() if size >= TEXT_FROM_SIZE else silhouette()
     return art.resize((size, size), Image.LANCZOS)
 
 
