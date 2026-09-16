@@ -91,12 +91,30 @@ BURN_OUTLIER_FRACTION = 0.04
 PRACTICE = "practice"
 RACE = "race"
 
+#: "the beep column being driven now" where a column may be named.
+CURRENT_COLUMN = object()
+
 # What `current_fuel_basis` sized the laps ahead on. A burn is only as good as
 # the laps behind it, and after a stop those are not this stint's until there
 # are `STINT_BURN_LAPS` of them.
 FUEL_BASIS_STINT = "this stint"
 FUEL_BASIS_RACE = "the race"
 FUEL_BASIS_HIGHER = "the higher of the race and this stint so far"
+# **The beep's two columns are two burns, not one population.** Sardegna,
+# session 183: 5.37 L/lap on the saving points and 7.04 at full revs on
+# consecutive laps - a 31% step, where the whole reason the burn is trusted
+# over practice is that a green lap's burn has a CV of 2.0%. Where the column
+# now being driven has too few laps of its own, this race's measurement on the
+# OTHER column converted by the plan's own `fuel_burns` ratio is still a
+# measurement of this race; it is derived, and it is named so every call that
+# quotes it says so.
+FUEL_BASIS_COLUMN = "this race's other beep column, at the plan's ratio"
+# And where this column HAS shown something, however little, the higher of the
+# two - the same reason `FUEL_BASIS_HIGHER` exists. A conversion that comes out
+# under what he is actually burning is the direction that says "fuel good"
+# about a tank that is short.
+FUEL_BASIS_COLUMN_HIGHER = ("the higher of this beep column's own laps and the "
+                            "other column at the plan's ratio")
 # The pair where practice set the figure and the race has laps but not yet
 # enough of them to take over. Named so the export can show which of the two
 # the plan was running on at any point.
@@ -210,10 +228,16 @@ class ExpectationTracker:
                  planned_fuel_per_lap_l: float | None = None,
                  planned_wear_per_lap: float | None = None,
                  practice_lap_samples: int = 0,
-                 practice_fuel_samples: int = 0) -> None:
+                 practice_fuel_samples: int = 0,
+                 planned_burns: tuple[float, float] | None = None) -> None:
         self._planned_lap_ms = planned_lap_time_ms
         self._planned_fuel = planned_fuel_per_lap_l
         self._planned_wear = planned_wear_per_lap
+        # `(saving, full-revs)` L/lap as the plan measured them, for converting
+        # a burn from the column that has laps to the one being driven. None
+        # where the plan does not run the beep, and then no conversion is
+        # offered - see `other_column_burn`.
+        self._planned_burns = planned_burns
         self._practice_lap_samples = practice_lap_samples
         self._practice_fuel_samples = practice_fuel_samples
         # Every completed lap's time, in order driven, incidents included.
@@ -231,6 +255,18 @@ class ExpectationTracker:
         # positionally in several places. Empty where the lap did not report a
         # tank level, and then the load correction stands down.
         self._green_loads: list[float | None] = []
+        # **Which beep column each green lap belongs to**, parallel to
+        # `_green` - True saving, False full revs, None where nobody declared
+        # one. Kept beside the rows for the same reason `_green_loads` is:
+        # the tuple is unpacked positionally in a dozen places.
+        #
+        # `_column` is the column being driven NOW, and it is what every
+        # population below is read on. None until a caller feeds one, and then
+        # nothing is filtered - which is exactly the behaviour every race
+        # before the plan ran the beep had, and what the offline rebuild in
+        # `audit_line_from_laps` still has.
+        self._green_column: list[bool | None] = []
+        self._column: bool | None = None
         # **Which stint each green lap belongs to**, parallel to `_green`.
         # A pit or out lap closes a stint. The burn that sizes a fill and
         # judges the plan is the CURRENT stint's once it has enough laps:
@@ -252,7 +288,8 @@ class ExpectationTracker:
 
     # ------------------------------------------------------------------ feed
 
-    def note_lap(self, lap) -> None:
+    def note_lap(self, lap, *, column: bool | None = None,
+                 off_reference: bool | None = None) -> None:
         """One completed race lap.
 
         Lap one carries the standing start and the grid, and it fed a "lapping
@@ -265,6 +302,26 @@ class ExpectationTracker:
         evidence about the car's burn rate either: it is evidence about the
         instruction. Measured, a trailing window admitting his two saving laps
         read 12% under the real rate.
+
+        **But a stint the PLAN declares fuel-save is not an instruction**, and
+        that distinction is the caller's to make, not this module's. Since the
+        `fuel_save` plan field of 15 Sep 2026 a whole stint can hand the beep
+        over, and then `lap.short_shift_rpm` is set on every lap of the race -
+        all 29 of Sardegna session 183. Read as "an instruction was given" it
+        emptied every population here, `green_laps()` never reached the
+        coordinator's `BURN_LAPS_NEEDED`, and every fuel sentence of that race
+        rested on the practice figure the plan was costed with. 17 laps were
+        fuelled at 5.586 L/lap where the race was burning 5.365: 97 L asked
+        for against 91.2 wanted, about six seconds standing at the pump.
+
+        * `column` - which of the beep's two columns is being driven at the
+          END of this lap, or None where nothing declares one. It is what the
+          populations below are read on from here.
+        * `off_reference` - whether THIS lap is evidence about an instruction
+          rather than about the race: it changed column mid-lap, or it was
+          driven off the column the plan declared. None falls back to
+          `lap.short_shift_rpm`, which is what every caller that feeds no
+          column has always had.
         """
         if lap.lap_time_ms > 0:
             self._all_lap_ms.append(int(lap.lap_time_ms))
@@ -276,12 +333,19 @@ class ExpectationTracker:
         first = lap.lap_num <= 1 and not self.rolling_start
         if pit or first or lap.lap_time_ms <= 0:
             return
-        saving = bool(getattr(lap, "short_shift_rpm", None))
+        saving = (bool(getattr(lap, "short_shift_rpm", None))
+                  if off_reference is None else bool(off_reference))
         # **The lap number rides along.** Without it there is no way to split
         # the burn at the lap an instruction was given, which is the only way
         # to answer "did the saving work" - see `saving_response`.
         self._green.append((int(lap.lap_time_ms), float(lap.fuel_used or 0.0),
                             saving, int(lap.lap_num)))
+        self._green_column.append(column)
+        # Moved only by a caller that has a column to give: a None here is
+        # "nobody said", not "full revs", and it must not retire a column that
+        # was declared (rule 3).
+        if column is not None:
+            self._column = column
         self._green_stint.append(self._stint)
         start = getattr(lap, "fuel_start", None)
         end = getattr(lap, "fuel_end", None)
@@ -289,19 +353,85 @@ class ExpectationTracker:
                                  if start is not None and end is not None
                                  else None)
 
-    def _clean(self) -> list[tuple[int, float, bool]]:
-        """The laps that are evidence: no incident, no saving instruction.
+    def set_column(self, column: bool | None) -> None:
+        """The beep column being driven from here, before a lap proves it.
+
+        **The burn has to move with the instruction, not a lap behind it.**
+        The populations here are keyed on the column, and a column is
+        otherwise only learned when a lap driven on it completes - so the lap
+        immediately after George moves the beep would be fuelled at the burn
+        of the column just left, which is about 30% away. Called by the
+        coordinator wherever `RaceState.fuel_save_engaged` moves.
+
+        A measured lap still overrules this: `note_lap` sets the column from
+        what the frames say he actually drove, which is the whole point of
+        `_measured_column`. None is ignored - a race with no column declared
+        has one population and nothing to point at.
+        """
+        if column is None:
+            return
+        self._column = bool(column)
+
+    def revise_lap_column(self, lap_num: int, column: bool) -> None:
+        """File a lap under the column the frames say it was driven on.
+
+        The measured column arrives on its own path - the controller reads the
+        upshift rpm off the lap frames and hands it to the race - and it can
+        land either side of the crossing. So the lap is filed with whatever
+        was known at the time and corrected here when the better answer comes.
+
+        **A measured column also clears the lap of being an instruction.** The
+        exclusion exists for a lap that is a clean sample of neither column;
+        one the frames place on a column is a clean sample of that column.
+        Silent where the lap is not in the green population - lap one, a pit
+        or out lap, and every lap of a race with no column declared.
+        """
+        for index, row in enumerate(self._green):
+            if row[3] != int(lap_num):
+                continue
+            if self._green_column[index] is None:
+                # No column was declared for this race at all. Filing one now
+                # would split a population nothing else knows is split.
+                return
+            self._green_column[index] = bool(column)
+            self._green[index] = (row[0], row[1], False, row[3])
+            if index == len(self._green) - 1:
+                self._column = bool(column)
+            return
+
+    def _on_column(self, column) -> list[tuple[int, float, bool, int]]:
+        """The green rows driven on `column`, in order.
+
+        `CURRENT_COLUMN` means the one being driven now; an explicit True or
+        False asks for the other one, which is how `other_column_burn` prices
+        a column this race has laps for but is not on. **Where no column was
+        ever declared the whole population comes back** - no plan runs the
+        beep, there is one column, and nothing here changes.
+        """
+        want = self._column if column is CURRENT_COLUMN else column
+        if want is None:
+            return list(self._green)
+        return [row for row, on in zip(self._green, self._green_column)
+                if on is want]
+
+    def _clean(self, column=CURRENT_COLUMN) -> list[tuple[int, float, bool, int]]:
+        """The laps that are evidence: no incident, no instruction, this column.
 
         The incident test is the pace estimator's own - a lap more than
         `BURN_OUTLIER_FRACTION` over the race's own best. His lap-to-lap noise
         is about 1.7% of a two-minute lap while the measured incidents run
         5-10% over, so 4% splits the two populations with margin either side.
+
+        **The race's own best is taken within the column**, because the two
+        columns are two populations in lap time as well as in burn - a
+        full-revs best would tighten the window a saving lap is judged in by
+        the whole cost of short-shifting.
         """
-        if not self._green:
+        rows = self._on_column(column)
+        if not rows:
             return []
-        cutoff = min(row[0] for row in self._green) * (
-            1.0 + BURN_OUTLIER_FRACTION)
-        return [row for row in self._green if row[0] <= cutoff and not row[2]
+        cutoff = min(row[0] for row in rows) * (1.0 + BURN_OUTLIER_FRACTION)
+        return [row for row in rows if row[0] <= cutoff and not row[2]
                 and row[3] not in self._penalised]
 
     def note_penalty(self, lap_num: int) -> None:
@@ -490,12 +620,52 @@ class ExpectationTracker:
         """
         return len(self._clean())
 
-    def race_fuel_per_lap_l(self) -> float | None:
-        """The green burn this race is showing, whether or not it has taken over."""
-        clean = [used for _, used, _, _ in self._clean() if used > 0]
+    def race_fuel_per_lap_l(self, column=CURRENT_COLUMN) -> float | None:
+        """The green burn this race is showing, whether or not it has taken over.
+
+        On the beep column being driven now, or on the one named."""
+        clean = [used for _, used, _, _ in self._clean(column) if used > 0]
         if not clean:
             return None
         return round(median(clean), 3)
+
+    def race_burn_laps(self, column=CURRENT_COLUMN) -> int:
+        """Green laps behind `race_fuel_per_lap_l` on that column."""
+        return len([row for row in self._clean(column) if row[1] > 0])
+
+    def other_column_burn(self) -> tuple[float, int, bool] | None:
+        """This race's burn on the column it is NOT on, converted to this one.
+
+        `(L/lap, laps behind it, the column it was measured on)`, or None.
+
+        **The alternative is a stale number that looks fresh.** When George
+        moves the beep the burn steps by about 30% (5.37 -> 7.04 at Sardegna),
+        and the column just engaged has no laps of its own for five more.
+        Holding the figure measured on the column he has just left is a
+        confident wrong answer of exactly the kind rule 9 is about, and
+        falling back to practice throws away the only measurement of this race
+        there is. So the other column's own laps are converted by the ratio
+        between the plan's two measured burns - which is what
+        `RaceCoordinator.mode_burns_l` already does to price a switch.
+
+        None where the plan gave no pair to convert with, where no column has
+        been declared, or where the other column has fewer than
+        `RACE_BURN_LAPS` laps of its own. Derived, never measured: the caller
+        labels it `FUEL_BASIS_COLUMN` and the call says so out loud.
+        """
+        if self._planned_burns is None or self._column is None:
+            return None
+        save, full = self._planned_burns
+        if not save or not full:
+            return None
+        other = not self._column
+        burn = self.race_fuel_per_lap_l(other)
+        laps = self.race_burn_laps(other)
+        if burn is None or laps < RACE_BURN_LAPS:
+            return None
+        # save -> full multiplies by full/save; full -> save divides by it.
+        ratio = (full / save) if self._column is False else (save / full)
+        return round(burn * ratio, 3), laps, other
 
     def _burn_this_stint(self) -> list[tuple[int, float, bool, int]]:
         """The rows of the stint being driven now that are evidence about BURN.
@@ -516,13 +686,20 @@ class ExpectationTracker:
         short-shift instruction (evidence about the instruction), and a lap
         that served a penalty - the crawl is in the burn as well as the time,
         and `_clean` has always dropped it; this did not.
+
+        **And the beep column being driven now**, on the same grounds as
+        everything else: a stint that changes column part way through is two
+        burns 30% apart, and a median over both belongs to neither.
         """
         if not self._green:
             return []
         current = self._stint
-        return [row for row, stint in zip(self._green, self._green_stint)
+        want = self._column
+        return [row for row, stint, on in zip(self._green, self._green_stint,
+                                              self._green_column)
                 if stint == current and not row[2] and row[1] > 0
-                and row[3] not in self._penalised]
+                and row[3] not in self._penalised
+                and (want is None or on is want)]
 
     def stint_green_laps(self) -> int:
         """Laps behind this stint's burn - see `_burn_this_stint`."""
@@ -581,13 +758,34 @@ class ExpectationTracker:
           the hedge.
         * **The race's** in the first stint, or where the stint has nothing
           yet (`FUEL_BASIS_RACE`).
+
+        And **before any of those**, where the beep column being driven has
+        not yet shown `RACE_BURN_LAPS` laps of its own but the other one has:
+        the other column converted by the plan's ratio (`FUEL_BASIS_COLUMN`),
+        or the higher of that and what this column has shown so far
+        (`FUEL_BASIS_COLUMN_HIGHER`). It goes first because it is the case
+        where every figure below belongs to a burn 30% away from the one being
+        driven - the moment George moves the beep, and the moment a stale
+        number does the most damage.
         """
         stint = self.stint_fuel_per_lap_l()
         stint_laps = self.stint_green_laps()
+        race = self.race_fuel_per_lap_l()
+        race_laps = self.race_burn_laps()
+        converted = (self.other_column_burn()
+                     if race_laps < RACE_BURN_LAPS else None)
+        if converted is not None:
+            burn, laps, _on = converted
+            # This column's own laps, however few, may not be silently
+            # under-stated by a conversion - and whichever wins names itself
+            # (rule 12).
+            mine = stint if stint is not None else race
+            if mine is not None and mine > burn:
+                return (mine, stint_laps if stint is not None else race_laps,
+                        FUEL_BASIS_COLUMN_HIGHER)
+            return burn, laps, FUEL_BASIS_COLUMN
         if stint is not None:
             return stint, stint_laps, FUEL_BASIS_STINT
-        race = self.race_fuel_per_lap_l()
-        race_laps = len([row for row in self._clean() if row[1] > 0])
         if self._stint > 0 and stint_laps:
             so_far = round(median(used for _, used, _, _
                                   in self._burn_this_stint()), 3)
@@ -598,6 +796,10 @@ class ExpectationTracker:
 
     def current_fuel_reference_load_l(self) -> float | None:
         burn, _laps, basis = self.current_fuel_basis()
+        if basis in (FUEL_BASIS_COLUMN, FUEL_BASIS_COLUMN_HIGHER):
+            # Measured on laps this column did not drive, or on too few of
+            # its own to anchor: no load here, and rule 3 says so as None.
+            return None
         if basis == FUEL_BASIS_STINT:
             return self.stint_fuel_reference_load_l()
         if basis == FUEL_BASIS_HIGHER and burn != self.race_fuel_per_lap_l():

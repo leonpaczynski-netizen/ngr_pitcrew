@@ -25,7 +25,11 @@ from pitcrew.strategy.model import fuel_margin_l
 # What George says at the green when nobody wrote a briefing. Imported rather
 # than restated: `race/knowledge.py` owns the sentence, and two copies of one
 # line is how the app comes to say it two ways.
-from pitcrew.race.expectations import FUEL_BASIS_HIGHER
+from pitcrew.race.expectations import (
+    FUEL_BASIS_COLUMN,
+    FUEL_BASIS_COLUMN_HIGHER,
+    FUEL_BASIS_HIGHER,
+)
 from pitcrew.race.knowledge import NO_NOTES
 from pitcrew.strategy.fuel_model import fill_for_l, stint_burn_l
 
@@ -859,6 +863,12 @@ class RaceState:
     # then assumes the fewest laps a burn is ever installed on.
     fuel_burn_laps: int | None = None
     fuel_burn_basis: str | None = None
+    # **Why this race's own burn is NOT sizing the fuel calls**, or None while
+    # it is. Set by `RaceCoordinator._refuse_the_burn`. A race can run to the
+    # flag on the practice figure - Sardegna, session 183, all 29 laps of it -
+    # and before this the only trace anywhere was the words "at the practice
+    # burn" inside one spoken fill call.
+    fuel_burn_why: str | None = None
     # What the tank actually holds. Without it the engineer will ask for a
     # fuel figure the car cannot take - and it did: "Fuel to 510 litres."
     fuel_capacity_l: float | None = None
@@ -3162,8 +3172,18 @@ def _fuel(state: RaceState) -> Call | None:
     # **MEDIUM while the burn is not yet this stint's own** - the higher of
     # the race's and a stint of one or two laps is a hedge, and the record
     # says so (`expectations.current_fuel_basis`).
+    #
+    # **And MEDIUM while it is not this race's burn at all.** A basis of None
+    # is the practice figure, which is the one this app has measured wrong by
+    # 10.7% and by 4% on the two races where both exist - it may not speak at
+    # the same confidence as five of this race's own laps. `FUEL_BASIS_COLUMN`
+    # is this race's laps but on the other beep column, converted by the
+    # plan's ratio: derived, so it hedges too (rule 5).
     confidence = (MEDIUM if state.lap < 3
-                  or state.fuel_burn_basis == FUEL_BASIS_HIGHER else HIGH)
+                  or state.fuel_burn_basis in (None, FUEL_BASIS_HIGHER,
+                                               FUEL_BASIS_COLUMN,
+                                               FUEL_BASIS_COLUMN_HIGHER)
+                  else HIGH)
     if (state.fuel_save_said and gap >= 0
             and fuel_reference(state) == TO_THE_FLAG):
         # Once, and only after a save was asked for: he is lifting for fuel
