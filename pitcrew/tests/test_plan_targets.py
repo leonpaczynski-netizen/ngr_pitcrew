@@ -478,35 +478,67 @@ def test_the_lap_panel_trades_the_prediction_for_the_target_in_a_race(qt_app):
     assert panel.vs_target.isHidden() and not panel.pred.isHidden()
 
 
-def test_the_phone_strip_carries_the_target_as_its_second_reading(qt_app):
-    """The driver's pick, 16 Sep 2026: beside fuel in hand, not in the centre
-    rotation - the centre is what to do now, and a lap already driven is a
-    reading."""
-    from pitcrew.ui.driver_view import DriverState, GapView
+def test_the_phone_strip_carries_the_plan_lap_and_the_burn_against_it(qt_app):
+    """17 Sep 2026, the lap-timer face: the plan's lap top right, the lap
+    against it in the band, the burn against the plan along the bottom -
+    the same verdict VS TARGET draws on the ultrawide."""
+    from pitcrew.ui.driver_view import DriverState
     from pitcrew.ui.strip import StripComposer
 
     racing = dict(session_kind="race", has_plan=True, laps_to_box=4.0,
-                  box_on_lap=14, fuel_to_stop=0.3, laps_of_fuel=4.3,
-                  ahead=GapView(seconds=3.4, note="steady"),
-                  behind=GapView(seconds=2.6, note="steady"))
+                  box_on_lap=14, fuel_to_stop=0.3, laps_of_fuel=4.3)
     payload = StripComposer().compose(DriverState(
         **racing, target_lap_ms=90_000, target_burn_l=4.50,
         last_vs_target_s=0.312, last_burn_vs_target_l=0.12))
-    slot = payload["extra2"]
-    assert slot["caption"] == "VS TARGET" and slot["subject"] == "vs_target"
-    assert slot["value"] == "+0.312" and slot["sub"] == "burn +0.12 of 4.50"
-    assert slot["tone"] == "urgent"           # over the band, as the board
-    # Every subject on one payload is unique, or the page morphs one block
-    # into another.
-    subjects = [payload[key]["subject"] for key in
-                ("left", "centre", "right", "extra", "extra2")
-                if payload.get(key)]
-    assert len(set(subjects)) == len(subjects), subjects
-    # No targets, no slot - hidden rather than dashed.
-    assert StripComposer().compose(DriverState(**racing))["extra2"] is None
-    # And practice has nothing to be on target against.
+    assert payload["best"]["value"] == "1:30.000"
+    assert (payload["centre"]["value"], payload["centre"]["sub"]) == (
+        "+0.312", "last lap")
+    assert payload["centre"]["tone"] == "urgent"   # over the band, as the board
+    assert payload["burn"]["value"] == "+0.12"
+    # No targets: dashes that say why, never a zero.
+    bare = StripComposer().compose(DriverState(**racing))
+    assert bare["centre"]["value"] == "--" and bare["best"]["value"] == "-:--.---"
+    assert bare["burn"]["value"] == "--" and bare["burn"]["sub"] == "no plan burn"
+    # And practice has no plan burn at all.
     assert StripComposer().compose(
-        DriverState(session_kind="practice"))["extra2"] is None
+        DriverState(session_kind="practice"))["burn"] is None
+
+
+def test_the_stint_burn_reads_only_the_column_he_is_on():
+    """Sardegna s183: 5.37 L/lap saving, 7.04 full. A stint that switched,
+    pooled, lands near the practice figure and looks right."""
+    from pitcrew.race import calls as C
+    from pitcrew.race.targets import board_target_fields, stint_burn
+
+    state = C.RaceState()
+    assert stint_burn(state) == (None, 0, None)
+    state.stint_burns = [(True, 0.10), (True, 0.20), (False, -0.40),
+                         (False, -0.20)]
+    assert stint_burn(state) == (-0.3, 2, False)
+    fields = board_target_fields(state)
+    assert fields["stint_burn_laps"] == 2
+    assert fields["stint_burn_saving"] is False
+    # A stop is a new tank: the stint starts again.
+    C.clear_stint(state, tyres_changed=False)
+    assert stint_burn(state) == (None, 0, None)
+
+
+def test_the_board_reads_gt7s_last_lap_and_hud_lap_and_never_a_minus_one():
+    from types import SimpleNamespace
+
+    from pitcrew.race.board_live import BoardLive
+
+    live = BoardLive()
+    live.note_packet(SimpleNamespace(last_lap_ms=91_234, laps_completed=6,
+                                     current_lap_time_ms=12_000,
+                                     speed_ms=40.0), now=100.0)
+    fields = live.board_fields(now=100.1)
+    assert (fields["last_lap_ms"], fields["lap_number"]) == (91_234, 7)
+    live.note_packet(SimpleNamespace(last_lap_ms=-1, laps_completed=-1,
+                                     current_lap_time_ms=None,
+                                     speed_ms=0.0), now=101.0)
+    fields = live.board_fields(now=101.1)
+    assert (fields["last_lap_ms"], fields["lap_number"]) == (None, None)
 
 
 @pytest.fixture

@@ -2528,6 +2528,11 @@ class RaceCoordinator:
             fuel_at_start_l=getattr(lap, "fuel_start", None))
         verdict = judge(lap, target)
         self.state.target_verdict = verdict
+        if verdict is not None and verdict.burn_delta_l is not None:
+            # Filed under the column this lap was judged on, so the stint
+            # average never pools the two beeps (`stint_burn`).
+            self.state.stint_burns.append((bool(saving),
+                                           verdict.burn_delta_l))
         log("race").info(
             "target: lap %s on %s (%s, set lap %d): %s ms against %s ms "
             "(%s) - burn %s against %s L", lap.lap_num, target.compound,

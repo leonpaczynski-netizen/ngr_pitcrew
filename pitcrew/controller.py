@@ -6492,14 +6492,16 @@ class PitCrewController(QObject):
                 # which device was reading is the first question when the
                 # gaps went missing off the ultrawide.
                 if live:
-                    log("ui").info("phone strip connected from %s - gaps and "
-                                   "laps to the stop move to it",
+                    log("ui").info("phone strip connected from %s",
                                    strip.last_client)
                 else:
-                    log("ui").warning("phone strip stopped polling - gaps and "
-                                      "laps to the stop are back on the board")
+                    log("ui").warning("phone strip stopped polling")
                 self._strip_was_live = live
-            state = replace(self._driver_board_state(), strip_live=live)
+            # **The phone no longer carries the gaps** (17 Sep 2026: his car
+            # on the phone, the field on the tablet), so the ultrawide keeps
+            # them whether or not a phone is reading. `strip_live` stays False
+            # until the page that DOES carry them - the tablet - exists.
+            state = replace(self._driver_board_state(), strip_live=False)
             strip.publish(self._strip_composer.compose(state))
             self._strip_failures = 0
             return state
@@ -6762,6 +6764,10 @@ class PitCrewController(QObject):
             # verdict the heartbeat speaks - see `race/targets.py`.
             **board_target_fields(state),
         )
+        # **The lap the phone shows is the lap his HUD shows**, from the one
+        # expression the box lap is already counted in - GT7's own
+        # `laps_completed` drifts off it after a crossing lost in the lane.
+        base = replace(base, lap_number=state.lap_on_screen())
         if not in_box:
             return base
 

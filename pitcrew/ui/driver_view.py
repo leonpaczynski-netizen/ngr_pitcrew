@@ -521,6 +521,18 @@ class DriverState:
     target_saving: bool | None = None       # priced on the fuel-saving beep
     last_vs_target_s: float | None = None
     last_burn_vs_target_l: float | None = None
+    # This stint's mean burn against target, over the laps on the column the
+    # last one was driven on, and how many laps that is (`targets.stint_burn`).
+    stint_burn_vs_target_l: float | None = None
+    stint_burn_laps: int = 0
+    stint_burn_saving: bool | None = None
+
+    # ---- the lap-timer face on the phone (17 Sep 2026). GT7's own figures:
+    # the last completed lap it reports, and the lap its HUD shows - in a race
+    # the controller replaces that with `RaceState.lap_on_screen`, the one
+    # expression the box lap is already counted in.
+    last_lap_ms: int | None = None
+    lap_number: int | None = None
 
     # ---- the three lights (row 5.21).
     # WET: the hygrometer over the last few HUD reads - "wet", "mixed", "dry",
@@ -1425,6 +1437,103 @@ def target_strip_block(state: "DriverState") -> Block:
     against = ("" if state.target_burn_l is None
                else f" of {state.target_burn_l:.2f}")
     return Block(pace.value, f"burn {burn.value}{against}", pace.tone)
+
+
+# ============================================================================
+# **The phone's lap-timer face** (the driver, 17 Sep 2026, from a photo of a
+# lap timer: last lap and today's best across the top, the delta as a flood
+# across the middle, the lap bottom-left - "instead of time of day at bottom
+# have our fuel target and burn to it"). Expressions here, beside the board's,
+# so a figure on the phone and the same figure on the ultrawide are one
+# decision (rules 12 and 13).
+
+def face_last_block(state: "DriverState") -> Block:
+    """LAST LAP: GT7's own last completed lap."""
+    return Block(format_lap_ms(state.last_lap_ms))
+
+
+def face_lap_block(state: "DriverState") -> Block:
+    """LAP: the lap his HUD shows."""
+    return Block(str(state.lap_number) if state.lap_number else "--")
+
+
+def face_best_block(state: "DriverState") -> tuple[str, Block]:
+    """`(caption, block)` for top right - what the delta is against.
+
+    Practice and qualifying: **the best lap ever recorded on this compound**
+    (his words), which is `best_lap_on_file` - this car, this circuit, this
+    game version, this tyre. Race: the lap time the plan asks of this lap.
+    """
+    if state.session_kind == "race":
+        saving = " · SAVE" if state.target_saving else ""
+        return (f"PLAN LAP{saving}",
+                Block(format_lap_ms(state.target_lap_ms), "", TONE_PLAIN))
+    tyre = f" · {state.reference_compound}" if state.reference_compound else ""
+    return (f"BEST{tyre}",
+            Block(format_lap_ms(state.file_best_ms), "",
+                  TONE_GOOD if state.file_best_ms is not None else TONE_PLAIN))
+
+
+def face_delta_block(state: "DriverState") -> tuple[str, Block]:
+    """`(caption, block)` for the flood: the live delta to top right's lap.
+
+    **Race: the projected lap against the plan's lap**, live - the session
+    best plus the live delta to it, which is `predicted_ms`, less the target.
+    A projection, so the line under it says "projected" (rule 5). Until there
+    is a session best to project from, the last lap's verdict stands in and
+    says so. The band is the voice's `ON_TARGET_S`, as VS TARGET's is.
+
+    Practice and qualifying: the live delta to the best on file, negative
+    quick.
+    """
+    if state.session_kind == "race":
+        from pitcrew.race.targets import ON_TARGET_S
+
+        if state.predicted_ms is not None and state.target_lap_ms is not None:
+            delta = (state.predicted_ms - state.target_lap_ms) / 1000.0
+            sub = f"projected {format_lap_ms(state.predicted_ms)}"
+        elif state.last_vs_target_s is not None:
+            delta = state.last_vs_target_s
+            sub = "last lap"
+        else:
+            return "VS PLAN LAP", Block("--", state.target_why or "no plan lap")
+        tone = TONE_URGENT if delta >= ON_TARGET_S else TONE_GOOD
+        return "VS PLAN LAP", Block(format_delta(delta), sub, tone)
+    delta = state.delta_file_s
+    if delta is None:
+        why = ("no best on file" if state.file_best_ms is None
+               else state.delta_why or "not on a lap")
+        return "VS BEST", Block("--.---", why)
+    tone = TONE_GOOD if delta < 0 else TONE_URGENT if delta > 0 else TONE_PLAIN
+    return "VS BEST", Block(format_delta(delta), "", tone)
+
+
+def face_burn_block(state: "DriverState") -> Block | None:
+    """BURN VS PLAN: the last lap's litres over the plan's, and the stint's.
+
+    **The stint figure is only the column he is on** (`targets.stint_burn`),
+    and names it - "save" or "full" - with its lap count (rule 4). None
+    outside a race: practice has no plan burn to be against.
+    """
+    if state.session_kind != "race":
+        return None
+    from pitcrew.race.targets import ON_TARGET_L
+
+    stint = ""
+    if state.stint_burn_vs_target_l is not None:
+        column = ("save" if state.stint_burn_saving
+                  else "full" if state.stint_burn_saving is False else "")
+        laps = state.stint_burn_laps
+        stint = (f"stint {state.stint_burn_vs_target_l:+.2f} · {laps} "
+                 f"lap{'s' if laps != 1 else ''}"
+                 + (f" · {column}" if column else ""))
+    delta = state.last_burn_vs_target_l
+    if delta is None:
+        return Block("--", stint or (f"plan {state.target_burn_l:.2f} L/lap"
+                                     if state.target_burn_l is not None
+                                     else "no plan burn"))
+    tone = TONE_URGENT if delta >= ON_TARGET_L else TONE_GOOD
+    return Block(f"{delta:+.2f}", stint, tone)
 
 
 def target_note(state: "DriverState") -> str:

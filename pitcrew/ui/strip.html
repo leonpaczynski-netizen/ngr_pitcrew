@@ -19,42 +19,33 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Pit Crew strip</title>
 <!--
-  The strip page. A dumb renderer on purpose: every word, number and tone on
-  it is decided by `pitcrew/ui/strip.py` from the same functions the Qt board
-  uses, so this file only lays out, colours and moves what it is handed. The
-  one judgement it makes is staleness, and even that number comes from the
-  server (`stale_after_s`). Numbers are never left on screen once they stop
-  updating.
+  The strip page: his own car, on the phone right of the wheel. A dumb
+  renderer on purpose - every word, number and tone is decided by
+  `pitcrew/ui/strip.py` from the functions the Qt board uses. The one
+  judgement made here is staleness, and even that number comes from the
+  server (`stale_after_s`). Numbers never stay on screen once they stop.
 
-  **Motion as signal** (his pick, 15 Sep 2026). Three movements, and each one
-  means exactly one thing, so none of them is decoration:
+  **Laid out like a lap timer** (his photo, 17 Sep 2026): last lap and the
+  best across the top, the delta as a flood across the middle, the lap bottom
+  left - and where the timer has the time of day, the burn against the plan.
 
-  * **A number that changes slot slides there.** Each block carries a
-    `subject` - what the number is about - and when a car inside a second
-    pushes LAPS TO THE STOP out of the centre, that block travels to the flank
-    while the car's gap travels in (View Transitions). The centre changing
-    meaning is the rule-13 hazard; seeing it move is what makes it safe.
-  * **A digit that changes rolls**, up when the figure grew and down when it
-    shrank, so a gap closing reads as closing before it is read at all.
-  * **An instruction floods its slot.** An urgent centre in a race - NOW, fuel
-    short, the release count - and a lamp lighting wipe their fill down in
-    180 ms: the stroke the app paints a compound band with (DESIGN.md), and
-    the same one the ultrawide's lamps now use.
-
-  Everything degrades to a plain swap: no View Transitions, reduced motion,
-  or a page in the background all render the same numbers without moving.
+  **Motion as signal**, and each movement means one thing:
+  * a digit that changes **rolls** - down when the figure fell, up when it
+    rose - so a delta coming back reads as coming back before it is read;
+  * the band **wipes** to its new colour: red slow, green quick, and amber
+    only for an instruction (NOW, fuel short, the release count);
+  * a lamp lighting wipes its fill down in the same 180 ms stroke.
+  Reduced motion, or the page in the background, swaps without moving.
 -->
 <style>
   :root {
     --ground: #0C0B09; --panel: #1E1B17; --edge: #38332B;
     --ink: #E8E4DC; --dim: #9A948A; --near: #F2C230; --good: #4FB06A; --over: #FF6B63;
-    /* DIN 1451, on both screens: Bahnschrift is Windows' cut of it, and iOS
-       ships DIN Condensed - so the phone letters its captions in the board's
-       own lettering rather than in whatever sans the phone has. */
+    /* The band's own red and green: muted, like the timer's, so a whole band
+       of white figures stays readable at 5:1 and more. */
+    --quick: #2E7A44; --slow: #A63E39;
     --label: "Bahnschrift Condensed", "DIN Condensed", "Arial Narrow", sans-serif;
     --number: "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    --gap-x: 1.1vw; --gap-y: 1.5vh;
-    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
     --wipe: 180ms cubic-bezier(0.33, 1, 0.68, 1);
   }
   * { box-sizing: border-box; }
@@ -64,88 +55,69 @@
   body { padding: env(safe-area-inset-top) env(safe-area-inset-right)
                   env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
-  /* **One grid, so the two rows share their edges.** The lamps span the
-     left flank and the centre; fuel in hand sits under the right flank. Two
-     separate rows laid out on their own let the bar drift out from under the
-     slots above it, and a caption overran a lamp. */
-  #app { height: 100%; display: grid; gap: var(--gap-y) var(--gap-x); padding: 1.6vh 1.4vw;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.38fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) 25vh 7.5vh; }
-  #left { grid-area: 1 / 1; } #centre { grid-area: 1 / 2; } #right { grid-area: 1 / 3; }
-  /* **The lamps are colour, not size** (the driver, 16 Sep 2026: "reduce the
-     size of the ABS, TCS and DRY buttons significantly, these only need to be
-     very small and different coloured for visibility, and re-use that real
-     estate"). A lit lamp is read by its fill from the corner of the eye; the
-     word only has to confirm which one it is. So they take a thin band under
-     the readings, and the room they had goes to the two numbers. */
-  #lights { grid-area: 3 / 1 / 4 / 4; display: grid; gap: var(--gap-x);
-    grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; }
-  /* **The two readings, side by side across the width.** Fuel in hand to the
-     stop, and the last lap against the plan's target (16 Sep 2026). Both are
-     readings rather than instructions, which is why they sit here and never
-     in the centre. */
-  #extras { grid-area: 2 / 1 / 3 / 4; display: grid; gap: var(--gap-x);
-    grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; min-height: 0; }
+  #app { height: 100%; display: grid; padding: 1.2vh 2.4vw; row-gap: 1.2vh;
+    grid-template-rows: auto minmax(0, 1fr) auto; }
 
-  .slot { position: relative; isolation: isolate; min-width: 0; min-height: 0;
-    display: flex; align-items: center; justify-content: center; overflow: hidden;
-    border: 2px solid var(--edge); border-radius: 10px; padding: 0.6vh 0.8vw;
-    transition: border-color 180ms linear; }
-  /* The flood: a fill that wipes down over the slot and retracts up. */
-  .slot::before { content: ""; position: absolute; inset: 0; z-index: -1;
+  /* ---- a figure: caption over value, sub under */
+  .fig { display: flex; flex-direction: column; min-width: 0; }
+  .cap { font-family: var(--label); font-weight: 700; color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.08em; font-size: 5.2vh; line-height: 1; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; padding-top: 0.12em; }
+  .val { font-family: var(--number); font-weight: 700; line-height: 1.02; white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  /* **Sized to its figure, not its column.** A stretched value's scrollWidth
+     is never less than the column, so the fitter shrank "last lap" to its
+     floor while "plan lap", aligned to the right, stayed full size. */
+  #last .val, #lap .val { align-self: flex-start; }
+  #best .val { align-self: flex-end; }
+  #burn .val { align-self: center; }
+  .sub { font-family: var(--label); font-weight: 700; color: var(--dim); font-size: 4.4vh;
+    line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.1em; }
+  .good .val { color: var(--good); } .urgent .val { color: var(--near); }
+
+  /* ---- top: last lap left, the best (or the plan's lap) right */
+  #top { display: grid; grid-template-columns: 1fr 1fr; column-gap: 3vw; }
+  #top .val { font-size: 19vh; }
+  #best { align-items: flex-end; text-align: right; }
+  #best.good .cap { color: var(--good); }
+
+  /* ---- the band */
+  #band { position: relative; isolation: isolate; min-height: 0; border-radius: 1.2vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: var(--panel); overflow: hidden; padding: 0.5vh 2vw; }
+  #band::before { content: ""; position: absolute; inset: 0; z-index: -1;
     background: var(--fill, transparent); clip-path: inset(0 0 100% 0);
     transition: clip-path var(--wipe); }
-  .slot.flooded::before { clip-path: inset(0 0 0 0); }
-  .slot.centre { background: var(--panel); border-width: 3px; --fill: var(--near); }
+  #band.quick, #band.slow, #band.act { --shown: 1; }
+  #band.quick::before, #band.slow::before, #band.act::before { clip-path: inset(0 0 0 0); }
+  #band.quick { --fill: var(--quick); } #band.slow { --fill: var(--slow); }
+  #band.act { --fill: var(--near); }
+  #band .cap { position: absolute; top: 1vh; left: 2vw; font-size: 4.4vh; color: var(--dim); }
+  #band .val { font-size: 38vh; line-height: 0.95; max-width: 100%; }
+  #band .sub { font-size: 4.6vh; }
+  #band.quick .cap, #band.slow .cap, #band.quick .sub, #band.slow .sub { color: rgba(255, 255, 255, 0.78); }
+  #band.act .val, #band.act .cap, #band.act .sub { color: var(--ground); transition: color 0s 70ms; }
 
-  .face { display: flex; flex-direction: column; align-items: center; max-width: 100%; min-width: 0; }
-  .cap { font-family: var(--label); font-weight: 700; color: var(--dim); text-transform: uppercase;
-    letter-spacing: 0.14em; font-size: 4.6vh; line-height: 1; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding-top: 0.15em; }
-  .val { font-family: var(--number); font-weight: 700; line-height: 1.06; white-space: nowrap;
-    font-variant-numeric: tabular-nums; font-size: 25vh; max-width: 100%;
-    margin: 0.5vh 0 0.2vh; }
-  .centre .val { font-size: 37vh; }
-  .sub { font-family: var(--label); font-weight: 700; color: var(--dim); font-size: 4vh;
-    line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
-    min-height: 1.1em; }
+  /* ---- bottom: the lap, the burn, the lamps */
+  #bottom { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 3vw;
+    align-items: end; }
+  #bottom .val { font-size: 15vh; }
+  #lap .val { font-size: 17vh; }
+  #burn { align-items: center; text-align: center; }
+  #burn .sub { font-size: 5vh; }
+  #lights { display: flex; flex-direction: column; gap: 0.8vh; align-self: stretch; justify-content: flex-end; }
+  .light { position: relative; isolation: isolate; overflow: hidden; border: 2px solid var(--edge);
+    border-radius: 0.8vh; padding: 0.3vh 1vw; min-width: 11vw; text-align: center;
+    font-family: var(--label); font-weight: 700; font-size: 3.4vh; letter-spacing: 0.08em;
+    color: var(--dim); line-height: 1.15; text-transform: uppercase; white-space: nowrap; }
+  .light::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--fill, transparent);
+    clip-path: inset(0 0 100% 0); transition: clip-path var(--wipe); }
+  .light.lit::before { clip-path: inset(0 0 0 0); }
+  .light.lit { color: var(--ground); transition: color 0s 70ms; }
 
   .ch { display: inline-block; position: relative; overflow: hidden; vertical-align: top; white-space: pre; }
   .ch > .g { display: inline-block; }
   .ch > .g.out { position: absolute; left: 0; top: 0; }
-
-  .urgent { border-color: var(--near); }
-  .urgent .val, .urgent .sub { color: var(--near); }
-  .good { border-color: var(--good); }
-  .good .val, .good .sub { color: var(--good); }
-  /* On the flood every line is ground ink - 12:1 on the amber. */
-  .flooded .val, .flooded .sub, .flooded .cap { color: var(--ground); transition: color 0s 70ms; }
-
-  .light { flex-direction: row; gap: 0.6vw; padding: 0.2vh 0.6vw; }
-  .light .word { font-family: var(--label); font-weight: 700; letter-spacing: 0.08em; font-size: 3.4vh;
-    color: var(--dim); line-height: 1; white-space: nowrap; text-transform: uppercase; }
-  /* The reason under a lamp is gone with the height: the fill says lit and
-     the word says which. `light()` still sets it, so it comes back with a
-     rule rather than with a change to what the app publishes. */
-  .light .lsub { display: none; }
-  .light.flooded .word, .light.flooded .lsub { color: var(--ground); transition: color 0s 70ms; }
-
-  /* Each reading: the caption over its second figure on the left, the big
-     figure on the right, both filling the slot's height.
-
-     **The second line is a NUMBER, not a caption** (the driver, 16 Sep
-     2026: "make the burn number bigger, fill the space properly"). "burn
-     +0.12 of 4.19" and "9.1 laps aboard" are readings he acts on, so they
-     are sized as figures - a little over half the big one - and the caption
-     above them is the small text. */
-  #extras .face { display: grid; width: 100%; height: 100%; align-items: center;
-    column-gap: 1.2vw; grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: auto auto; align-content: center; }
-  #extras .cap { grid-area: 1 / 1; justify-self: start; align-self: end;
-    font-size: 3.2vh; letter-spacing: 0.1em; }
-  #extras .sub { grid-area: 2 / 1; justify-self: start; align-self: start;
-    font-size: 6.4vh; line-height: 1.15; }
-  #extras .val { grid-area: 1 / 2 / 3 / 3; font-size: 17vh; margin: 0; }
 
   #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
     justify-content: center; background: var(--ground); text-align: center; padding: 4vh 4vw; }
@@ -154,45 +126,30 @@
   #cover .why { font-family: var(--label); font-weight: 700; color: var(--dim); font-size: 5vh; margin-top: 2vh; }
   #cover.fault .big { color: var(--over); }
 
-  ::view-transition-group(*) { animation-duration: 380ms; animation-timing-function: var(--ease-out); }
-  ::view-transition-old(*), ::view-transition-new(*) { width: 100%; height: 100%; object-fit: contain;
-    animation-duration: 240ms; }
-  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
-
   @media (orientation: portrait) {
-    #app { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr) 22vh 6.5vh; }
-    #centre { grid-area: 1 / 1 / 2 / 3; } #left { grid-area: 2 / 1; } #right { grid-area: 2 / 2; }
-    /* **A row each, not a column each.** Half the phone's width is not
-       enough for "burn +0.12 of 4.19" beside its own figure - the fitter
-       shrank it to a caption. Stacked, both readings get the full width. */
-    #extras { grid-area: 3 / 1 / 4 / 3; grid-template-columns: none;
-      grid-template-rows: repeat(2, minmax(0, 1fr)); gap: var(--gap-y); }
-    #lights { grid-area: 4 / 1 / 5 / 3; }
-    .cap { font-size: 4vw; } .val { font-size: 19vw; } .centre .val { font-size: 30vw; }
-    .sub { font-size: 3.6vw; } .light .word { font-size: 3.2vw; }
-    #extras .cap { font-size: 2.9vw; } #extras .sub { font-size: 5.6vw; } #extras .val { font-size: 12vw; }
+    .cap { font-size: 3.6vw; } .sub { font-size: 3.4vw; }
+    #top .val { font-size: 12vw; } #band .val { font-size: 26vw; } #band .cap { font-size: 3.4vw; }
+    #bottom .val { font-size: 10vw; } #lap .val { font-size: 11vw; } .light { font-size: 2.8vw; }
     #cover .big { font-size: 14vw; } #cover .why { font-size: 4vw; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .slot, .slot::before, .flooded .val, .flooded .sub, .flooded .cap,
-    .light.flooded .word, .light.flooded .lsub { transition: none; }
+    #band::before, .light::before, #band.act .val, .light.lit { transition: none; }
   }
 </style>
 </head>
 <body>
 <div id="app">
-  <section class="slot" id="left"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
-  <section class="slot centre" id="centre"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
-  <section class="slot" id="right"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
-  <div id="lights">
-    <div class="slot light" id="l0"><div class="word"></div><div class="lsub"></div></div>
-    <div class="slot light" id="l1"><div class="word"></div><div class="lsub"></div></div>
-    <div class="slot light" id="l2"><div class="word"></div><div class="lsub"></div></div>
+  <div id="top">
+    <div class="fig" id="last"><div class="cap"></div><div class="val"></div></div>
+    <div class="fig" id="best"><div class="cap"></div><div class="val"></div></div>
   </div>
-  <div id="extras">
-    <section class="slot" id="extra"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
-    <section class="slot" id="extra2"><div class="face"><div class="cap"></div><div class="val"></div><div class="sub"></div></div></section>
+  <div id="band"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
+  <div id="bottom">
+    <div class="fig" id="lap"><div class="cap"></div><div class="val"></div></div>
+    <div class="fig" id="burn"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
+    <div id="lights">
+      <div class="light" id="l0"></div><div class="light" id="l1"></div><div class="light" id="l2"></div>
+    </div>
   </div>
 </div>
 <div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
@@ -201,11 +158,9 @@
   "use strict";
   var POLL_MS = 250, TIMEOUT_MS = 1000, ROLL_MS = 260;
   var staleAfter = 1.5;                 // replaced by the server's own figure
-  var lastOk = null;                    // performance.now() of the last good answer
+  var lastOk = null;
   var cover = document.getElementById("cover");
-  var covered = true;                   // numbers come back without moving
-  var arrangement = null;               // which subject sits in which slot
-  var morphing = false;
+  var covered = true;                   // numbers come back without rolling
   var reduce = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
 
   function $(id) { return document.getElementById(id); }
@@ -216,13 +171,10 @@
     cover.querySelector(".why").textContent = why;
     cover.className = "on" + (fault ? " fault" : "");
     covered = true;
-    arrangement = null;
   }
 
-  // ---------------------------------------------------------------- fitting
-  // Shrink text until it fits the room it has, from its CSS size down to a
-  // floor, then let the ellipsis take over. Only when the text or the room
-  // changed: refitting four times a second reflows the page on every poll.
+  // Shrink a figure until it fits its room, from its CSS size down to a floor.
+  // Only when the text or the room changed.
   function fit(el, room, floor) {
     var key = (el.dataset.text || el.textContent) + "|" + Math.round(room) + "|" +
               window.innerWidth + "x" + window.innerHeight;
@@ -235,30 +187,9 @@
     el.dataset.fitted = key;
   }
 
-  function fitSlot(slot) {
-    var face = slot.querySelector(".face");
-    var cap = face.querySelector(".cap"), val = face.querySelector(".val"), sub = face.querySelector(".sub");
-    var room = slot.clientWidth * 0.94;
-    if (slot.id === "extra" || slot.id === "extra2") {
-      fit(val, room * 0.5, 0.5);
-      var left = face.clientWidth - val.offsetWidth - 12;
-      fit(cap, left, 0.6); fit(sub, left, 0.6);
-    } else {
-      fit(val, room, 0.3); fit(cap, room, 0.6); fit(sub, room, 0.6);
-    }
-  }
-
-  // ---------------------------------------------------------------- digits
-  function glyph(ch) {
-    var g = document.createElement("span");
-    g.className = "g"; g.textContent = ch;
-    return g;
-  }
-  function cell(ch) {
-    var c = document.createElement("span");
-    c.className = "ch"; c.appendChild(glyph(ch));
-    return c;
-  }
+  // ---- digits
+  function glyph(ch) { var g = document.createElement("span"); g.className = "g"; g.textContent = ch; return g; }
+  function cell(ch) { var c = document.createElement("span"); c.className = "ch"; c.appendChild(glyph(ch)); return c; }
   function number(text) {
     var n = parseFloat(String(text).replace(/[^0-9.+\-]/g, ""));
     return isFinite(n) ? n : null;
@@ -274,9 +205,8 @@
     next.animate([{ transform: "translateY(" + (dir * 100) + "%)", opacity: 0 },
                   { transform: "translateY(0)", opacity: 1 }], timing);
   }
-  // A changed figure rolls only where it is the same figure in the same slot
-  // and the same shape; anything else - a dash becoming a number, 9.8
-  // becoming 10.2 - is simply set.
+  // Rolls only where it is the same figure, the same shape, and on screen
+  // before; anything else is simply set.
   function setValue(el, text, roll) {
     var prev = el.dataset.text;
     if (prev === text) return;
@@ -294,55 +224,51 @@
     }
   }
 
-  // ---------------------------------------------------------------- slots
-  function item(id, data, kind, roll) {
-    var slot = $(id), face = slot.querySelector(".face");
-    if (!data) {
-      slot.style.visibility = "hidden";
-      face.style.viewTransitionName = "none";
-      slot.classList.remove("urgent", "good", "flooded");
-      slot.dataset.subject = "";
-      return;
-    }
-    slot.style.visibility = "visible";
-    var subject = data.subject || "";
-    var same = slot.dataset.subject === subject;
-    slot.dataset.subject = subject;
-    face.style.viewTransitionName = subject ? "strip-" + subject : "none";
-    var urgent = data.tone === "urgent", good = data.tone === "good";
-    slot.classList.toggle("urgent", urgent);
-    slot.classList.toggle("good", good && !urgent);
-    // Only an instruction floods (`strip.ACT_NOW`, decided server-side):
-    // two laps to the stop is amber to watch, not a thing to do yet.
-    slot.classList.toggle("flooded", id === "centre" && data.act === true);
-    face.querySelector(".cap").textContent = data.caption || "";
-    face.querySelector(".sub").textContent = data.sub || "";
-    setValue(face.querySelector(".val"), data.value || "", roll && same);
-    fitSlot(slot);
+  // ---- a figure
+  function fig(id, data, room) {
+    var el = $(id);
+    if (!data) { el.style.visibility = "hidden"; el.dataset.subject = ""; return; }
+    el.style.visibility = "visible";
+    var same = el.dataset.subject === (data.subject || data.caption || "");
+    el.dataset.subject = data.subject || data.caption || "";
+    el.classList.toggle("good", data.tone === "good");
+    el.classList.toggle("urgent", data.tone === "urgent");
+    el.querySelector(".cap").textContent = data.caption || "";
+    var sub = el.querySelector(".sub");
+    if (sub) sub.textContent = data.sub || "";
+    var val = el.querySelector(".val");
+    setValue(val, data.value || "", !covered && same);
+    fit(val, room, 0.4);
+  }
+
+  function band(data) {
+    var el = $("band");
+    var same = el.dataset.subject === data.subject;
+    el.dataset.subject = data.subject || "";
+    // **The band's colour is the band's meaning.** Amber is an instruction
+    // (`strip.ACT_NOW`, decided server-side); red and green are the delta.
+    var act = data.act === true;
+    el.classList.toggle("act", act);
+    el.classList.toggle("slow", !act && data.tone === "urgent");
+    el.classList.toggle("quick", !act && data.tone === "good");
+    el.querySelector(".cap").textContent = data.caption || "";
+    el.querySelector(".sub").textContent = data.sub || "";
+    var val = el.querySelector(".val");
+    setValue(val, data.value || "", !covered && same);
+    fit(val, el.clientWidth * 0.94, 0.3);
   }
 
   function light(id, data) {
-    var slot = $(id);
-    if (!data) { slot.style.visibility = "hidden"; return; }
-    slot.style.visibility = "visible";
+    var el = $(id);
+    if (!data) { el.style.visibility = "hidden"; return; }
+    el.style.visibility = "visible";
     var lit = !!data.ink;
-    // The ink stays set when the lamp goes out, so the fill it retracts is
+    // The ink stays set when the lamp goes out, so the fill that retracts is
     // the colour it was.
-    if (lit) { slot.style.setProperty("--fill", data.ink); slot.style.borderColor = data.ink; }
-    else { slot.style.borderColor = ""; }
-    slot.classList.toggle("flooded", lit);
-    slot.querySelector(".word").textContent = data.word;
-    slot.querySelector(".lsub").textContent = data.sub || "";
-  }
-
-  function subjectOf(data) { return data ? (data.subject || data.caption || "") : "-"; }
-
-  function apply(d, roll) {
-    item("left", d.left, d.kind, roll); item("centre", d.centre, d.kind, roll);
-    item("right", d.right, d.kind, roll); item("extra", d.extra, d.kind, roll);
-    item("extra2", d.extra2, d.kind, roll);
-    var lights = d.lights || [];
-    light("l0", lights[0]); light("l1", lights[1]); light("l2", lights[2]);
+    if (lit) { el.style.setProperty("--fill", data.ink); el.style.borderColor = data.ink; }
+    else { el.style.borderColor = ""; }
+    el.classList.toggle("lit", lit);
+    el.textContent = data.word;
   }
 
   function render(d) {
@@ -352,25 +278,17 @@
     if (d.age_s === null || d.age_s > staleAfter) {
       show("NO DATA", "Pit Crew has stopped updating", true); return;
     }
-    var now = [d.kind, subjectOf(d.left), subjectOf(d.centre), subjectOf(d.right),
-               subjectOf(d.extra), subjectOf(d.extra2)].join("|");
-    var rearranged = arrangement !== null && now !== arrangement;
-    var fresh = covered;
-    arrangement = now;
-    if (rearranged && !morphing && moving() && document.startViewTransition) {
-      // **The slots trade places on screen.** Each block's face carries its
-      // subject as its transition name, so the browser flies it from where
-      // it was to where it is.
-      morphing = true;
-      var t = document.startViewTransition(function () { apply(d, false); });
-      t.finished.then(done, done);
-    } else {
-      apply(d, !fresh && !rearranged);
-    }
+    var half = $("top").clientWidth / 2 - 16;
+    fig("last", d.last, half);
+    fig("best", d.best, half);
+    band(d.centre);
+    fig("lap", d.lap, $("bottom").clientWidth * 0.2);
+    fig("burn", d.burn, $("burn").clientWidth);
+    var lights = d.lights || [];
+    light("l0", lights[0]); light("l1", lights[1]); light("l2", lights[2]);
     cover.className = "";
     covered = false;
   }
-  function done() { morphing = false; }
 
   function poll() {
     var ctl = window.AbortController ? new AbortController() : null;
@@ -390,13 +308,6 @@
       show("NO DATA", "lost the connection to the PC", true);
     }
   }, POLL_MS);
-
-  // A turn of the phone changes the room every figure was fitted to.
-  window.addEventListener("resize", function () {
-    ["left", "centre", "right", "extra", "extra2"].forEach(function (id) {
-      if ($(id).style.visibility !== "hidden") fitSlot($(id));
-    });
-  });
 
   // Keep the screen on where the browser allows it (secure pages only, so
   // usually not here - set Auto-Lock to Never on the phone instead).

@@ -1,96 +1,67 @@
-"""The strip: the board's quick-reference numbers, for a phone on the game monitor.
+"""The strip: his own car, at a glance, on the phone right of the wheel.
 
-Asked for on 15 Sep 2026. He wanted a small screen for "quick data reference"
-and the ultrawide above for the rest, then settled the hardware himself: his
-own iPhone, landscape, on a magic arm at the bottom-right corner of the game
-monitor, showing a page the app serves over the local network - *"it could be
-a locally rendered HTML so it doesn't have to be directly connected"*.
+Asked for on 15 Sep 2026 as quick reference on the game monitor. **Redrawn on
+17 Sep 2026** when he settled three screens - *"Phone - my car immediate
+regular data. Tablet - what's going on around me. Monitor - history"* - and
+showed the face he wanted: a lap timer's. Last lap and the best across the
+top, the delta as a flood across the middle, the lap bottom-left, and where
+the timer has the time of day, *"our fuel target and burn to it"*.
 
-**This module decides what the strip says; `strip.html` only draws it.** The
-page is a dumb renderer on purpose. Every word and number on it comes out of
-the same functions the Qt board uses (`driver_view.box_block`, `gap_block`,
-`fuel_stop_block`, ...), so the phone and the ultrawide cannot word one number
-two ways - the fuel block has been "-7.1 in hand" once already for want of one
-expression (CLAUDE.md rules 12 and 13). Choosing in JavaScript would be a
-second copy of the priority, untested, on a device he cannot inspect mid-race.
+**So the gaps and laps to the stop are not here any more.** They go to the
+tablet with the rest of the field. What stays is what is about this car.
 
-### The centre slot changes with what matters right now
+**This module decides what the strip says; `strip.html` only draws it.** Every
+figure comes from `driver_view`'s block functions - the ones the ultrawide
+draws - so the phone and the board cannot word one number two ways (CLAUDE.md
+rules 12 and 13). Choosing in JavaScript would be a second copy, untested, on
+a device he cannot inspect mid-race.
 
-His call: *"changes based on what's important right now, use it as a
-changeable dash for critical information."* A slot whose meaning changes is
-exactly the hazard rule 13 names - one big number that means different things
-at different moments - so it obeys three rules:
+### What the delta is against, by session
 
-* **It always carries its caption**, and the caption is the item's own
-  (LAPS TO THE STOP, BEHIND, ...), never a generic "critical".
-* **The order is fixed and lives here, once**, agreed with him on 15 Sep:
-  in the box the release countdown; then BOX THIS LAP (or late); then fuel
-  short of the stop; then a car within `NEAR_CAR_S`; otherwise laps to the
-  stop (race) or the time difference (practice and qualifying).
-* **A car slot holds** until the gap opens past `NEAR_CAR_RELEASE_S`, so a
-  gap reading 0.98 then 1.02 does not flip the slot's meaning on every read.
-  That hold is state, so `new_session()` drops it (rule 11) and the controller
-  calls it whenever the board opens.
+* **Practice and qualifying:** the best lap ever recorded on this compound -
+  `best_lap_on_file`, this car, circuit, game version and tyre.
+* **Race:** the plan's lap time for this lap, the projected lap against it.
 
-When the centre takes a neighbour, **that side's flank shows laps to the stop
-instead**, so the neighbour is not drawn twice and nothing leaves the strip.
+### An instruction still takes the middle
+
+The flood is the delta, **except when there is something to do now**: in the
+box the release countdown, then BOX THIS LAP (or late), then fuel short of the
+stop. Those take the band in amber (`ACT_NOW`), in that fixed order, and each
+carries its own caption - a band whose meaning changes is exactly rule 13's
+hazard, so it is never uncaptioned.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 from pitcrew.ui.driver_view import (
-    Block, DriverState, abs_light, box_block, delta_block,
-    format_lap_ms, fuel_stop_block, fuel_target_block, gap_block,
-    release_block, target_strip_block, tcs_light, tyres_block, wet_light)
-
-# **A car "within a second" is his threshold, not a measurement** (15 Sep
-# 2026). What makes it usable is the reader, which is measured: two reads of
-# one car under 4 s apart differ by a median 0.03-0.11 s (`race/gaps.py`), so
-# at one second the slot is deciding on the gap, not on the digit reader.
-NEAR_CAR_S = 1.0
-# The hold. A car that took the slot keeps it until the gap is this wide -
-# 0.2 s is about twice the reader's own median scatter, so a read wobbling
-# across the line cannot toggle the slot on its own.
-NEAR_CAR_RELEASE_S = 1.2
+    Block, DriverState, abs_light, box_block, face_best_block, face_burn_block,
+    face_delta_block, face_lap_block, face_last_block, fuel_stop_block,
+    fuel_target_block, release_block, tcs_light, tyres_block, wet_light)
 
 CENTRE_RELEASE = "release"
 CENTRE_BOX = "box"
 CENTRE_FUEL_SHORT = "fuel_short"
-CENTRE_CAR_AHEAD = "car_ahead"
-CENTRE_CAR_BEHIND = "car_behind"
-CENTRE_LAPS_TO_STOP = "laps_to_stop"
-CENTRE_TIME_DIFF = "time_diff"
+CENTRE_DELTA = "delta"
 
 # **The centre states that are an instruction, not a reading.** Only these
-# flood the slot on the page. Laps to the stop is amber from two laps out,
-# which is right for a number to watch and wrong for a slot turning solid
-# amber two laps before there is anything to do - a flood that fires early
-# teaches him to ignore the flood.
+# flood amber. The delta floods too, but in its own red and green, which say
+# quick or slow and never "do something".
 ACT_NOW = (CENTRE_RELEASE, CENTRE_BOX, CENTRE_FUEL_SHORT)
 
-PAYLOAD_VERSION = 1
-
-
-# **What a block is ABOUT, whichever slot it is in.** `id` names why the
-# centre holds what it holds; `subject` names the number itself, and the same
-# number keeps the same subject as it moves - laps to the stop in the centre,
-# then in the flank a car pushed it to. The page morphs a subject from its old
-# slot to its new one, so a change of meaning is something he SEES happen
-# rather than a different number that is simply there on the next glance
-# (his pick, 15 Sep 2026: "motion as signal"). No two blocks on one payload
-# share a subject.
+# What a block is about, so the page can tell a changed number from a changed
+# meaning: a value that moves within one subject rolls; a new subject in the
+# band is a new thing, and wipes in.
+SUBJECT_DELTA = "delta"
 SUBJECT_LAPS_TO_STOP = "laps_to_stop"
-SUBJECT_AHEAD = "ahead"
-SUBJECT_BEHIND = "behind"
 SUBJECT_FUEL_TO_STOP = "fuel_to_stop"
-SUBJECT_VS_TARGET = "vs_target"
+
+PAYLOAD_VERSION = 2
 
 
 @dataclass(frozen=True)
 class Item:
-    """One captioned block on the strip."""
+    """One captioned figure on the strip."""
     caption: str
     block: Block
     id: str = ""
@@ -104,135 +75,44 @@ class Item:
                 "act": self.id in ACT_NOW and self.block.urgent}
 
 
-def _laps_to_stop(state: DriverState) -> Item:
-    return Item("LAPS TO THE STOP", box_block(state), CENTRE_LAPS_TO_STOP,
-                SUBJECT_LAPS_TO_STOP)
-
-
-def _gap(state: DriverState, side: str) -> Item:
-    gap = state.ahead if side == "ahead" else state.behind
-    ahead = side == "ahead"
-    return Item(side.upper(), gap_block(gap),
-                CENTRE_CAR_AHEAD if ahead else CENTRE_CAR_BEHIND,
-                SUBJECT_AHEAD if ahead else SUBJECT_BEHIND)
-
-
-def _seconds(state: DriverState, side: str) -> float | None:
-    gap = state.ahead if side == "ahead" else state.behind
-    if gap is None or gap.seconds is None or not math.isfinite(gap.seconds):
-        return None
-    return gap.seconds
-
-
 class StripComposer:
     """Builds the strip's payload from the board's state, one tick at a time.
 
-    Holds exactly one thing across ticks: which neighbour, if any, has the
-    centre slot. `new_session()` drops it.
+    Holds nothing across ticks now that the neighbour slot has gone to the
+    tablet; `new_session()` stays so the controller's reset has a caller
+    (rule 11) the day it holds something again.
     """
 
-    def __init__(self) -> None:
-        self._held_side: str | None = None
-
     def new_session(self) -> None:
-        """Forget the held neighbour. A car that was close at the end of the
-        last race is not close at the start of this one (rule 11)."""
-        self._held_side = None
+        """Nothing is held between sessions."""
 
     # ------------------------------------------------------------------ race
 
-    def _near_side(self, state: DriverState) -> str | None:
-        """Which neighbour is inside the threshold, honouring the hold.
-
-        Both inside: the nearer one; a dead heat goes to the car behind,
-        because being passed costs a place now and passing can wait a lap.
-        """
-        held = self._held_side
-        if held is not None:
-            seconds = _seconds(state, held)
-            if seconds is not None and seconds <= NEAR_CAR_RELEASE_S:
-                return held
-        near = [(s, side) for side in ("behind", "ahead")
-                if (s := _seconds(state, side)) is not None and s < NEAR_CAR_S]
-        if not near:
-            return None
-        best = min(s for s, _ in near)
-        # "behind" is listed first, so it is the one a dead heat returns.
-        return next(side for s, side in near if s == best)
-
-    def _race(self, state: DriverState) -> dict:
-        if state.in_box:
-            self._held_side = None
-            return {
-                "kind": "box",
-                "centre": Item("RELEASE IN", release_block(state),
-                               CENTRE_RELEASE, "release").to_json(),
-                "left": Item("FUEL TO", fuel_target_block(state),
-                             subject="fuel_target").to_json(),
-                "right": Item("TYRES", tyres_block(state),
-                              subject="tyres").to_json(),
-                "extra": None,
-            }
-
-        left, right = _gap(state, "ahead"), _gap(state, "behind")
-        stop = fuel_stop_block(state)
-        side = None
+    @staticmethod
+    def _centre(state: DriverState) -> Item:
+        """The band: an instruction if there is one, the delta otherwise."""
         if not state.finished and state.laps_past_box is not None \
                 and state.laps_to_box is not None:
-            # The same block and caption as the default - `box_block` has
-            # already turned it into NOW - with its own id for the page.
-            centre = Item("LAPS TO THE STOP", box_block(state), CENTRE_BOX,
-                          SUBJECT_LAPS_TO_STOP)
-        elif state.fuel_to_stop is not None and state.fuel_to_stop < 0:
-            centre = Item("IN HAND TO THE STOP", stop, CENTRE_FUEL_SHORT,
-                          SUBJECT_FUEL_TO_STOP)
-        elif not state.finished and (side := self._near_side(state)):
-            centre = _gap(state, side)
-            # The flank it came from shows the default instead, so the
-            # neighbour is not drawn twice.
-            if side == "ahead":
-                left = _laps_to_stop(state)
-            else:
-                right = _laps_to_stop(state)
-        else:
-            centre = _laps_to_stop(state)
-        self._held_side = side
-        # Fuel sits in the extra slot unless it has taken the centre.
-        extra = (None if centre.id == CENTRE_FUEL_SHORT
-                 else Item("IN HAND TO THE STOP", stop,
-                           subject=SUBJECT_FUEL_TO_STOP).to_json())
-        # **The second extra: the last lap against the plan's target** (the
-        # driver's pick, 16 Sep 2026, when the strip was the one surface it
-        # had not reached). Beside the fuel one rather than in the centre
-        # rotation: the centre is for what to do NOW, and a lap already
-        # driven is a reading. Absent - hidden, not dashed - where the race
-        # has no targets or the lap got no verdict.
-        target = (None if state.target_lap_ms is None
-                  and state.last_vs_target_s is None
-                  else Item("VS TARGET", target_strip_block(state),
-                            subject=SUBJECT_VS_TARGET).to_json())
-        return {"kind": "race", "centre": centre.to_json(),
-                "left": left.to_json(), "right": right.to_json(),
-                "extra": extra, "extra2": target}
-
-    # -------------------------------------------------------------- practice
+            return Item("LAPS TO THE STOP", box_block(state), CENTRE_BOX,
+                        SUBJECT_LAPS_TO_STOP)
+        if state.fuel_to_stop is not None and state.fuel_to_stop < 0:
+            return Item("IN HAND TO THE STOP", fuel_stop_block(state),
+                        CENTRE_FUEL_SHORT, SUBJECT_FUEL_TO_STOP)
+        caption, block = face_delta_block(state)
+        return Item(caption, block, CENTRE_DELTA, SUBJECT_DELTA)
 
     @staticmethod
-    def _practice(state: DriverState) -> dict:
+    def _box(state: DriverState) -> dict:
         return {
-            "kind": state.session_kind,
-            "centre": Item("TIME DIFF", delta_block(state),
-                           CENTRE_TIME_DIFF, "time_diff").to_json(),
-            "left": Item("LAPTIME",
-                         Block(format_lap_ms(state.lap_time_ms)),
-                         subject="laptime").to_json(),
-            "right": Item("PRED. TIME",
-                          Block(format_lap_ms(state.predicted_ms)),
-                          subject="pred_time").to_json(),
-            "extra": None,
-            # No plan, no targets: practice and qualifying have nothing to be
-            # on target against, and the slot is absent rather than dashed.
-            "extra2": None,
+            "kind": "box",
+            "last": Item("FUEL TO", fuel_target_block(state),
+                         subject="fuel_target").to_json(),
+            "best": Item("TYRES", tyres_block(state),
+                         subject="tyres").to_json(),
+            "centre": Item("RELEASE IN", release_block(state),
+                           CENTRE_RELEASE, "release").to_json(),
+            "lap": Item("LAP", face_lap_block(state)).to_json(),
+            "burn": None,
         }
 
     # ------------------------------------------------------------------ all
@@ -241,10 +121,27 @@ class StripComposer:
         """The whole payload. `None` is no session - the page says so, rather
         than holding the last race's numbers (rule 11)."""
         if state is None:
-            self._held_side = None
             return {"v": PAYLOAD_VERSION, "idle": True}
-        body = (self._race(state) if state.session_kind == "race"
-                else self._practice(state))
+        racing = state.session_kind == "race"
+        if racing and state.in_box:
+            body = self._box(state)
+        else:
+            best_caption, best = face_best_block(state)
+            burn = face_burn_block(state)
+            centre = (self._centre(state) if racing else
+                      Item(*face_delta_block(state), CENTRE_DELTA,
+                           SUBJECT_DELTA))
+            body = {
+                "kind": state.session_kind,
+                "last": Item("LAST LAP", face_last_block(state)).to_json(),
+                "best": Item(best_caption, best).to_json(),
+                "centre": centre.to_json(),
+                "lap": Item("LAP", face_lap_block(state)).to_json(),
+                # **Absent, not dashed, outside a race**: practice has no plan
+                # burn, and a dash there would be a reason nobody needs.
+                "burn": (None if burn is None
+                         else Item("BURN VS PLAN", burn).to_json()),
+            }
         lights = [wet_light(state.wet),
                   abs_light(state.abs_setting, state.front_lock),
                   tcs_light(state.tcs_active)]

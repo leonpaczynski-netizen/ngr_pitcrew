@@ -134,6 +134,23 @@ def burn_sentence(delta_l: float | None) -> str:
             f"{'over' if delta_l > 0 else 'under'}.")
 
 
+def stint_burn(state) -> tuple[float | None, int, bool | None]:
+    """`(mean litres over target a lap, laps behind it, saving?)` this stint.
+
+    **Only the laps on the column the last judged lap was driven on.** The two
+    beep columns are two burns ~30% apart, and pooling a stint that switched
+    lands near the practice figure - right-looking and wrong (Sardegna
+    session 183). Every figure carries its lap count (rule 4); `None` with no
+    judged lap on that column, never a zero.
+    """
+    burns = list(getattr(state, "stint_burns", None) or [])
+    if not burns:
+        return None, 0, None
+    column = burns[-1][0]
+    mine = [delta for saving, delta in burns if saving == column]
+    return round(sum(mine) / len(mine), 3), len(mine), column
+
+
 def board_target_fields(state) -> dict:
     """The `DriverState` fields for the targets, off a `RaceState`.
 
@@ -143,7 +160,11 @@ def board_target_fields(state) -> dict:
     """
     target = getattr(state, "lap_target", None)
     verdict = getattr(state, "target_verdict", None)
+    stint_delta, stint_laps, stint_saving = stint_burn(state)
     return {
+        "stint_burn_vs_target_l": stint_delta,
+        "stint_burn_laps": stint_laps,
+        "stint_burn_saving": stint_saving,
         "target_lap_ms": getattr(target, "lap_ms", None),
         "target_burn_l": getattr(target, "burn_l", None),
         "target_why": (getattr(target, "why_no_lap", None)

@@ -154,6 +154,7 @@ class BoardLive:
         self._elapsed_ms = 0.0
         self._last_packet_id = None
         self._last_lap_ms = None
+        self._lap_face: tuple = (None, None)
         self._on_lap = False
         self._lock_until = -1.0
         self._tcs_until = -1.0
@@ -319,6 +320,16 @@ class BoardLive:
                     self._distance_m += (packet.speed_ms or 0.0) * step / SAMPLE_HZ
                     self._elapsed_ms += step * 1000.0 / SAMPLE_HZ
 
+        # **GT7's own last lap and HUD lap, for the phone's lap-timer face**
+        # (17 Sep 2026). Its figures, not ours: -1 is "no time set" in the
+        # packet and becomes None, never a lap of -0.001 s (rule 3). Rebound
+        # as one tuple, so the pair is never read half-written.
+        last = getattr(packet, "last_lap_ms", None)
+        done = getattr(packet, "laps_completed", None)
+        self._lap_face = (int(last) if isinstance(last, int) and last > 0
+                          else None,
+                          int(done) + 1 if isinstance(done, int) and done >= 0
+                          else None)
         lap_ms = getattr(packet, "current_lap_time_ms", None)
         if crossed:
             self._distance_m = 0.0
@@ -364,9 +375,11 @@ class BoardLive:
                                            self._session_refs.get(self.compound),
                                            self._file_refs.get(self.compound))
         stale = self._last_seen is None or now - self._last_seen > STALE_S
+        last_lap_ms, lap_number = self._lap_face
         if stale:
             lap_ms = delta = delta_file = predicted = None
             lock = tcs = None
+            last_lap_ms = lap_number = None
         if delta is not None:
             why = None
         elif not code:
@@ -388,6 +401,8 @@ class BoardLive:
             "delta_why": why,
             "front_lock": lock,
             "tcs_active": tcs,
+            "last_lap_ms": last_lap_ms,
+            "lap_number": lap_number,
         }
 
 

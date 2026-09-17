@@ -29,9 +29,7 @@ from pitcrew.race.gaps import GapTrend  # noqa: E402
 from pitcrew.ui.driver_view import (  # noqa: E402
     GROUND, NEAR, NOBODY_AHEAD, DriverState, DriverView, GapView, _Stat,
     fit_on_screen, gap_block)
-from pitcrew.ui.strip import (  # noqa: E402
-    CENTRE_BOX, SUBJECT_AHEAD, SUBJECT_FUEL_TO_STOP, SUBJECT_LAPS_TO_STOP,
-    StripComposer)
+from pitcrew.ui.strip import CENTRE_BOX, StripComposer  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -114,60 +112,15 @@ def racing(**kw) -> DriverState:
     return DriverState(**base)
 
 
-def test_a_block_keeps_its_subject_as_it_changes_slot():
-    """What lets the page fly laps-to-the-stop out to the flank a car took."""
-    composer = StripComposer()
-    quiet = composer.compose(racing())
-    assert quiet["centre"]["subject"] == SUBJECT_LAPS_TO_STOP
-    assert quiet["left"]["subject"] == SUBJECT_AHEAD
-    close = composer.compose(racing(ahead=GapView(seconds=0.6)))
-    assert close["centre"]["subject"] == SUBJECT_AHEAD
-    assert close["left"]["subject"] == SUBJECT_LAPS_TO_STOP
-    short = composer.compose(racing(fuel_to_stop=-0.2))
-    assert short["centre"]["subject"] == SUBJECT_FUEL_TO_STOP
-    assert short["extra"] is None
-
-
-@pytest.mark.parametrize("payload", [
-    racing(), racing(ahead=GapView(seconds=0.5)), racing(fuel_to_stop=-0.3),
-    racing(in_box=True, release_in_s=4.0, fuel_target_l=40.0, fuel_l=10.0),
-    DriverState(session_kind="practice")])
-def test_no_two_blocks_on_one_payload_share_a_subject(payload):
-    """A duplicate transition name makes the browser skip the morph."""
-    got = StripComposer().compose(payload)
-    subjects = [got[k]["subject"] for k in ("left", "centre", "right", "extra")
-                if got.get(k)]
-    assert len(subjects) == len(set(subjects))
-
-
 def test_only_an_instruction_floods_not_a_number_to_watch():
+    """On the lap-timer face (17 Sep 2026) the band is the delta, and only an
+    instruction turns it amber."""
     composer = StripComposer()
-    assert composer.compose(racing(laps_to_box=2.0))["centre"]["tone"] == "urgent"
-    assert composer.compose(racing(laps_to_box=2.0))["centre"]["act"] is False
+    two_laps = composer.compose(racing(laps_to_box=2.0))["centre"]
+    assert two_laps["act"] is False
     now = composer.compose(racing(laps_to_box=0.0, laps_past_box=0))
     assert now["centre"]["id"] == CENTRE_BOX and now["centre"]["act"] is True
     assert composer.compose(racing(fuel_to_stop=-0.1))["centre"]["act"] is True
-    assert composer.compose(racing(ahead=GapView(seconds=0.4, urgent=True))
-                            )["centre"]["act"] is False
-
-
-def test_the_page_draws_both_rows_on_one_grid():
-    """The two readings take the width, the lamps a thin band under them.
-
-    16 Sep 2026, the driver: the lamps "only need to be very small and
-    different coloured for visibility", and the room they had goes to fuel in
-    hand and the lap against the plan's target. So the readings are row 2
-    across all three columns and the lamps are row 3.
-    """
-    from pitcrew.ui.strip_server import PAGE
-
-    page = PAGE.read_text(encoding="utf-8")
-    assert "#extras { grid-area: 2 / 1 / 3 / 4;" in page
-    assert "#lights { grid-area: 3 / 1 / 4 / 4;" in page
-    # The lamp keeps its colour and loses its reason line and its height.
-    assert ".light .lsub { display: none; }" in page
-    assert 'id="extra2"' in page and "item(\"extra2\", d.extra2" in page
-    assert "startViewTransition" in page and "data.act === true" in page
 
 
 # ----------------------------------------------------------- the ultrawide

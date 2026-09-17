@@ -1153,6 +1153,13 @@ class RaceState:
     # What the plan asks of the lap being driven now, for the board. None
     # where the race has no plan targets or the lap is not judged.
     lap_target: "object | None" = None
+    # **This stint's judged burns, each with the beep column it was driven
+    # on** - `(saving, litres over the lap's target)`. The phone's stint
+    # average reads the column he is on and nothing else (17 Sep 2026): the
+    # two columns burned 5.37 and 7.04 L/lap at Sardegna, and a stint that
+    # switched pools to about the practice figure and looks right while being
+    # wrong. Emptied at every stop by `clear_stint` - a stint is a tank.
+    stint_burns: list = field(default_factory=list)
 
     # --- tyre wear, MEASURED off the HUD gauge (telemetry/hud.py) ---
     # (lap, {corner: fraction worn}) per lap that carried a gauge reading.
@@ -4809,6 +4816,8 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
                      if kind in (GREEN,)}
     # A save asked for last stint is not a save asked for on this tank.
     state.fuel_save_said = False
+    # The stint's burn average is about one tank, fuel stop or tyre stop.
+    state.stint_burns = []
     # The temp occasions speak freshly each stint either way; the history
     # only survives when the rubber does - a new set's baseline is its own,
     # and it starts cold, which is exactly what the cold check should see.
