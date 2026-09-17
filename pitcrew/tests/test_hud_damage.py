@@ -228,7 +228,7 @@ def test_the_sampler_reads_the_icon_with_no_other_passenger(panels, monkeypatch)
 
     frame, bars = panels["rear_166_t320"]
     grabbed = CropFrame(pixels=frame, origin=(0, 0), canvas=(1920, 1080))
-    monkeypatch.setattr(hud, "read_gauge", lambda f: Reading({"fl": 0.1}, bars=bars))
+    monkeypatch.setattr(hud, "read_gauge", lambda f, **_: Reading({"fl": 0.1}, bars=bars))
     got = []
     sampler = LiveWearSampler(source=_Source(grabbed), write=lambda *a: None,
                               on_damage=got.append)

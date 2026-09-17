@@ -512,15 +512,21 @@ def flat_series_fault(series, *, slack: float = GAUGE_SLACK) -> str | None:
             f"{len(seen)} readings - tyres wear, so this is not the gauge")
 
 
-def read_gauge(png, layout: dict | None = None) -> Reading:
+def read_gauge(png, layout: dict | None = None, *,
+               near: dict | None = None) -> Reading:
     """Transcribe the four bars from a canvas screenshot.
 
     Pure: bytes in, a reading out. Everything that can go wrong returns a
     `Reading` with a reason rather than raising, because the caller is a lap
     handler and the lap matters more than the gauge.
+
+    `near` is where a previous frame found the gauge (`Reading.bars`). Where
+    the gauge has to be located, the search looks there first and falls back
+    to the whole frame - see `locate_gauge_near`.
     """
     layout = layout or LAYOUT_1720x916
 
+    whole = None
     if isinstance(png, CropFrame) and _is_whole_canvas(png):
         # **A "crop" of the entire canvas is not a crop.** The refusal below
         # exists because a crop is a bet that the gauge did not move, so there
@@ -528,11 +534,18 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
         # what `locate_gauge` needs, and refusing it would be refusing the one
         # frame that can answer the question. `ScreenSource` sends this shape
         # deliberately when the driver's window is not the calibrated canvas.
+        #
+        # **Read from the pixels, not through a PNG.** This used to encode the
+        # frame to PNG and decode it straight back so it took the bytes path
+        # below. PNG is lossless, so the array is the same; the round trip was
+        # about 180 ms of a 1080p frame, and "once a lap" became every grab
+        # when the sampler started free-running (measured 17 Sep 2026 on the
+        # Rd 9 recording: 322 ms per gauge read, of a 460 ms cycle).
         import numpy as np
 
-        png = _as_png_bytes(np.asarray(png.pixels))
+        whole = np.asarray(png.pixels).astype(int)
 
-    if isinstance(png, CropFrame):
+    if isinstance(png, CropFrame) and whole is None:
         # **A crop, whose geometry was verified where it was cut.** The source
         # measured the canvas it took this from; if that was not the calibrated
         # one the crop is of the wrong rectangle and the refusal is the same
@@ -556,6 +569,8 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
             return Reading(None, f"crop at {png.origin} is "
                                  f"{frame.shape[1]}x{frame.shape[0]} and does "
                                  f"not contain the gauge")
+    elif whole is not None:
+        frame = whole
     else:
         try:
             import io
@@ -568,6 +583,8 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
         except Exception as exc:                             # noqa: BLE001
             return Reading(None, f"frame could not be decoded: {exc}")
 
+    searchable = whole is not None or not isinstance(png, CropFrame)
+    if searchable:
         height, width = frame.shape[0], frame.shape[1]
         if (width, height) != CANVAS:
             # **Not the calibrated canvas, so the layout is not used - the
@@ -594,7 +611,7 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
             # the looser thresholds the locator found the bars with and carries
             # `quantisation_note`, so it is never confused with the fixed-layout
             # read that the 0.5% verification was taken on.
-            located = locate_gauge(frame)
+            located = locate_gauge_near(frame, near)
             if located is not None:
                 return _read_bars(frame, located, quantisation_note=True)
             return Reading(None, f"canvas is {width}x{height}, not "
@@ -613,7 +630,7 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
         # **Only a full canvas can be searched.** The locator exists because
         # the gauge moves; a crop is a bet that it did not, so on a crop there
         # is nowhere to look and the dim verdict stands.
-        moved = None if isinstance(png, CropFrame) else locate_gauge(frame)
+        moved = locate_gauge_near(frame, near) if searchable else None
         if moved is not None:
             return _read_bars(frame, moved, quantisation_note=True)
         return Reading(None, f"frame is dimmed (gauge peaks at {peak}) - paused, "
@@ -856,7 +873,49 @@ def _looks_like_a_bar(red, white, x: int, y0: int, y1: int) -> bool:
     return True
 
 
-def locate_gauge(frame) -> dict | None:
+def locate_gauge_near(frame, near: dict | None) -> dict | None:
+    """`locate_gauge`, searching round where the gauge last was before the frame.
+
+    **The whole-frame search is most of what a free-running grab costs** -
+    about 230 ms of a 1080p frame, every grab, to find an instrument that on a
+    flat capture has not moved since the last one. So the same search runs
+    first on a window round `near`, and only a miss there searches everything.
+
+    **Finding is not relaxed, only narrowed.** The window is searched by
+    `locate_gauge` itself, with the bar-height bounds of the FULL canvas, so a
+    gauge found here passed the same 2x2 grid and car-icon tests as one found
+    anywhere. Two guards keep the window honest:
+
+    * the window is padded by more than the tallest possible bar, and
+    * a gauge found within one bar-height of a cut edge is refused and the
+      whole frame searched instead - a run the cut truncated could otherwise
+      pass for a bar of the right height.
+
+    `near` is only a starting point. It never stands in for a reading: a miss
+    falls through to the full search, whose answer (or None) is returned.
+    """
+    if near:
+        height, width = frame.shape[0], frame.shape[1]
+        _, max_h = bar_height_bounds(height)
+        pad = max(VR_CLUSTER_W, 3 * max_h)
+        margin = max_h + 2
+        x0, y0, x1, y1 = layout_bounds(near)
+        wx0, wy0 = max(0, x0 - pad), max(0, y0 - pad)
+        wx1, wy1 = min(width, x1 + pad + 1), min(height, y1 + pad + 1)
+        found = locate_gauge(frame[wy0:wy1, wx0:wx1], canvas_height=height)
+        if found is not None:
+            fx0, fy0, fx1, fy1 = layout_bounds(found)
+            inside = ((wx0 == 0 or fx0 >= margin)
+                      and (wy0 == 0 or fy0 >= margin)
+                      and (wx1 == width or fx1 < (wx1 - wx0) - margin)
+                      and (wy1 == height or fy1 < (wy1 - wy0) - margin))
+            if inside:
+                return {corner: (bx0 + wx0, bx1 + wx0, by0 + wy0, by1 + wy0)
+                        for corner, (bx0, bx1, by0, by1) in found.items()}
+    return locate_gauge(frame)
+
+
+def locate_gauge(frame, *, canvas_height: int | None = None) -> dict | None:
     """Find the four bars in a frame that will not hold them still.
 
     Returns a layout in the same shape as `LAYOUT_1720x916` - `{corner:
@@ -865,12 +924,15 @@ def locate_gauge(frame) -> dict | None:
     **None is the expected answer much of the time** and is not a failure: the
     panel is often edge-on, out of frame, or behind the wheel. Sampling more
     often costs nothing but a screenshot, and a stint's slope survives gaps.
+
+    `canvas_height` is for a window cut from a larger canvas: the bar sizes
+    scale with the screen, not with the window.
     """
     import numpy as np
 
     red, white, solid = _vr_masks(frame)
     height, width = solid.shape
-    min_h, max_h = bar_height_bounds(height)
+    min_h, max_h = bar_height_bounds(canvas_height or height)
     found = []
     for x in range(width):
         column = solid[:, x]
@@ -1082,23 +1144,6 @@ def whole_frame(grabbed):
     if getattr(grabbed, "ndim", 0) == 3:
         return np.asarray(grabbed)
     return None
-
-
-def _as_png_bytes(pixels) -> bytes:
-    """RGB array to PNG, so the full-frame path reads it like any capture.
-
-    A re-encode rather than a second entry point into `read_gauge`: the
-    decode-and-locate path is the one the 1440p behaviour was verified on, and
-    a parallel path that skipped the encode would be a second implementation of
-    the same read. It costs a few milliseconds once a lap.
-    """
-    import io as _io
-
-    from PIL import Image
-
-    buffer = _io.BytesIO()
-    Image.fromarray(pixels.astype("uint8"), "RGB").save(buffer, format="PNG")
-    return buffer.getvalue()
 
 
 def layout_bounds(layout: dict) -> tuple[int, int, int, int]:
@@ -1606,6 +1651,12 @@ class LiveWearSampler:
         # The callers count a refusal as a blind sample; a held reading is a
         # good reading awaiting its second, and must not.
         self._held_last = False
+        # **Where the last good reading found the gauge**, so the next grab
+        # searches there before searching the whole frame (`locate_gauge_near`).
+        # A search hint, never a reading. Dropped whenever a grab finds no
+        # gauge or a reading is refused, so a wrong place cannot outlive the
+        # frame that disagrees with it - rule 10.
+        self._gauge_near: dict | None = None
 
     def new_session(self) -> None:
         """Forget what has already been said about the gauge being blind.
@@ -1632,6 +1683,7 @@ class LiveWearSampler:
         self._refused_running = 0
         self._latest = None
         self._pending_fresh = None
+        self._gauge_near = None
 
     def start(self) -> None:
         """Start the reader. A no-op while one is already running.
@@ -1786,11 +1838,25 @@ class LiveWearSampler:
                     self._on_frame(whole)
                 except Exception:
                     _log.exception("hud-wear: frame passenger failed")
-        reading = read_gauge(frame)
+        reading = read_gauge(frame, near=self._gauge_near)
+        self._note_gauge_at(reading)
         if (self._on_hygro is not None or self._on_compound is not None
                 or self._on_damage is not None):
             self._pass_hygro(frame, reading, whole=whole)
         return reading, False
+
+    def _note_gauge_at(self, reading: Reading) -> None:
+        """Remember where a located gauge read, or forget it."""
+        seen = (reading.located and reading.bars is not None
+                and reading.wear is not None
+                and any(v is not None for v in reading.wear.values()))
+        was = self._gauge_near
+        self._gauge_near = reading.bars if seen else None
+        if seen and was is None:
+            # Logged when set, not only when lost: the hint decides where the
+            # next search looks, so the log has to show what it is.
+            _log.info("hud-wear: gauge found at %s - searching there first",
+                      layout_bounds(reading.bars))
 
     def _pass_hygro(self, frame, reading: Reading, *, whole=None) -> None:
         """Read the hygrometer beside the bars this grab found, and hand it on.
@@ -1856,6 +1922,8 @@ class LiveWearSampler:
         self._held_last = False
         accept, fresh, why = self._coherent(reading.wear)
         if not accept:
+            # The place may be what is wrong. Search the whole next frame.
+            self._gauge_near = None
             self._refused_running += 1
             _log.warning("hud-wear: reading refused - %s", why)
             if self._refused_running >= REFUSALS_BEFORE_RESEED:
