@@ -204,3 +204,39 @@ def test_the_fuel_bank_refuses_this_font_so_the_fallback_is_safe():
         pieces = _pieces(ink)
         tallest = max(b - t + 1 for _, _, t, b in pieces)
         assert _large(ink, pieces, tallest) is None, name
+
+
+# --- the batched scorer is the scorer --------------------------------------
+
+
+@pytest.mark.parametrize("name,sign,seconds", VALUES)
+def test_the_batched_scores_are_the_per_template_scores(name, sign, seconds):
+    """`read_text` scores every template at a column in one pass per width
+    (17 Sep 2026, 70 ms of a pit-wall frame down to about 9). That is only a
+    speed-up while it computes exactly what `_score` does - the floors and the
+    parse cost are compared against these numbers, so "close" is not enough.
+    """
+    from pitcrew.telemetry.smallfont import _grouped, _scores_at
+
+    band = band_of(a_gap(name))
+    bank = _bank()
+    grouped = _grouped(bank)
+    _, slots, _ = grouped
+    for x in range(band.shape[1]):
+        agree, cover, shape = _scores_at(band, x, grouped)
+        for char, (variants, _advance) in bank.items():
+            for one, n in zip(variants, slots[char]):
+                assert (agree[n], cover[n], shape[n]) == \
+                       _score(band[:, x:x + one.shape[1]], one), (char, x)
+
+
+def test_the_batched_bank_follows_a_rebuilt_bank():
+    """`tools/gap_bank.py` clears `_bank` and rebuilds it mid-run."""
+    from pitcrew.telemetry.smallfont import _grouped
+
+    first = _grouped(_bank())
+    _bank.cache_clear()
+    try:
+        assert _grouped(_bank()) is not first
+    finally:
+        _bank.cache_clear()

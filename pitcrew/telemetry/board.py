@@ -278,14 +278,21 @@ def _masks(frame):
     to 758 ms, on the worker thread that also owes the wear gauge its readings.
     Integer sums rather than a mean for the same reason — a mean promotes two
     million pixels to float64.
+
+    **The narrowest types that cannot overflow**, measured 17 Sep 2026 at
+    21.9 -> 16.1 ms a 1080p frame with identical masks: `top - bottom` cannot
+    go negative, so it stays uint8 where the frame is uint8, and three
+    channels sum to at most 765, which int16 holds.
     """
     array = np.asarray(frame)
     red, green, blue = array[..., 0], array[..., 1], array[..., 2]
     top = np.maximum(np.maximum(red, green), blue)
     bottom = np.minimum(np.minimum(red, green), blue)
-    colour = ((top.astype(np.int32) - bottom) > FLAG_SPREAD) & (
-        top > FLAG_CHANNEL_MIN)
-    lit = (red.astype(np.int32) + green + blue) > 3 * FLAG_INK_LUM
+    spread = (top - bottom if array.dtype == np.uint8
+              else top.astype(np.int32) - bottom)
+    colour = (spread > FLAG_SPREAD) & (top > FLAG_CHANNEL_MIN)
+    lit = (red.astype(np.int32 if array.dtype != np.uint8 else np.int16)
+           + green + blue) > 3 * FLAG_INK_LUM
     return colour, colour | lit
 
 
@@ -315,9 +322,13 @@ def _column_starts(mask, limit: int = MAX_COLUMNS):
     panel and flag and it does not move - measured at x=244 with 51-55 starts
     on all three frames tried, including both merged ones.
     """
-    padded = np.zeros((mask.shape[0], mask.shape[1] + 2), dtype=bool)
-    padded[:, 1:-1] = mask
-    xs = np.where(np.diff(padded.astype(np.int8), axis=1) == 1)[1]
+    # A start is a set pixel whose left neighbour is clear (or the frame edge).
+    # Boolean compare rather than an int8 diff of a padded copy: same starts,
+    # 6.8 -> 3.8 ms a 1080p frame.
+    rise = np.empty_like(mask, dtype=bool)
+    rise[:, 0] = mask[:, 0]
+    np.greater(mask[:, 1:], mask[:, :-1], out=rise[:, 1:])
+    xs = np.nonzero(rise)[1]
     if len(xs) == 0:
         return []
     seen, counts = np.unique(xs, return_counts=True)
@@ -421,8 +432,12 @@ def _panel_shares(frame, x0: int, width: int, ys, half: int):
     left = max(0, x0 - PANEL_WIDTHS * width)
     if x0 - left < 2 * width:
         return None
-    lum = np.asarray(frame)[:, left:x0].mean(axis=2)
-    return [float((lum[max(0, y - half):y + half] > PANEL_BRIGHT).mean())
+    # Only the rows the rungs span - each share is cut from them - rather than
+    # a float64 copy of the full height, once per candidate column.
+    lo = max(0, min(ys) - half)
+    lum = np.asarray(frame)[lo:max(ys) + half, left:x0].mean(axis=2)
+    return [float((lum[max(0, y - half) - lo:y + half - lo]
+                   > PANEL_BRIGHT).mean())
             for y in ys]
 
 
@@ -544,12 +559,14 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
     # Only the band left of the flag is ever looked at, so only that band is
     # computed: the whole-frame version of these two reductions was 181 ms of
     # the 271 ms this function cost, for pixels it then sliced away.
-    band = np.asarray(frame)[:, :flag_x0]
+    # And only the rows the rungs span: every strip below is cut from them.
+    lo = max(0, min(ys) - half)
+    band = np.asarray(frame)[lo:max(ys) + half, :flag_x0]
     bright = ((band.min(axis=2) > PLATE_MIN)
               & (np.ptp(band, axis=2) < PLATE_SPREAD))
     best, score = None, 0.0
     for y in ys:
-        strip = bright[max(0, y - half):y + half]
+        strip = bright[max(0, y - half) - lo:y + half - lo]
         if strip.size:
             filled = float(strip.mean())
             if filled > score:
@@ -557,7 +574,7 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
     if best is None or score < PLATE_FILL:
         return None
     top, bottom = max(0, best - half), best + half
-    strip = bright[top:bottom]
+    strip = bright[top - lo:bottom - lo]
     lit_rows = np.where(strip.mean(axis=1) > 0.4)[0]
     lit_cols = np.where(strip.mean(axis=0) > 0.4)[0]
     if len(lit_rows) < 3 or len(lit_cols) < 10:

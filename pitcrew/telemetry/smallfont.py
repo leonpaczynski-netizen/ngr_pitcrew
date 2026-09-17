@@ -243,6 +243,64 @@ def _score(window, template) -> tuple[float, float]:
     return agreement, cover, shape
 
 
+_GROUPED: tuple | None = None
+
+
+def _grouped(bank):
+    """The bank stacked by template width, for `_scores_at`.
+
+    Keyed on the bank object itself rather than cached alongside it, because
+    `tools/gap_bank.py` clears `_bank` and rebuilds it mid-run; a stack built
+    from the old bank would quietly score against templates that are gone.
+    """
+    global _GROUPED
+    if _GROUPED is not None and _GROUPED[0] is bank:
+        return _GROUPED[1]
+    order = [(char, index, one) for char, (variants, _) in bank.items()
+             for index, one in enumerate(variants)]
+    groups = []
+    for width in sorted({one.shape[1] for _, _, one in order}):
+        members = [n for n, (_, _, one) in enumerate(order)
+                   if one.shape[1] == width]
+        stack = np.stack([order[n][2] for n in members])
+        flat = stack.reshape(len(members), -1)
+        centred = flat - flat.mean(axis=1, keepdims=True)
+        groups.append((width, np.asarray(members), flat, flat.sum(axis=1),
+                       centred, (centred * centred).sum(axis=1)))
+    slots = {}
+    for n, (char, index, _) in enumerate(order):
+        slots.setdefault(char, []).append(n)
+    _GROUPED = (bank, (groups, slots, len(order)))
+    return _GROUPED[1]
+
+
+def _scores_at(band, x, grouped):
+    """`_score` for every template in the bank at column `x`, in one pass per width.
+
+    **The same three numbers, computed for all 56 templates at once.** The
+    per-template call was about 30 NumPy reductions on a 12x9 array, 1,700
+    times a box - 70 ms of a 135 ms pit-wall frame, nearly all of it call
+    overhead rather than arithmetic. Returns `(agreement, cover, shape)`
+    arrays indexed like `grouped`'s slots.
+    """
+    groups, _, count = grouped
+    agree, cover, shape = (np.empty(count), np.empty(count), np.empty(count))
+    for width, members, flat, weight, centred, energy in groups:
+        window = band[:, x:x + width]
+        if window.shape[1] < width:
+            window = np.pad(window, ((0, 0), (0, width - window.shape[1])))
+        w = window.reshape(1, -1)
+        agree[members] = 1.0 - np.abs(w - flat).mean(axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cover[members] = np.where(
+                weight <= 0, 0.0, np.minimum(w, flat).sum(axis=1) / weight)
+            a = w - w.mean()
+            spread = np.sqrt((a * a).sum() * energy)
+            shape[members] = np.where(
+                spread <= 0, 0.0, (a * centred).sum(axis=1) / spread)
+    return agree, cover, shape
+
+
 def read_text(band, *, spans: bool = False):
     """Every glyph in this band, left to right, or `None`.
 
@@ -258,6 +316,8 @@ def read_text(band, *, spans: bool = False):
     if band is None or band.size == 0:
         return None
     bank = _bank()
+    grouped = _grouped(bank)
+    _, slots, _ = grouped
     wide = band.shape[1]
     inked = (band > INK_FRAC).any(axis=0)
 
@@ -276,12 +336,15 @@ def read_text(band, *, spans: bool = False):
             return best[x]
         best[x] = None                      # cycles are not parses
         found = None
+        agrees, covers, shapes = _scores_at(band, x, grouped)
         for char, (variants, advance) in bank.items():
             got, cover, shape, template = -1.0, 0.0, -1.0, variants[0]
-            for one in variants:
-                agree, seen, fit = _score(band[:, x:x + one.shape[1]], one)
+            # Variants in bank order, first best wins - as `_score` was used.
+            for one, n in zip(variants, slots[char]):
+                fit = float(shapes[n])
                 if fit > shape:
-                    got, cover, shape, template = agree, seen, fit, one
+                    got, cover, shape, template = (float(agrees[n]),
+                                                   float(covers[n]), fit, one)
             if got < MATCH_FLOOR or cover < MIN_COVER or shape < SHAPE_FLOOR:
                 continue
             # **The cost is per PIXEL, not per glyph, and that is what stops
