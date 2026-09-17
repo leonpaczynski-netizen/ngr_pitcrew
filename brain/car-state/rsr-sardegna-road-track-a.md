@@ -2958,4 +2958,6 @@ Both land inside the §59 prediction (282.8 km/h, 13.8 km/h, 8,233 rpm).
 - **Plan held:** RM 12 -> RH 17 as planned, stop 24.3 s ex-fuel, pace RM +0.17 / RH -0.42 s on target.
 - **Race craft:** four places lost up the inside of left-handers off a tow (measurement 170); Rocky
   closed ~0.9 s/lap from L16 and a catch on lap 25-26 was projectable from L20 (measurement 169).
+- **L29 T3 was contact** - `[DRIVER]` *"boxhead hit me I have lodged a ticket"*; the lateral-g collapse at turn-in agrees (measurement 172).
+- **Driver request 17 Sep:** George to flag a car close enough behind that he must defend, especially onto the long straights. App task filed.
 - **6th gear:** limiter never touched; terminal speed confounded by wind - unresolvable (measurement 171).
