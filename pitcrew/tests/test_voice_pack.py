@@ -371,6 +371,10 @@ def test_the_pack_stays_within_budget():
     split on its number. Splitting the tenths too ("Pace" | "two tenths" |
     "slow.") was weighed and refused: it saves about seven clips and puts two
     joins in a four-word line said every lap. 830 leaves 23.
+
+    **17 Sep 2026, the catch lap** (Sardegna Rd 9, session 188): four clips -
+    "On you around lap" / "On him around lap" split on the number, and "Not on
+    you before the flag." / "Not on him before the flag." whole. 811 used.
     """
     assert len(manifest.clips()) < 830
 

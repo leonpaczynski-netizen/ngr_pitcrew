@@ -723,6 +723,7 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
   "callsMade": [
     { "lap": 4,  "call": "Map 3 down the back straight",     "reason": "1.2 laps short on fuel", "accepted": false, "disposition": "declined", "confidence": "high" },
     { "lap": 12, "call": "Box this lap. RS.",                "reason": "fuel is the constraint", "accepted": null, "disposition": "taken", "confidence": "high", "verdict": "acted", "verdictDetail": "pitted on lap 12, 0 lap(s) after the call" },
+    { "lap": 14, "call": "Rocky is catching, 0.9 seconds a lap.",   "accepted": null, "disposition": "informational", "confidence": "low", "verdict": "cannot-tell", "verdictDetail": "the rate is the change in the board's gap, lap to lap - …", "derived": "derived: linear catch projection off the board's gap to the car behind - 4.20 s at the end of lap key 13, closing 0.93 s/lap (mean of 4 clean lap changes, keys 9-13; 95% +/-0.92); zero on screen lap 19 (range 17 to never) against the flag after lap 20; board rate +0.50 s/lap" },
     { "lap": 20, "call": "Chequered flag. P1.",              "reason": "race complete", "accepted": null, "disposition": "informational", "confidence": "high", "verdict": "cannot-tell", "verdictDetail": "a status line reads several running figures aloud at once; a place and a fuel shortfall are each judged where they are a call of their own" }
   ],
   "outcome": "Stopped lap 11. Fuel to the diamond +1 lap. Tyres had 2 laps left — stint was fuel-limited, not tyre-limited."
@@ -790,6 +791,19 @@ verdict becomes `unanswered` rather than falling through: the fallback pools
 pit laps over every race session of the event, renumbered continuously across
 runs, so a `taken` from it could only ever come from another run's lap in
 another numbering, and it would contradict the verdict beside it.
+
+**`derived` is present only on a call whose sentence carries a figure the app
+projected rather than read, and it always begins `derived:`** (rule 5). Today
+that is one call: the catch lap on the pace line - *"Rocky is catching, 0.9
+seconds a lap. On you around lap 25."* or *"… Not on you before the flag."* -
+said about the car behind or, mirrored, the car ahead. The string states the
+model (a straight line through the board's gap), the gap it started from, the
+mean closing rate and **the count of clean lap-to-lap changes it rests on**
+(rule 4), the 95% interval, the lap it projects with its range, the flag it was
+compared with, and the board's own rate beside it. `call` is the first sentence
+as stored, so the lap itself is read here. **Absent is not "measured"**: most
+calls project nothing, and `derived` is simply not emitted on them. A reader
+must not treat the projected lap as a lap anybody timed.
 
 #### 10.0 A timed race is not a lap race
 
@@ -1158,3 +1172,4 @@ driver has overruled the engineer and been right four sessions running.
 | 2 | **`disposition` for an instruction is derived from `verdict` where there is one** | They answered the same question two ways and could disagree in one object: the older derivation pools pit laps over every race session of the event, rehearsals included and renumbered continuously across runs, while the verdict is judged against the laps of the session the call was made in. Rule 13 — two fields using the same words must mean the same thing |
 | 3 | **`disposition` gains `unanswered`** | A box call whose window the race never finished driving. It was falling back to the pooled pit laps and reporting `taken` beside `verdict: cannot-tell` in the same object. A reader must accept the new value; nothing else about the field changes |
 | 4 | **`verdict` gains `borne-out` and `not-borne-out`, and `cannot-tell` names its own reason** (13 Sep 2026) | Suzuka race run 20: every call — the green, a place, an incident, a chase, a rival's stop, "two to go" — was `cannot-tell` "GT7 broadcasts no fuel map and no brake balance", which was true of none of them, and three were checkable against the laps. A place, a lap count and a fuel shortfall to the flag are now held to `laps.position`, the flag lap and the flag's fuel. Additive: a reader must accept the two new values; `disposition` is unchanged, because both arise only on reports, never on an instruction |
+| 5 | **`strategy.callsMade[]` gains an optional `derived`** (17 Sep 2026) | Sardegna Rd 9, session 188: Rocky closed from 7.9 s to the bumper over nine laps and George gave the gap as a number and said he was catching once, at 1.8 s - never when, and never whether the race was long enough. The pace line now projects the catch lap against the flag, and that lap is arithmetic on board-read gaps, not a timed event, so rule 5 puts it under a `derived` heading with its model, count and interval. Additive: present only on calls that project a figure, and a reader that ignores it loses nothing it had |

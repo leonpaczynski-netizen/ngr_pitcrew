@@ -16,7 +16,10 @@ may claim. In the order the coordinator offers them (`calls.URGENCY`):
    the stop we owe too; once every car ahead has stopped, or we have,
    "P6 on the road. Effectively P8 after the stops. If they stop once."
 2. **Pace against the car ahead or behind** (`PACE`).
-   "Catching PUNISHED, 0.9 seconds a lap. Over 5 laps."
+   "Catching PUNISHED, 0.9 seconds a lap. Over 5 laps." - and, while the gap
+   is one worth projecting, when it reaches zero against the flag: "Rocky is
+   catching, 0.9 seconds a lap. On you around lap 25." / "... Not on you
+   before the flag." (`catch_projection`, 17 Sep 2026).
 3. **A championship rival from the brief's watch list** (`WATCHED`).
    "Magical daddy P4, 3 ahead."
 4. **The gaps, with names** (`GAPS`). "PUNISHED ahead, 2.1. K.Graebs behind,
@@ -99,8 +102,8 @@ from dataclasses import dataclass, replace
 from statistics import mean, stdev
 
 from pitcrew.diagnostics import log
-from pitcrew.race.calls import (GAPS, LOW, MEDIUM, PACE, STOPS_PICTURE,
-                                WATCHED, Call)
+from pitcrew.race.calls import (CHASE_WINDOW_S, GAPS, LOW, MEDIUM, PACE,
+                                STOPS_PICTURE, WATCHED, Call)
 from pitcrew.race.gaps import MIN_LAPS_FOR_TREND, GapTrend, trend_words
 from pitcrew.race.rival_pace import RivalPace
 from pitcrew.race.tow import CLEAR_GAP_S, HELD_UP_GAP_S
@@ -151,6 +154,19 @@ T_975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447,
          7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228}
 # The fewest clean lap-to-lap changes a pace verdict may rest on.
 PACE_MIN_CHANGES = 3
+# **When a closing car gets there** (the driver, 16 Sep 2026, Sardegna Rd 9:
+# *"would have been great to know if he was going to catch me before the race
+# ended or not and if so what predicted lap"*). See `catch_projection`.
+#
+# Projected only while the car is inside this many seconds - `calls`'s own
+# chase window, so "a car worth talking about" is one rule - and no longer once
+# it is inside `tow.HELD_UP_GAP_S`: he is there, and the gap line says so.
+CATCH_WINDOW_S = CHASE_WINDOW_S
+# **A catch lap is said again only when it has moved this many laps.** On
+# session 188 the projection held lap 25 from lap 20 to lap 23; a lap either
+# way is the mean wobbling inside its own interval, and saying it every time it
+# did would be the table §5.5 forbids, one line at a time.
+CATCH_MOVED_LAPS = 2
 
 # ------------------------------------------------ one car, or several
 #
@@ -285,6 +301,18 @@ def pace_sentence(side: str, name: str | None, rate: float) -> str:
 def pace_reason(laps: int) -> str:
     """The count the rate rests on, said with it (rule 4)."""
     return f"Over {laps} laps."
+
+
+def catch_reason(side: str, lap: int, before_flag: bool) -> str:
+    """When the gap reaches zero, or that the race ends first.
+
+    "You" behind and "him" ahead, so the sentence cannot be heard about the
+    wrong car (rule 13). The lap is the one on his screen.
+    """
+    whom = "you" if side == "behind" else "him"
+    if before_flag:
+        return f"On {whom} around lap {lap}."
+    return f"Not on {whom} before the flag."
 
 
 def if_they_stop(required: int) -> str:
@@ -450,6 +478,129 @@ def pace_verdict(trend: GapTrend | None, side: str, pace: RivalPace | None,
                        last_lap=window[-1]), ""
 
 
+# ------------------------------------------------------------------ the catch
+
+@dataclass(frozen=True)
+class CatchProjection:
+    """Where a closing gap reaches zero, against the flag, with its range.
+
+    Every `*_at` is in laps COMPLETED, the unit of the wall's read keys
+    (`RaceState.lap_now`), so it compares with `flag_key` directly and is
+    turned into the lap on his screen only when it is said.
+    """
+    side: str
+    subject: str
+    rate: float                 # mean closing, s/lap; + is the gap shrinking
+    half_width_s: float         # 95% half-width of that mean
+    board_rate: float | None    # `GapTrend.closing_s_per_lap`, the board's
+    changes: int
+    first_key: int
+    last_key: int
+    gap_s: float                # the gap at the end of `last_key`
+    at: float                   # zero at the mean rate
+    fastest_at: float           # zero at the fast end of the interval
+    slowest_at: float | None    # the slow end; None where it never closes
+    flag_key: int
+    before_flag: bool
+    sure: bool                  # the whole range on one side of the flag
+
+    def catch_lap(self, screen_offset: int) -> int:
+        """The lap in progress on his screen when the gap reaches zero."""
+        return math.floor(self.at) + int(screen_offset)
+
+
+def catch_projection(trend: GapTrend | None, side: str, *,
+                     now_key: int | None, flag_key: int | None,
+                     dirty_keys: frozenset = frozenset()
+                     ) -> tuple[CatchProjection | None, str]:
+    """`(projection, why not)`: when a gap that is closing reaches zero.
+
+    **What it rests on, in order, and each one refuses:**
+
+    1. **A flag to compare with.** "Before the flag" is the whole question.
+    2. **The lap just driven is in the history** - a trend last read three
+       laps ago is about a car that may not be there now.
+    3. **`MIN_LAPS_FOR_TREND` consecutive completed laps**, the board's own
+       five, and none of them dirty (our pit, out or incident lap, his lane,
+       a lap the handle changed car on).
+    4. **Closing consistently**: the mean lap-to-lap change has a 95%
+       Student-t interval, from the changes' own spread, that excludes zero -
+       the same test `pace_verdict` puts on the same changes (a gap is a
+       random walk; its increments are the independent quantity). A crash
+       step does not slip through: it widens the interval past zero.
+    5. **Worth projecting**: inside `CATCH_WINDOW_S` and not already inside
+       `HELD_UP_GAP_S`.
+
+    **Linear, and said as a range.** From the gap at the end of the last key
+    the zero is `gap / rate` laps on, at the mean and at both ends of the
+    interval. `sure` is the whole range on one side of the flag. What it does
+    NOT pass through is the board's trimmed-median rule: on session 188 that
+    rule was the reason the first word about Rocky came at 1.8 s on lap 22,
+    two laps after his arrival lap was already clear. The caller decides what
+    "sure" may be said as, and holds a confirmed call to the board too, so the
+    ear never confirms what the eye calls steady (rule 13).
+    """
+    if trend is None or now_key is None:
+        return None, "no gap history"
+    if flag_key is None:
+        return None, "no flag to project against"
+    completed = {k: v for k, v in dict(trend.seen).items() if k < now_key}
+    if not completed:
+        return None, "no completed laps"
+    if max(completed) != now_key - 1:
+        return None, (f"stale: last read on lap key {max(completed)}, "
+                      f"now {now_key}")
+    done = replace(trend, seen=completed)
+    window = done._window(MIN_LAPS_FOR_TREND)
+    if len(window) < MIN_LAPS_FOR_TREND:
+        return None, f"{len(window)} consecutive laps"
+    for key in window[1:]:
+        if key in dirty_keys:
+            return None, f"lap key {key} is excluded (pit, incident or lane)"
+    changes = [completed[a] - completed[b] for a, b in zip(window, window[1:])]
+    rate = mean(changes)
+    spread = stdev(changes)
+    half = T_975.get(len(changes) - 1, 2.0) * spread / math.sqrt(len(changes))
+    if rate <= half:
+        return None, (f"inside the noise or not closing: {rate:+.2f} +/- "
+                      f"{half:.2f} s/lap")
+    gap = completed[window[-1]]
+    if gap < HELD_UP_GAP_S or gap > CATCH_WINDOW_S:
+        return None, f"a {gap:.1f} s gap is not one to project"
+    start = window[-1] + 1      # the key's last reading closes that lap
+    at = start + gap / rate
+    fastest = start + gap / (rate + half)
+    slowest = start + gap / (rate - half) if rate - half > 0 else None
+    before = at < flag_key
+    if before:
+        sure = slowest is not None and slowest < flag_key
+    else:
+        sure = fastest >= flag_key
+    board_rate, _ = done.closing_s_per_lap()
+    return CatchProjection(
+        side=side, subject=str(trend.subject), rate=rate, half_width_s=half,
+        board_rate=board_rate, changes=len(changes), first_key=window[0],
+        last_key=window[-1], gap_s=gap, at=at, fastest_at=fastest,
+        slowest_at=slowest, flag_key=int(flag_key), before_flag=before,
+        sure=sure), ""
+
+
+def catch_model(found: CatchProjection, *, screen_offset: int) -> str:
+    """The projection's model, stated for the export (rules 4 and 5)."""
+    def lap(at):
+        return "never" if at is None else str(math.floor(at) + screen_offset)
+    board = ("none" if found.board_rate is None
+             else f"{found.board_rate:+.2f} s/lap")
+    return (f"derived: linear catch projection off the board's gap to the car "
+            f"{found.side} - {found.gap_s:.2f} s at the end of lap key "
+            f"{found.last_key}, closing {found.rate:.2f} s/lap (mean of "
+            f"{found.changes} clean lap changes, keys {found.first_key}-"
+            f"{found.last_key}; 95% +/-{found.half_width_s:.2f}); zero on "
+            f"screen lap {lap(found.at)} (range {lap(found.fastest_at)} to "
+            f"{lap(found.slowest_at)}) against the flag after lap "
+            f"{found.flag_key}; board rate {board}")
+
+
 # ------------------------------------------------------------------ the news
 
 @dataclass(frozen=True)
@@ -527,6 +678,10 @@ class RaceNews:
             self._ours_s: dict[int, float] = {}
             self._dirty: set[int] = set()
             self._said_pace: dict[str, tuple | None] = {
+                s: None for s in SIDES}
+            # `(subject, before the flag, screen lap, confidence)` of the
+            # catch last heard per side - see `_catch_call`.
+            self._said_catch: dict[str, tuple | None] = {
                 s: None for s in SIDES}
             self._board: BoardRead | None = None
             self._board_before: BoardRead | None = None
@@ -865,7 +1020,14 @@ class RaceNews:
 
     def pace_call(self, state, now: int, *, lane=None) -> Call | None:
         """A pace difference to a neighbour that beat the noise. See
-        `pace_verdict` for the test."""
+        `pace_verdict` for the test.
+
+        **When a closing car gets there comes first** (`catch_projection`).
+        While a side has a projection, the call about that car IS the
+        projection - rate and lap in one line - and the plain pace figure is
+        not offered beside it: the two are different estimators of the same
+        closing, and one car heard at two rates is rule 13.
+        """
         now_key = state.lap_now()
         with self._lock:
             trends = {side: replace(self._trends[side],
@@ -876,6 +1038,9 @@ class RaceNews:
             dirty = set(self._dirty)
             names = dict(self._neighbour_name)
             said = dict(self._said_pace)
+            said_catch = dict(self._said_catch)
+            merged = dict(self._merged)
+            jumpy = dict(self._unreliable)
             unreliable = {**self._merged, **self._unreliable}
             broke_on = {k: set(v) for k, v in self._broke_on.items()}
         for side in SIDES:
@@ -883,14 +1048,30 @@ class RaceNews:
             if trend.subject is None:
                 continue
             subject = str(trend.subject)
-            if subject in unreliable:
+            if subject in merged:
                 # **A rate is a claim about one car**, and this handle has
-                # been more than one this race.
+                # named a slot this race - several cars.
                 continue
             his = _lane_keys(lane, subject, now_key) if lane is not None \
                 else set()
             # A lap the handle changed car on is not a lap of either car.
             his |= broke_on.get(subject, set())
+            name = names.get(side) if names.get(side) and \
+                str(names.get(side)) == subject else None
+            found, _ = catch_projection(
+                trend, side, now_key=now_key, flag_key=_flag_key(state),
+                dirty_keys=frozenset(dirty | his))
+            if found is not None:
+                call = self._catch_call(state, found, name, said_catch.get(side),
+                                        jumpy.get(subject), now_key)
+                if call is not None:
+                    return call
+                continue
+            if subject in unreliable:
+                # **A rate is a claim about one car**, and this handle's
+                # readings jump with nothing to explain it. The projection
+                # above says so in its confidence; a bare figure has no room.
+                continue
             verdict, why_not = pace_verdict(
                 trend, side, paces[side], ours, now_key=now_key,
                 dirty_keys=frozenset(dirty | his))
@@ -904,8 +1085,6 @@ class RaceNews:
                 if (abs(figure - before[2]) < PACE_REPEAT_S_PER_LAP
                         or before[3] == now_key):
                     continue
-            name = names.get(side) if names.get(side) and \
-                str(names.get(side)) == subject else None
             named = a_person(name) is not None
             call = Call(
                 PACE, state.lap, pace_sentence(side, name, verdict.rate),
@@ -926,6 +1105,68 @@ class RaceNews:
                     self._said_pace[side] = entry
             return self._offer(call, book)
         return None
+
+    def _catch_call(self, state, found: CatchProjection, name: str | None,
+                    said: tuple | None, jumpy: str | None,
+                    now_key: int) -> Call | None:
+        """The projection as a line, when it is news.
+
+        **News is a change the driver would drive differently for**, and
+        nothing else: another car; the answer to "before the flag?" turning
+        over on a sure projection; the catch lap moving `CATCH_MOVED_LAPS`;
+        or an unconfirmed line becoming a confirmed one. A sure line going
+        unsure is not said - it was right when it was said, and "unconfirmed"
+        every lap the mean wobbles is a word he stops hearing.
+
+        **MEDIUM only where every part of it holds**: the range sure, the
+        board's own rule agreeing (`gaps.trend_words`, so the ear does not
+        confirm a close the eye calls steady), a person's name, a handle
+        whose readings have not jumped, and a flag that is a count rather
+        than a timed race's estimate. Anything short of that is LOW, and
+        `Call.spoken` ends it "Unconfirmed." (§5.5).
+        """
+        side = found.side
+        screen_offset = max(0, state.lap_on_screen() - state.lap_now())
+        lap = found.catch_lap(screen_offset)
+        doubts = []
+        if not found.sure:
+            doubts.append("the range straddles the flag")
+        if trend_words(side, found.board_rate, found.changes + 1) is None:
+            doubts.append("the board's own rule still reads steady")
+        if a_person(name) is None:
+            doubts.append("unnamed car")
+        if jumpy:
+            doubts.append(f"the handle's readings jump: {jumpy}")
+        if (getattr(state, "race_minutes", None) is not None
+                and not getattr(state, "laps_estimate_firm", False)):
+            doubts.append("a timed race's distance is an estimate")
+        confidence = LOW if doubts else MEDIUM
+        before = found.before_flag
+        if said is not None and said[0] == found.subject:
+            _, said_before, said_lap, said_confidence, said_key = said
+            flipped = before != said_before and found.sure
+            moved = (before and said_before
+                     and abs(lap - said_lap) >= CATCH_MOVED_LAPS)
+            confirmed = confidence == MEDIUM and said_confidence == LOW
+            if not (flipped or moved or confirmed) or said_key == now_key:
+                return None
+        call = Call(
+            PACE, state.lap, pace_sentence(side, name, found.rate),
+            catch_reason(side, lap, before), confidence,
+            why_spoken=("catch projection: "
+                        + ("; ".join(doubts) if doubts else
+                           "range sure, board agrees, named car")),
+            derived=catch_model(found, screen_offset=screen_offset),
+            tag=f"{PACE}:{side}:{found.subject}:catch")
+        entry = (found.subject, before, lap, confidence, now_key)
+        pace_entry = (found.subject, True, round(found.rate, 1), now_key)
+
+        def book(side=side, entry=entry, pace_entry=pace_entry):
+            with self._lock:
+                self._said_catch[side] = entry
+                # The plain figure for this car and direction is spoken for.
+                self._said_pace[side] = pace_entry
+        return self._offer(call, book)
 
     def watched_call(self, state, now: int) -> Call | None:
         """A championship rival's place, when it changes or after his stop."""
@@ -1110,6 +1351,18 @@ class RaceNews:
 
 
 # ------------------------------------------------------------------- helpers
+
+def _flag_key(state) -> int | None:
+    """The flag in the wall's read-key unit: laps completed when it falls.
+
+    `laps_remaining` already corrects for a crossing the app missed, and
+    `lap_now` counts the same way, so the two add to the flag on GT7's count.
+    """
+    left = state.laps_remaining()
+    if left is None:
+        return None
+    return int(state.lap_now()) + int(left)
+
 
 def _agree(reads) -> bool:
     """Each reading continuous with the one before it."""

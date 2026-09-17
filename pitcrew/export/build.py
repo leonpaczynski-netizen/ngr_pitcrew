@@ -838,7 +838,7 @@ def _strategy_section(store, event_id: int) -> dict | None:
         section["callsMade"] = [
             {key: value for key, value in call.items()
              if key in ("lap", "call", "reason", "accepted", "disposition",
-                        "confidence", "verdict", "verdictDetail")}
+                        "confidence", "verdict", "verdictDetail", "derived")}
             for call in calls]
 
     outcome = _outcome(store, event_id, calls, section, expects)
@@ -1063,6 +1063,10 @@ def _calls_made(store, event_id: int) -> list[dict]:
             if revision.get("verdict"):
                 entry["verdict"] = revision["verdict"]
                 entry["verdictDetail"] = revision.get("verdict_detail")
+            # **A figure the call projected rather than read** (rule 5): the
+            # catch lap, with the model and the count it rests on.
+            if revision["plan"].get("derived"):
+                entry["derived"] = revision["plan"]["derived"]
             calls.append(entry)
     return calls
 
