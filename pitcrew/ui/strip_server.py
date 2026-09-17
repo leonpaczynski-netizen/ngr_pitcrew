@@ -19,6 +19,11 @@ decision failure CLAUDE.md §7 warns about; the page blanks instead.
 polled within `LIVE_WITHIN_S`, which is what lets the ultrawide take the gaps
 and laps to the stop back the moment the phone drops (his choice, 15 Sep
 2026).
+
+**Two pages, tracked apart** (17 Sep 2026, his three-screen split): the phone
+strip at `/` and the tablet's field at `/tablet`, each with its own payload,
+age and liveness. One `live()` for both would hand the ultrawide's gaps to a
+phone that no longer shows them.
 """
 from __future__ import annotations
 
@@ -42,6 +47,13 @@ STALE_AFTER_S = 1.5
 LIVE_WITHIN_S = 2.0
 
 PAGE = Path(__file__).with_name("strip.html")
+# The pages served: the routes that draw each, its file, and where its numbers
+# come from.
+STRIP, TABLET = "strip", "tablet"
+PAGES = {
+    STRIP: (("/", "/strip"), "strip.html", "/strip/state"),
+    TABLET: (("/tablet",), "tablet.html", "/tablet/state"),
+}
 
 # **What the home screen needs, beside the page** (16 Sep 2026). Installed as
 # a PWA the page had no icon at all - iOS falls back to a screenshot, which
@@ -103,10 +115,10 @@ class StripServer:
         self.host = host
         self._clock = clock
         self._lock = threading.Lock()
-        self._body: dict | None = None
-        self._published_at: float | None = None
-        self._last_poll: float | None = None
-        self._last_client: str | None = None
+        # Per page: the latest payload, when it was published, when a page
+        # last asked for it, and who asked.
+        self._state = {name: {"body": None, "at": None, "poll": None,
+                              "client": None} for name in PAGES}
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -117,11 +129,22 @@ class StripServer:
         port is taken: the strip is an output and must not cost him the app."""
         if self._httpd is not None:
             return True
-        try:
-            page = PAGE.read_bytes()
-        except OSError as exc:
-            log("ui").error("the strip page is missing (%s): %s", PAGE, exc)
-            return False
+        # **The strip is what he races with; the tablet is not.** A missing
+        # strip page refuses to start; a missing tablet page is logged and its
+        # route 404s - one going wrong must not cost him the other.
+        pages: dict[str, bytes] = {}
+        for name, (_, filename, _) in PAGES.items():
+            try:
+                pages[name] = PAGE.with_name(filename).read_bytes()
+            except OSError as exc:
+                log("ui").error("the %s page is missing (%s): %s", name,
+                                filename, exc)
+                if name == STRIP:
+                    return False
+        routes_to_page = {route: pages[name]
+                          for name, (routes, _, _) in PAGES.items()
+                          if name in pages for route in routes}
+        state_routes = {state: name for name, (_, _, state) in PAGES.items()}
         # Read once, like the page: these change when the icons are re-cut,
         # which is a restart either way.
         assets: dict[str, tuple[bytes, str]] = {}
@@ -136,13 +159,15 @@ class StripServer:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):                           # noqa: N802
                 path = self.path.split("?", 1)[0]
-                if path in ("/", "/strip"):
-                    self._send(200, "text/html; charset=utf-8", page)
+                if path in routes_to_page:
+                    self._send(200, "text/html; charset=utf-8",
+                               routes_to_page[path])
                 elif path in assets:
                     body, kind = assets[path]
                     self._send(200, kind, body)
-                elif path == "/strip/state":
-                    body = server._answer(self.client_address[0])
+                elif path in state_routes:
+                    body = server._answer(state_routes[path],
+                                          self.client_address[0])
                     self._send(200, "application/json", body)
                 else:
                     self._send(404, "text/plain; charset=utf-8", b"not here")
@@ -187,30 +212,33 @@ class StripServer:
 
     # ----------------------------------------------------------------- data
 
-    def publish(self, body: dict) -> None:
-        """The latest payload from `StripComposer.compose`."""
+    def publish(self, body: dict, page: str = STRIP) -> None:
+        """The latest payload for one page - the strip composer's by default,
+        `ui/tablet.compose`'s for the tablet."""
         clean = _finite(body)
         with self._lock:
-            self._body = clean
-            self._published_at = self._clock()
+            self._state[page].update(body=clean, at=self._clock())
 
-    def live(self) -> bool:
-        """A page has polled within `LIVE_WITHIN_S`."""
+    def live(self, page: str = STRIP) -> bool:
+        """That page has polled within `LIVE_WITHIN_S`."""
         with self._lock:
-            last = self._last_poll
+            last = self._state[page]["poll"]
         return last is not None and self._clock() - last <= LIVE_WITHIN_S
+
+    def last_client_of(self, page: str = STRIP) -> str | None:
+        return self._state[page]["client"]
 
     @property
     def last_client(self) -> str | None:
-        return self._last_client
+        return self.last_client_of(STRIP)
 
-    def _answer(self, client: str) -> bytes:
+    def _answer(self, page: str, client: str) -> bytes:
         now = self._clock()
         with self._lock:
-            self._last_poll = now
-            self._last_client = client
-            body = dict(self._body) if self._body is not None else None
-            published = self._published_at
+            state = self._state[page]
+            state.update(poll=now, client=client)
+            body = dict(state["body"]) if state["body"] is not None else None
+            published = state["at"]
         if body is None:
             body = {"v": 1, "idle": False, "empty": True}
         body["age_s"] = None if published is None else round(now - published, 3)

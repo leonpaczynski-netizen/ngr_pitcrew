@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0C0B09">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<title>Pit Crew field</title>
+<!--
+  The tablet page: what everyone is doing, on the tablet left of the wheel
+  (17 Sep 2026). A dumb renderer - every word and figure comes from
+  `pitcrew/ui/tablet.py`, over `race/field.py`, which reads George's own stop
+  arithmetic. The one judgement made here is staleness, and the number for
+  that comes from the server.
+
+  Laid out for a glance from the wheel on a 350-nit panel: one row a car,
+  big type, no thin grey. Our row stands out by its plate, not by colour.
+  A car standing in its box says so in amber, because that is the one thing
+  on this screen that is happening right now.
+-->
+<style>
+  :root {
+    --ground: #0C0B09; --panel: #1E1B17; --edge: #38332B;
+    --ink: #E8E4DC; --dim: #A8A298; --near: #F2C230; --good: #5FC27A; --over: #FF6B63;
+    --label: "Bahnschrift Condensed", "DIN Condensed", "Roboto Condensed", "Arial Narrow", sans-serif;
+    --number: "Cascadia Mono", ui-monospace, "Roboto Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink);
+    overflow: hidden; -webkit-user-select: none; user-select: none;
+    -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right)
+                  env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  #app { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+    padding: 1.6vh 2vw; row-gap: 1.2vh; }
+
+  #head { display: flex; align-items: baseline; gap: 3vw; font-family: var(--label);
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+  #head .big { font-size: 6.4vh; line-height: 1; }
+  #board { margin-left: auto; font-size: 3.6vh; color: var(--dim); }
+  #board.stale { color: var(--near); }
+
+  /* One grid for header and rows, so every column lines up down the table. */
+  #table { display: grid; align-content: start; min-height: 0; row-gap: 0.6vh;
+    grid-template-columns: 7vw minmax(0, 1fr) 7vw 8.5vw 13vw minmax(0, 1.05fr); column-gap: 0; }
+  /* The stop column starts clear of the gap figure beside it. */
+  .row > .cell:nth-child(4), .th:nth-child(4) { padding-left: 1.8vw; }
+  .th { font-family: var(--label); font-weight: 700; font-size: 2.8vh; color: var(--dim);
+    letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.8vw 0.4vh; white-space: nowrap; }
+  .row { display: contents; }
+  .cell { display: flex; flex-direction: column; justify-content: center; min-width: 0;
+    padding: 0.5vh 0.8vw; min-height: 6.6vh; border-top: 1px solid var(--edge); }
+  .num { font-family: var(--number); font-weight: 700; font-variant-numeric: tabular-nums;
+    font-size: 4.4vh; line-height: 1; white-space: nowrap; }
+  .txt { font-family: var(--label); font-weight: 700; font-size: 4.6vh; line-height: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .small { font-family: var(--label); font-weight: 700; font-size: 2.8vh; color: var(--dim);
+    line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .right { align-items: flex-end; text-align: right; }
+
+  /* Our row: a plate, not a colour. */
+  .us .cell { background: var(--panel); border-top-color: var(--ink); border-bottom: 1px solid var(--ink); }
+  .us .cell:first-child { border-left: 1px solid var(--ink); border-radius: 0.8vh 0 0 0.8vh; }
+  .us .cell:last-child { border-right: 1px solid var(--ink); border-radius: 0 0.8vh 0.8vh 0; }
+
+  .lane { display: inline-block; background: var(--near); color: var(--ground); border-radius: 0.6vh;
+    padding: 0.3vh 0.6vw; font-family: var(--label); font-weight: 700; font-size: 3vh;
+    letter-spacing: 0.06em; }
+  .stops .txt { color: var(--good); }
+
+  #foot { font-family: var(--label); font-weight: 700; font-size: 3vh; color: var(--dim); }
+
+  #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
+    justify-content: center; background: var(--ground); text-align: center; padding: 4vh 4vw; }
+  #cover.on { display: flex; }
+  #cover .big { font-family: var(--label); font-weight: 700; letter-spacing: 0.1em; font-size: 16vh; line-height: 1; }
+  #cover .why { font-family: var(--label); font-weight: 700; color: var(--dim); font-size: 4.5vh; margin-top: 2vh; }
+  #cover.fault .big { color: var(--over); }
+
+  @media (orientation: portrait) {
+    #table { grid-template-columns: 11vw minmax(0, 1fr) 10vw 13vw minmax(0, 1.1fr); }
+    .col-fuel { display: none; }
+    .num { font-size: 3.4vw; } .txt { font-size: 3.6vw; } .small { font-size: 2.3vw; } .th { font-size: 2.2vw; }
+    #head .big { font-size: 5vw; } #board { font-size: 2.8vw; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="head">
+    <div class="big" id="lap"></div>
+    <div class="big" id="pos"></div>
+    <div id="board"></div>
+  </div>
+  <div id="table"></div>
+  <div id="foot"></div>
+</div>
+<div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
+<script>
+(function () {
+  "use strict";
+  var POLL_MS = 500, TIMEOUT_MS = 1500;
+  var staleAfter = 1.5, lastOk = null;
+  var cover = document.getElementById("cover");
+  var HEAD = ["P", "Driver", "Gap", "Stop", "Fuel in → out", "Stops"];
+  // Shorter where the column is narrow; the arrow in each row says in → out.
+  HEAD[4] = "Fuel";
+
+  function $(id) { return document.getElementById(id); }
+  function show(big, why, fault) {
+    cover.querySelector(".big").textContent = big;
+    cover.querySelector(".why").textContent = why;
+    cover.className = "on" + (fault ? " fault" : "");
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function cell(extra, main, mainCls, small) {
+    var c = el("div", "cell" + (extra ? " " + extra : ""));
+    if (main instanceof Node) c.appendChild(main);
+    else c.appendChild(el("div", mainCls, main || ""));
+    if (small) c.appendChild(el("div", "small", small));
+    return c;
+  }
+
+  function render(d) {
+    if (typeof d.stale_after_s === "number") staleAfter = d.stale_after_s;
+    if (d.idle) { show("PIT CREW", "no race running", false); return; }
+    if (d.empty) { show("PIT CREW", "waiting for the first numbers", false); return; }
+    if (d.age_s === null || d.age_s > staleAfter) {
+      show("NO DATA", "Pit Crew has stopped updating", true); return;
+    }
+    $("lap").textContent = d.lap || "";
+    $("pos").textContent = d.position || "";
+    $("board").textContent = d.board || "";
+    $("board").classList.toggle("stale", !!d.board_stale);
+
+    // Rebuilt whole each answer: a dozen rows twice a second, and a row
+    // patched in place is a row that can show one car's fuel beside
+    // another's name for a frame.
+    var table = document.createDocumentFragment();
+    HEAD.forEach(function (h, i) {
+      table.appendChild(el("div", "th" + (i === 2 ? " right" : "") + (i === 4 ? " col-fuel" : ""), h));
+    });
+    (d.rows || []).forEach(function (r) {
+      var row = el("div", "row" + (r.us ? " us" : ""));
+      row.appendChild(cell("", r.place, "num"));
+      row.appendChild(cell("", r.name, "txt"));
+      row.appendChild(cell("right", r.gap, "num"));
+      row.appendChild(cell("", r.lane ? el("span", "lane", "IN LANE") : r.stop, "num"));
+      row.appendChild(cell("col-fuel", r.fuel, "num"));
+      row.appendChild(cell(r.tone === "stops" ? "stops" : "", r.prediction, "txt", r.detail));
+      table.appendChild(row);
+    });
+    $("table").replaceChildren(table);
+    $("foot").textContent = (d.left_off ? d.left_off + " more not shown · " : "") + (d.why || "");
+    cover.className = "";
+  }
+
+  function poll() {
+    var ctl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, TIMEOUT_MS);
+    fetch("/tablet/state", { cache: "no-store", signal: ctl ? ctl.signal : undefined })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) { lastOk = performance.now(); render(d); })
+      .catch(function () { /* the watchdog says so */ })
+      .then(function () { clearTimeout(timer); setTimeout(poll, POLL_MS); });
+  }
+  setInterval(function () {
+    if (lastOk !== null && (performance.now() - lastOk) / 1000 > staleAfter + 1) {
+      show("NO DATA", "lost the connection to the PC", true);
+    }
+  }, POLL_MS);
+  if (navigator.wakeLock) {
+    var ask = function () { navigator.wakeLock.request("screen").catch(function () {}); };
+    ask();
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) ask(); });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -730,6 +730,16 @@ class RaceNews:
         with self._lock:
             self._board_before, self._board = self._board, read
 
+    def board(self) -> "BoardRead | None":
+        """The last board read, for the tablet's field (17 Sep 2026).
+
+        **Taken under the lock and handed over whole**: `note_board` rebinds
+        `_board` from the wall's thread. The record is frozen and its `places`
+        is never mutated in place, so the reference is the copy.
+        """
+        with self._lock:
+            return self._board
+
     def note_lap(self, lap_key: int, lap_num: int, lap_time_s: float | None,
                  dirty: str | None = None, *, lane=None) -> None:
         """A crossing: the lap the wall's readings under `lap_key` belong to.

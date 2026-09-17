@@ -2930,6 +2930,17 @@ class RaceCoordinator:
         self.state.fuel_burn_why = why
         log("race").info("no race burn on lap %s: %s", lap.lap_num, why)
 
+    def field_view(self):
+        """What every car the app has read is doing, for the tablet.
+
+        Built from this race's state, the last board read and the packet count
+        it is aged against - `race/field.py` does the reckoning, with George's
+        own stop arithmetic, so the tablet and the voice cannot disagree.
+        """
+        from pitcrew.race.field import field_view
+
+        return field_view(self.state, self.news.board(), packet=self._packets)
+
     def observed_fuel_per_lap(self) -> float | None:
         """The race's own burn, or None before enough green laps exist.
 

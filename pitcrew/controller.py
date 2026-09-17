@@ -6498,10 +6498,11 @@ class PitCrewController(QObject):
                     log("ui").warning("phone strip stopped polling")
                 self._strip_was_live = live
             # **The phone no longer carries the gaps** (17 Sep 2026: his car
-            # on the phone, the field on the tablet), so the ultrawide keeps
-            # them whether or not a phone is reading. `strip_live` stays False
-            # until the page that DOES carry them - the tablet - exists.
-            state = replace(self._driver_board_state(), strip_live=False)
+            # on the phone, the field on the tablet). The ultrawide gives them
+            # up only while the TABLET is reading, which is the page that shows
+            # them.
+            board = self._driver_board_state()
+            state = replace(board, strip_live=self._publish_tablet(strip))
             strip.publish(self._strip_composer.compose(state))
             self._strip_failures = 0
             return state
@@ -6514,6 +6515,44 @@ class PitCrewController(QObject):
                                   type(exc).__name__, exc)
             self._strip_failures += 1
             return None
+
+    def _publish_tablet(self, strip) -> bool:
+        """Hand the tablet the field; True while a tablet is reading it.
+
+        **Guarded apart from the phone.** A fault building the field publishes
+        nothing - the tablet goes stale and says NO DATA - and the phone, which
+        is what he races with, is untouched. Outside a race the tablet is told
+        there is none rather than shown the last race's field (rule 11).
+        """
+        from pitcrew.ui import tablet
+        from pitcrew.ui.strip_server import TABLET
+
+        try:
+            live = strip.live(TABLET)
+        except TypeError:                       # a server with one page
+            return False
+        if live != self.__dict__.get("_tablet_was_live", False):
+            if live:
+                log("ui").info("tablet connected from %s - the gaps move to it",
+                               strip.last_client_of(TABLET))
+            else:
+                log("ui").warning("tablet stopped polling - the gaps are back "
+                                  "on the board")
+            self._tablet_was_live = live
+        race = self.race
+        try:
+            racing = race is not None and (race.running or bool(
+                getattr(race.state, "finished", False)))
+            strip.publish(tablet.compose(race.field_view() if racing else None),
+                          TABLET)
+            self._tablet_failures = 0
+        except Exception as exc:                            # noqa: BLE001
+            failures = self.__dict__.get("_tablet_failures", 0)
+            if failures % BOARD_TRACEBACK_EVERY == 0:
+                log("ui").warning("the tablet could not be built: %s: %s",
+                                  type(exc).__name__, exc)
+            self._tablet_failures = failures + 1
+        return live
 
     def _push_driver_board(self) -> None:
         state = self._publish_strip()
