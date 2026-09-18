@@ -123,6 +123,29 @@ class Visit:
         return max(self.readings) if self.readings else None
 
     @property
+    def rising_when_last_read(self) -> bool:
+        """Whether the last two readings were still going UP.
+
+        **Evidence for the log, NOT a reason to hold a visit open.** It was
+        briefly used as one - "a tank still filling belongs to a car still
+        standing" - and the pit-wall tests rejected it correctly: once a car
+        LEAVES, readings stop arriving, so a fill that rose to 83 L and drove
+        off reads as rising forever. From the readings alone a departed car
+        and a standing one with an unreadable disc are indistinguishable, and
+        the rule held every stop open to the 180 s timer.
+
+        What does tell them apart is the white "P" flag beside the position:
+        measured on Sardegna Rd 9 at 0.87-0.88 bright on every pit row and
+        0.00 on most others - but scenery also read 0.27, 0.44 and 0.71 on
+        it, so it needs a shape test and calibration before it can decide a
+        close. Until then this only COUNTS how often the absence rule cuts a
+        fill that was still rising, which is the number that calibration
+        needs.
+        """
+        return (len(self.readings) >= 2
+                and self.readings[-1] > self.readings[-2])
+
+    @property
     def compound(self) -> str | None:
         """The letter agreed on across this stop, or `None`.
 
@@ -289,7 +312,10 @@ class PitWall:
         # `pit_cols` once per pit row per frame, so a healthy race printed
         # 843 -> 800 -> 790 -> 790 -> 5800 -> 700 -> 40 and read as a bug.
         self._stage = {"ladder": 0, "own_row": 0, "rows": 0, "named": 0,
-                       "gaps": 0, "pit_cols": 0, "own_driver": 0, "fuel_read": 0}
+                       "gaps": 0, "pit_cols": 0, "own_driver": 0, "fuel_read": 0,
+                       # A visit the absence rule closed while its tank was
+                       # still rising - see `Visit.rising_when_last_read`.
+                       "closed_mid_rise": 0}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -586,6 +612,13 @@ class PitWall:
                 visit = Visit(driver=driver, lap=lap, started_s=now,
                               partial=driver not in self._seen_clean)
                 self._visits[driver] = visit
+                # The OPEN is logged too, so a stop that is dropped later has
+                # a beginning in the log to be read against. Before this, a
+                # visit could open, fragment and vanish with no trace that it
+                # had ever been seen.
+                _log.info("pit-wall: %s in the lane on lap %s%s",
+                          self._roster.name_of(driver) or f"driver {driver}",
+                          lap, " (joined mid-fill)" if visit.partial else "")
             visit.last_s = now
             x0, y0, x1, y1 = pit.fuel_box
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
@@ -650,6 +683,21 @@ class PitWall:
                 continue
             self._absent[driver] = self._absent.get(driver, 0) + 1
             if self._absent[driver] >= CLOSE_AFTER_CLEAN_FRAMES:
+                visit = self._visits.get(driver)
+                if visit is not None and visit.rising_when_last_read:
+                    # Counted and said, not prevented - see
+                    # `Visit.rising_when_last_read` for why the readings
+                    # alone cannot decide this. The exit is already filed as
+                    # a lower bound (`stale=True`), which is honest; this is
+                    # the tally that says how often that bound is a fill cut
+                    # short rather than a car that left.
+                    self._stage["closed_mid_rise"] += 1
+                    _log.info(
+                        "pit-wall: %s closed on absence with the tank still "
+                        "rising (%s L at the last read) - exit filed as a "
+                        "lower bound",
+                        self._roster.name_of(driver) or f"driver {driver}",
+                        visit.readings[-1])
                 # **Closed on the clock, not on seeing him leave.** The exit
                 # figure is therefore the highest reading anyone got, which is
                 # a lower bound on the fill rather than the fill.
@@ -783,6 +831,20 @@ class PitWall:
             return None
         self._absent.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
+            # **Said, because this is where a whole race of stops vanished.**
+            # In Sardegna Rd 9 every stop by a car on medium tyres ended here
+            # with 0 or 1 fuel reads - Rocky's and Boxhead's among them - and
+            # there was not one log line about either, so the defect upstream
+            # (a disc refused on shape) could not be seen from the log at
+            # all. CLAUDE.md rule 10: log the accepts, not only the refusals -
+            # and a refusal that is silent is worse than either.
+            if visit is not None:
+                _log.info(
+                    "pit-wall: %s's visit dropped - %d fuel read(s), %d "
+                    "needed, over %.0f s from lap %s; not filed",
+                    self._roster.name_of(driver) or f"driver {driver}",
+                    len(visit.readings), MIN_READS,
+                    max(0.0, visit.last_s - visit.started_s), visit.lap)
             return None
         # **A cluster too rarely seen to be a driver cannot file a stop.**
         # Same run-length argument `Roster.drivers` makes: a real driver is on

@@ -257,3 +257,80 @@ def test_scenery_that_is_round_but_off_the_column_is_dropped():
         frame[y:y + 28, 397:397 + 28][stray] = WHITE_DISC
     rows = read_rows(frame, BOARD, LADDER)
     assert {row.disc[0] for row in rows} == {291}
+
+
+# ------------------------------------------------ the medium disc (19 Sep 2026)
+
+import pytest  # noqa: E402
+
+_S188_DISCS = ("rocky", "boxhead", "jjonas")
+
+
+def _disc_fixture(who):
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+
+    path = (Path(__file__).resolve().parent / "fixtures"
+            / f"disc_M_s188_{who}.png")
+    # Saved in the grab's own channel order and read straight back, so the
+    # array the reader sees is the array the race produced.
+    return np.asarray(Image.open(path))
+
+
+@pytest.mark.parametrize("who", _S188_DISCS)
+def test_a_medium_disc_is_round_whatever_is_written_on_it(who):
+    """**Every car on medium tyres was invisible to the pit wall.**
+
+    `DISC_ROUNDNESS` was calibrated on two red "S" discs and scored the INK,
+    so the dark letter printed on a disc counted as a hole in it - and an
+    "M" is more ink than an "S". These are three real medium discs cut from
+    the Sardegna Rd 9 video (session 188): Rocky's, Boxhead's and J.jonas's,
+    all standing in the lane at once. On ink they score 0.671-0.682, under
+    the 0.70 floor, so none was ever read; Rocky's and Boxhead's stops were
+    never filed at all, and J.jonas's was filed from the middle of his fill.
+
+    Scored on the disc's OUTLINE the letter stops counting and every one of
+    them reads what a circle reads.
+    """
+    import numpy as np
+
+    from pitcrew.telemetry import pit_columns as pc
+
+    mask = pc.disc_mask(_disc_fixture(who))
+    ys, xs = np.nonzero(mask)
+    assert ys.size, "the fixture holds no disc-coloured pixels at all"
+    box = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+
+    ink = float(box.mean())
+    outline = pc._outline_fill(box)
+    low, high = pc.DISC_ROUNDNESS
+    assert ink < low, (
+        f"{who}: the ink fill is {ink:.3f} - this fixture no longer "
+        f"reproduces the refusal it was cut to pin")
+    assert low <= outline <= high, (who, outline)
+    # pi/4 is what a filled circle scores; the outline should be close to it.
+    assert abs(outline - 3.14159 / 4) < 0.05, (who, outline)
+
+
+def test_outline_fill_ignores_a_hole_but_not_a_shape():
+    """A letter is a hole INSIDE the disc and is filled; a shape that is not a
+    circle keeps its own geometry, so the bound still refuses it."""
+    import numpy as np
+
+    from pitcrew.telemetry.pit_columns import _outline_fill
+
+    size = 40
+    yy, xx = np.mgrid[:size, :size]
+    disc = (yy - size / 2 + 0.5) ** 2 + (xx - size / 2 + 0.5) ** 2 <= (size / 2) ** 2
+    lettered = disc.copy()
+    lettered[12:28, 14:26] = False              # a fat letter punched through
+    assert lettered.mean() < 0.70 <= _outline_fill(lettered)
+    assert abs(_outline_fill(lettered) - _outline_fill(disc)) < 0.02
+
+    # A full rectangle - a plate, a digit block - still reads as one.
+    assert _outline_fill(np.ones((20, 40), dtype=bool)) > 0.95
+    # And a thin diagonal stroke is nowhere near round.
+    stroke = np.eye(30, dtype=bool)
+    assert _outline_fill(stroke) < 0.10

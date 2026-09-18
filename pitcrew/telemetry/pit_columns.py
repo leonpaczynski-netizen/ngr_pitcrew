@@ -145,7 +145,37 @@ DISC_SQUARENESS = 0.65, 1.55
 # white branch let in - scenery behind the translucent HUD, and the fuel
 # digits, both bright and unsaturated like a hard-compound disc - measured
 # 0.091, 0.224, 0.456 and 0.639. Nothing else in that band is round.
+#
+# **Measured on the disc's OUTLINE, not on its ink** (`_outline_fill`). The
+# bound was calibrated on two red "S" discs and nothing else, and it scored
+# the ink - so the dark letter printed on the disc counted as a hole in it.
+# An "M" is more ink than an "S": every medium disc in Sardegna Rd 9
+# (session 188) scored 0.665-0.694 and was refused. The wall then saw no
+# column on any car on medium tyres, which was most of the field - Rocky's
+# stop and Boxhead's were never filed at all, and J.jonas's was filed from
+# the middle of his fill. Scored on the outline the same discs read
+# 0.761-0.791; scenery on quiet frames still reads 0.36-0.42 and 0.98-1.00,
+# and the fuel digits beside a disc are refused on height before they get
+# here. Every letter now scores what the geometry says a circle scores.
 DISC_ROUNDNESS = 0.70, 0.90
+
+
+def _outline_fill(box) -> float:
+    """How much of `box` a shape covers, with the holes inside it filled.
+
+    Each row is counted from its first set pixel to its last, so a letter
+    printed on a disc - which is the disc's colour's absence, not its edge -
+    stops reading as missing disc. A filled circle scores pi/4 whatever is
+    written on it, which is what `DISC_ROUNDNESS` was always meant to test.
+    """
+    if not box.size:
+        return 0.0
+    covered = 0
+    for row in box:
+        on = np.flatnonzero(row)
+        if on.size:
+            covered += int(on[-1] - on[0] + 1)
+    return covered / float(box.size)
 COLUMN_SLOP_PX = 4
 
 # A disc is a fraction of the frame height, not a fixed size — the HUD scales.
@@ -222,7 +252,7 @@ def _candidates(frame) -> list[tuple[int, int, int, int]]:
             if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
                 continue
             box = red[run[0]:run[-1] + 1, piece[0]:piece[-1] + 1]
-            fill = float(box.mean()) if box.size else 0.0
+            fill = _outline_fill(box)
             if not DISC_ROUNDNESS[0] <= fill <= DISC_ROUNDNESS[1]:
                 continue
             out.append((int(piece[0]), int(run[0]),
@@ -373,7 +403,7 @@ def _disc_on_row(frame, y: int, left: int, right: int, height: int):
             if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
                 continue
             box = strip[row_run[0]:row_run[-1] + 1]
-            fill = float(box.mean()) if box.size else 0.0
+            fill = _outline_fill(box)
             if not DISC_ROUNDNESS[0] <= fill <= DISC_ROUNDNESS[1]:
                 continue
             return (int(left + col_run[0]), int(top + row_run[0]),
