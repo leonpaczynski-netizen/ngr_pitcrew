@@ -44,6 +44,23 @@
     /* The band's own red and green: muted, like the timer's, so a whole band
        of white figures stays readable at 5:1 and more. */
     --quick: #2E7A44; --slow: #A63E39;
+    /* ---- the registers (DESIGN.md's marked set), carried by the payload.
+       Three white numbers in a row - the lap he DROVE, the lap the plan ASKS
+       for, the lap the app PROJECTS - are three different claims, and they
+       were drawn identically. The words on the captions always said which;
+       the ink says it without being read, which is the whole point at speed.
+
+       **Ink is the SECOND channel, never the only one** - "LAST LAP",
+       "TARGET LAP" and "VS TARGET · PROJ" carry it in words already.
+
+       On the collision with `--good`: crayon is 80° of hue from that green,
+       and the stronger argument is the rack's - the two never share a role.
+       A register ink is only ever a caption; `--good` is only ever a value.
+       Nothing on this face is both. */
+    --reg-measured: #9A948A;   /* came off the stream, or off GT7's screen */
+    --reg-declared: #9DCB57;   /* the plan he approved asks for it */
+    --reg-derived:  #B08BD8;   /* the app worked it out - a projection */
+    --reg-absent:   #807870;   /* nothing to show, and saying so */
     --label: "Bahnschrift Condensed", "DIN Condensed", "Arial Narrow", sans-serif;
     --number: "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --wipe: 180ms cubic-bezier(0.33, 1, 0.68, 1);
@@ -60,7 +77,15 @@
 
   /* ---- a figure: caption over value, sub under */
   .fig { display: flex; flex-direction: column; min-width: 0; }
-  .cap { font-family: var(--label); font-weight: 700; color: var(--dim); text-transform: uppercase;
+  /* A figure's caption wears its register. `--reg` defaults to measured, so
+     a payload from an older app - or any figure nobody has classified - reads
+     exactly as it always did rather than as a claim nobody made. */
+  .fig, #band { --reg: var(--reg-measured); }
+  .fig[data-reg="declared"], #band[data-reg="declared"] { --reg: var(--reg-declared); }
+  .fig[data-reg="derived"],  #band[data-reg="derived"]  { --reg: var(--reg-derived); }
+  .fig[data-reg="absent"],   #band[data-reg="absent"]   { --reg: var(--reg-absent); }
+
+  .cap { font-family: var(--label); font-weight: 700; color: var(--aged, var(--reg)); text-transform: uppercase;
     letter-spacing: 0.08em; font-size: 5.2vh; line-height: 1; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; padding-top: 0.12em; }
   .val { font-family: var(--number); font-weight: 700; line-height: 1.02; white-space: nowrap;
@@ -92,6 +117,14 @@
   #band.quick::before, #band.slow::before, #band.act::before { clip-path: inset(0 0 0 0); }
   #band.quick { --fill: var(--quick); } #band.slow { --fill: var(--slow); }
   #band.act { --fill: var(--near); }
+  /* **The band's mark is on its edge, because the band floods.** Every other
+     caption keeps its register ink; this one is white-on-red or white-on-
+     green for most of a race, where a coloured word is unreadable. So the
+     register moves to a marked edge the flood cannot swallow - which is the
+     moulded groove this world already draws depth with, in the register's
+     ink instead of TREAD. */
+  #band::after { content: ""; position: absolute; top: 0; left: 0; right: 0;
+    height: 0.5vh; background: var(--aged, var(--reg)); z-index: 1; }
   #band .cap { position: absolute; top: 1vh; left: 2vw; font-size: 4.4vh; color: var(--dim); }
   #band .val { font-size: 38vh; line-height: 0.95; max-width: 100%; }
   #band .sub { font-size: 4.6vh; }
@@ -135,8 +168,23 @@
     #bottom .val { font-size: 10vw; } #lap .val { font-size: 11vw; } .light { font-size: 2.8vw; }
     #cover .big { font-size: 14vw; } #cover .why { font-size: 4vw; }
   }
+  /* **The escalation** (his call: signal, then urgency). The fill breathes
+     only when the instruction has run out of laps to be obeyed in - NOW, or
+     the last whole lap. Two seconds a cycle, and it never touches the figure
+     or its position: a number that moves is a number he has to find again.
+     The amber stays amber; what changes is that the panel is no longer
+     still, which the edge of the eye reads without being pointed at it. */
+  @keyframes last-call {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.62; }
+  }
+  #band.act.last-call::before { animation: last-call 2s ease-in-out infinite; }
+
   @media (prefers-reduced-motion: reduce) {
     #band::before, .light::before, #band.act .val, .light.lit { transition: none; }
+    /* The escalation is information, so it is not deleted - it stops moving
+       and holds the state the movement was carrying. */
+    #band.act.last-call::before { animation: none; opacity: 1; }
   }
 </style>
 </head>
@@ -160,6 +208,15 @@
 (function () {
   "use strict";
   var POLL_MS = 250, TIMEOUT_MS = 1000, ROLL_MS = 260;
+  // What "there are no laps left to do this in" looks like in the band: the
+  // box call's own NOW, and the last whole lap before it.
+  var LAST_CALL = /^(NOW|1)$/;
+  // Whether the browser can interpolate two colours for us. Where it cannot,
+  // `--aged` is never set and every caption simply keeps its register ink -
+  // the reading still goes to NO DATA at the same second, so nothing is lost
+  // but the warning that it is coming.
+  var CAN_MIX = window.CSS && CSS.supports &&
+                CSS.supports("color", "color-mix(in oklab, red, blue)");
   var staleAfter = 1.5;                 // replaced by the server's own figure
   var lastOk = null, last = null;        // the last answer, for a refit
   var cover = document.getElementById("cover");
@@ -236,6 +293,7 @@
     el.dataset.subject = data.subject || data.caption || "";
     el.classList.toggle("good", data.tone === "good");
     el.classList.toggle("urgent", data.tone === "urgent");
+    el.dataset.reg = data.register || "measured";
     el.querySelector(".cap").textContent = data.caption || "";
     var sub = el.querySelector(".sub");
     if (sub) sub.textContent = data.sub || "";
@@ -254,6 +312,12 @@
     el.classList.toggle("act", act);
     el.classList.toggle("slow", !act && data.tone === "urgent");
     el.classList.toggle("quick", !act && data.tone === "good");
+    el.dataset.reg = data.register || "measured";
+    // **The last lap before the stop escalates.** An instruction that has
+    // run out of laps is a different thing from one three laps away, and it
+    // was the same amber at the same size. The pulse is on the FILL, not on
+    // the figure: a number that moves is a number he has to re-read.
+    el.classList.toggle("last-call", act && LAST_CALL.test(data.value || ""));
     el.querySelector(".cap").textContent = data.caption || "";
     el.querySelector(".sub").textContent = data.sub || "";
     var val = el.querySelector(".val");
@@ -279,6 +343,23 @@
     el.classList.toggle("unread", !!data.unread);
   }
 
+  // **A reading does not fall off a cliff, so neither should the ink.**
+  // The page went from fully lit to NO DATA in one tick, and the second
+  // before the cliff looked exactly like the second after a fresh read. The
+  // captions now walk their register ink toward struck across the life of
+  // the read, so an instrument going quiet is visible BEFORE it is gone -
+  // which is the whole of rule 10's "log the accepts, not only the refusals"
+  // pointed at the driver instead of at the log.
+  function age(seconds) {
+    if (!CAN_MIX) return;
+    var fade = Math.max(0, Math.min(1, (seconds || 0) / (staleAfter || 1.5)));
+    // Nothing moves over the first third: a poll is 250 ms and a read this
+    // fresh is simply current, not ageing.
+    var pct = Math.round(Math.max(0, (fade - 0.33) / 0.67) * 78);
+    document.getElementById("app").style.setProperty(
+      "--aged", "color-mix(in oklab, var(--reg), var(--reg-absent) " + pct + "%)");
+  }
+
   function render(d) {
     if (typeof d.stale_after_s === "number") staleAfter = d.stale_after_s;
     if (d.idle) { show("PIT CREW", "no session running", false); return; }
@@ -294,6 +375,7 @@
     fig("burn", d.burn, $("burn").clientWidth);
     var lights = d.lights || [];
     light("l0", lights[0]); light("l1", lights[1]); light("l2", lights[2]);
+    age(d.age_s);
     cover.className = "";
     covered = false;
   }

@@ -28,6 +28,15 @@
   :root {
     --ground: #0C0B09; --panel: #1E1B17; --edge: #38332B;
     --ink: #E8E4DC; --dim: #A8A298; --near: #F2C230; --good: #5FC27A; --over: #FF6B63;
+    /* ---- the registers (DESIGN.md's marked set). Five of these six columns
+       are READINGS - his place, his gap, the lap he pitted, the litres in and
+       out, all off GT7's own board and pit columns. One is the app's
+       OPINION, worked out from a burn that may not even be his. They were
+       six identical grey heads, and the opinion was the widest of them.
+       Rule 5, drawn rather than captioned. */
+    --reg-measured: #A8A298;   /* read off GT7's screen */
+    --reg-derived:  #B08BD8;   /* the app worked it out */
+    --reg-absent:   #807870;   /* nothing read, and saying so */
     --label: "Bahnschrift Condensed", "DIN Condensed", "Roboto Condensed", "Arial Narrow", sans-serif;
     --number: "Cascadia Mono", ui-monospace, "Roboto Mono", "SF Mono", Menlo, Consolas, monospace;
   }
@@ -85,7 +94,13 @@
   #head { display: flex; align-items: baseline; gap: 3vw; font-family: var(--label);
     font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
   #head .big { font-size: 6.4vh; line-height: 1; }
-  #board { margin-left: auto; font-size: 3.6vh; color: var(--dim); }
+  /* **The read ages in the ink before it ages in the words.** "board read 6
+     s ago" and "board read 1 s ago" were the same grey, and by the time the
+     colour changed the reading was already too old to use. It walks to
+     struck across the freshness window instead, so the instrument going
+     quiet is visible before it has gone. */
+  #board { margin-left: auto; font-size: 3.6vh;
+    color: var(--aged-measured, var(--reg-measured)); }
   #board.stale { color: var(--near); }
 
   /* One grid for header and rows, so every column lines up down the table. */
@@ -94,10 +109,29 @@
      short panel then draw a little tighter instead of not at all. */
   #table { display: grid; align-content: stretch; min-height: 0; overflow: hidden;
     grid-auto-rows: minmax(0, 1fr); row-gap: 0.6vh;
-    grid-template-columns: 7vw minmax(0, 1fr) 7vw 8.5vw 13vw minmax(0, 1.05fr); column-gap: 0; }
+    /* **The opinion column gets the room, because it carries a sentence.**
+       The five reading columns are a place, a name, a lap and two litres -
+       fixed and short - while this one is "short - lifts or stops again ·
+       our burn", and at 1.05fr it ellipsed the half that says what to DO
+       about the car.
+       The room comes from the four narrow columns, NOT from the driver: the
+       first attempt took it from there and truncated the names instead
+       ("MARTIN_…", "ZenPhilo…"), which is worse. A car he cannot name is a
+       car he cannot find on the road, and a gap column holds "0.8" for two
+       rows out of twelve.
+       Sized to the LONGEST thing it can say - "short - lifts or stops again ·
+       our burn", 38 characters - rather than to the common case. A column
+       that fits four rows out of five is a column that hides the fifth, and
+       the fifth is the car doing something unusual. */
+    grid-template-columns: 5.5vw minmax(0, 1fr) 6vw 7.5vw 11.5vw minmax(0, 1.36fr);
+    column-gap: 0; }
   /* The stop column starts clear of the gap figure beside it. */
   .row > .cell:nth-child(4), .th:nth-child(4) { padding-left: 1.8vw; }
-  .th { font-family: var(--label); font-weight: 700; font-size: 2.8vh; color: var(--dim);
+  /* The opinion column is marked at its head and nowhere else: marking the
+     cells too would put a colour on every row of a twelve-row table, which
+     is decoration. One mark, at the top of the column it governs. */
+  .th.col-says { color: var(--aged-derived, var(--reg-derived)); }
+  .th { font-family: var(--label); font-weight: 700; font-size: 2.8vh; color: var(--aged-measured, var(--reg-measured));
     letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.8vw 0.4vh; white-space: nowrap; }
   .row { display: contents; }
   .cell { display: flex; flex-direction: column; justify-content: center; min-width: 0;
@@ -106,9 +140,14 @@
     font-size: 4.4vh; line-height: 1; white-space: nowrap; }
   .txt { font-family: var(--label); font-weight: 700; font-size: 4.6vh; line-height: 1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .small { font-family: var(--label); font-weight: 700; font-size: 2.8vh; color: var(--dim);
+  .small { font-family: var(--label); font-weight: 700; font-size: 2.7vh; color: var(--dim);
     line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .right { align-items: flex-end; text-align: right; }
+  /* The one seam where two columns can touch: the widest fill this table can
+     draw ("10 → 99") ends hard against the first word of the opinion beside
+     it. Space here rather than a rule - the table has no vertical rules, and
+     one added for a single row would be the loudest thing on the screen. */
+  .cell.col-fuel { padding-right: 1.8vw; }
 
   /* Our row: a plate, not a colour. */
   .us .cell { background: var(--panel); border-top-color: var(--ink); border-bottom: 1px solid var(--ink); }
@@ -168,6 +207,28 @@
   var cover = document.getElementById("cover");
   // **The last column is derived and its heading says so** (rule 5): "Stop"
   // and "Fuel" are read off GT7's pit columns, "Fuel says" is worked out.
+  // Whether the browser can interpolate two colours for us. Where it cannot,
+  // the heads keep their register ink and only the words carry the age.
+  var CAN_MIX = window.CSS && CSS.supports &&
+                CSS.supports("color", "color-mix(in oklab, red, blue)");
+  var BOARD_FRESH_S = 12;          // `race.news.BOARD_FRESH_S`, in the page
+
+  // **The board's own age, walked into the ink.** Not the payload's `age_s`,
+  // which is how long ago the PC SPOKE - the two are different questions and
+  // conflating them is how a 250 ms publish of a two-minute-old reading came
+  // to look current.
+  function ageBoard(seconds) {
+    if (!CAN_MIX) return;
+    var fade = seconds == null ? 1
+             : Math.max(0, Math.min(1, seconds / BOARD_FRESH_S));
+    var pct = Math.round(Math.max(0, (fade - 0.25) / 0.75) * 72);
+    var root = document.getElementById("app").style;
+    root.setProperty("--aged-measured",
+      "color-mix(in oklab, var(--reg-measured), var(--reg-absent) " + pct + "%)");
+    root.setProperty("--aged-derived",
+      "color-mix(in oklab, var(--reg-derived), var(--reg-absent) " + pct + "%)");
+  }
+
   var HEAD = ["P", "Driver", "Gap", "Stop", "Fuel in → out", "Fuel says"];
   // Shorter where the column is narrow; the arrow in each row says in → out.
   HEAD[4] = "Fuel";
@@ -206,13 +267,16 @@
     $("pos").textContent = d.position || "";
     $("board").textContent = d.board || "";
     $("board").classList.toggle("stale", !!d.board_stale);
+    ageBoard(d.board_age_s);
 
     // Rebuilt whole each answer: a dozen rows twice a second, and a row
     // patched in place is a row that can show one car's fuel beside
     // another's name for a frame.
     var table = document.createDocumentFragment();
     HEAD.forEach(function (h, i) {
-      table.appendChild(el("div", "th" + (i === 2 ? " right" : "") + (i === 4 ? " col-fuel" : ""), h));
+      table.appendChild(el("div", "th" + (i === 2 ? " right" : "")
+                           + (i === 4 ? " col-fuel" : "")
+                           + (i === 5 ? " col-says" : ""), h));
     });
     (d.rows || []).forEach(function (r) {
       var row = el("div", "row" + (r.us ? " us" : ""));

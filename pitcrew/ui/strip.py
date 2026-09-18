@@ -35,9 +35,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pitcrew.ui.driver_view import (
-    Block, DriverState, abs_light, box_block, face_best_block, face_burn_block,
-    face_delta_block, face_lap_block, face_last_block, fuel_stop_block,
-    fuel_target_block, release_block, tcs_light, tyres_block, wet_light)
+    DECLARED, DERIVED, Block, DriverState, abs_light, box_block,
+    face_best_block, face_burn_block, face_delta_block, face_lap_block,
+    face_last_block, fuel_stop_block, fuel_target_block, release_block,
+    stamped, tcs_light, tyres_block, wet_light)
 
 CENTRE_RELEASE = "release"
 CENTRE_BOX = "box"
@@ -76,6 +77,11 @@ class Item:
                 "caption": self.caption,
                 "value": self.block.value, "sub": self.block.sub,
                 "tone": self.block.tone,
+                # **Where the figure came from**, so the page can mark it.
+                # Three white numbers in a row - the lap he drove, the lap the
+                # plan asks for, the lap the app projects - are three
+                # different claims and were drawn identically (rules 3, 5).
+                "register": self.block.register,
                 "act": self.id in ACT_NOW and self.block.urgent}
 
 
@@ -95,12 +101,17 @@ class StripComposer:
     @staticmethod
     def _centre(state: DriverState) -> Item:
         """The band: an instruction if there is one, the delta otherwise."""
+        # **The plan's own figures are derived** - a model with stated
+        # assumptions produced them (CLAUDE.md §5) - and they sit in the
+        # same slot as a measured delta, at the same size, in one ink.
         if not state.finished and state.laps_past_box is not None \
                 and state.laps_to_box is not None:
-            return Item("LAPS TO THE STOP", box_block(state), CENTRE_BOX,
+            return Item("LAPS TO THE STOP",
+                        stamped(box_block(state), DERIVED), CENTRE_BOX,
                         SUBJECT_LAPS_TO_STOP)
         if state.fuel_to_stop is not None and state.fuel_to_stop < 0:
-            return Item("IN HAND TO THE STOP", fuel_stop_block(state),
+            return Item("IN HAND TO THE STOP",
+                        stamped(fuel_stop_block(state), DERIVED),
                         CENTRE_FUEL_SHORT, SUBJECT_FUEL_TO_STOP)
         caption, block = face_delta_block(state)
         return Item(caption, block, CENTRE_DELTA, SUBJECT_DELTA)
@@ -109,11 +120,14 @@ class StripComposer:
     def _box(state: DriverState) -> dict:
         return {
             "kind": "box",
-            "last": Item("FUEL TO", fuel_target_block(state),
+            # In the box every figure is the plan's: what to fill to, what
+            # goes on, how long he holds the trigger. None is a reading.
+            "last": Item("FUEL TO", stamped(fuel_target_block(state), DERIVED),
                          subject="fuel_target").to_json(),
-            "best": Item("TYRES", tyres_block(state),
+            "best": Item("TYRES", stamped(tyres_block(state), DECLARED),
                          subject="tyres").to_json(),
-            "centre": Item("RELEASE IN", release_block(state),
+            "centre": Item("RELEASE IN",
+                           stamped(release_block(state), DERIVED),
                            CENTRE_RELEASE, "release").to_json(),
             "lap": Item("LAP", face_lap_block(state)).to_json(),
             "burn": None,

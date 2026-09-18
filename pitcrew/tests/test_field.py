@@ -639,3 +639,119 @@ def test_a_gap_from_laps_ago_is_not_still_on_the_screen():
     state.lap += 5                              # five laps with no new read
     stale = {r.name: r for r in field_view(state, board, packet=1).rows}
     assert stale["PUNISHED"].gap_s is None
+
+
+def test_a_visit_the_wall_never_closed_stops_saying_he_is_standing_there():
+    """"IN LANE" is the one thing on this screen happening right now, and it
+    could not expire: only `note_rival_stop` clears a visit and it returns
+    early when the race is not running, so a plate could stay up for the rest
+    of the race. `untold()` has `STALE_AFTER_LAPS`; the plate had nothing."""
+    from pitcrew.race.lane import STALE_AFTER_LAPS
+
+    state = _state()
+    board = BoardRead(packet=1, places={"PUNISHED": 3}, visible=frozenset({3}),
+                      windowed=False)
+    from types import SimpleNamespace
+
+    state.lane.enter(SimpleNamespace(driver="PUNISHED", lap=state.lap),
+                     lap=state.lap)
+    assert state.lane.in_the_lane(), "the fixture must put him in the lane"
+
+    def punished(at_lap):
+        state.lap = at_lap
+        rows = {r.name: r for r in field_view(state, board, packet=1).rows}
+        return rows["PUNISHED"].in_lane
+
+    began = state.lap
+    assert punished(began) is True
+    assert punished(began + STALE_AFTER_LAPS) is True
+    assert punished(began + STALE_AFTER_LAPS + 1) is False
+
+
+def test_a_timed_races_distance_is_hedged_where_it_is_an_estimate():
+    """Every spoken call says "about" for a timed race's lap count. The header
+    said "/ 30" flat - and it is the number every prediction on the screen is
+    divided by (`fuel_shortfall`), so the screen was the confident one."""
+    from pitcrew.ui.tablet import compose
+
+    board = BoardRead(packet=1, places={"PUNISHED": 3}, visible=frozenset({3}),
+                      windowed=False)
+    firm = _state()
+    assert "/ 30" in compose(field_view(firm, board, packet=1))["lap"]
+
+    timed = _state()
+    timed.laps_count_hedged = True
+    assert "/ ~30" in compose(field_view(timed, board, packet=1))["lap"]
+
+
+def test_his_burn_says_how_many_stops_it_rests_on():
+    """Rule 4. Only OUR burn was marked, so "his burn" was the unmarked
+    default - the reassuring case, on the weakest evidence, with nothing
+    saying whether it stood on one stop or six."""
+    from pitcrew.race.rival_calls import Rival
+    from pitcrew.race.rivals import Stop
+    from pitcrew.ui.tablet import prediction_words
+
+    def words(stops):
+        rival = Rival(name="R", stop=Stop(lap=10, fuel_in_l=8.0,
+                                          fuel_out_l=95.0),
+                      pitted=True, burn_per_lap_l=5.0, burn_stops=stops)
+        return prediction_words(predict(rival, stops_seen=1, our_burn_l=5.0,
+                                        laps_total=30))[1]
+
+    assert "his burn, 1 stop" in words(1)
+    assert "his burn, 4 stops" in words(4)
+    # Ours carries no count: it is this race's, over every lap of it, and a
+    # count there would invite comparing two different kinds of number.
+    ours = Rival(name="R", stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=95.0),
+                 pitted=True)
+    assert prediction_words(
+        predict(ours, stops_seen=1, our_burn_l=5.0,
+                laps_total=30))[1].endswith("our burn")
+
+
+def test_a_refusal_reaches_the_tablet_with_its_reason():
+    """**A refusal that never reads the body is a refusal he never sees.**
+
+    The cool-off and the content-type check both answered before reading the
+    request, so the connection was reset with the reply in flight and the
+    page got a transport error where the server had sent "too many wrong
+    codes". The tablet then says the PC is unreachable - which is the one
+    thing that had NOT happened - and he presses the button again, which is
+    what the cool-off exists to stop.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    from pitcrew.ui.strip_server import PRESS_WRONG_LIMIT
+
+    server, port, presses = _press_server()
+    try:
+        def post(body, kind="application/json"):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/tablet/press",
+                data=body.encode("utf-8"), method="POST",
+                headers={"Content-Type": kind})
+            try:
+                with urllib.request.urlopen(request, timeout=5) as reply:
+                    return reply.status, json.loads(reply.read() or b"{}")
+            except urllib.error.HTTPError as refused:
+                return refused.code, json.loads(refused.read() or b"{}")
+
+        wrong = '{"action": "george", "value": false, "key": "000000"}'
+        right = '{"action": "george", "value": false, "key": "123456"}'
+
+        # The body is read even where the content type is refused outright.
+        status, why = post(right, kind="text/plain")
+        assert (status, why.get("why")) == (415, "not a press")
+
+        for _ in range(PRESS_WRONG_LIMIT):
+            assert post(wrong)[0] == 403
+        # ...and the cool-off says so, in words, rather than dropping the
+        # connection on a body it never drained.
+        status, why = post(right)
+        assert (status, why.get("why")) == (429, "too many wrong codes")
+        assert presses == []
+    finally:
+        server.stop()

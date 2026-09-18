@@ -43,7 +43,19 @@ def prediction_words(prediction) -> tuple[str, str, str]:
     if prediction is None:
         return "", "", "plain"
     maybe = "?" if prediction.unconfirmed else ""
-    burn = " · our burn" if prediction.burn_of == "ours" else ""
+    # **Both burns are named, and his carries its count** (rule 4). Only ours
+    # was marked, so "his burn" was the unmarked default - the reassuring
+    # case, resting on the weakest evidence, and the one figure on the row
+    # with nothing saying how much of it there was. One stop is one stint's
+    # worth of evidence about a driver who may have been saving.
+    if prediction.burn_of == "ours":
+        burn = " · our burn"
+    elif prediction.burn_of == "his":
+        stops = prediction.burn_stops
+        burn = (f" · his burn, {stops} stop{'' if stops == 1 else 's'}"
+                if stops else " · his burn")
+    else:
+        burn = ""
     if prediction.words == STOPS_AGAIN:
         return (f"{_stops(prediction.total_stops)}{maybe}",
                 f"in by L{prediction.reaches_lap}{burn}", "stops")
@@ -115,15 +127,24 @@ def compose(view: FieldView | None) -> dict:
         "v": PAYLOAD_VERSION,
         "idle": False,
         "kind": "race",
+        # "/ ~30" where the distance is the plan's estimate: the tilde is
+        # the hedge the voice says as "about", and it is the number every
+        # prediction below is divided by.
         "lap": ("" if view.lap is None else
-                f"LAP {view.lap}" + (f" / {view.laps_total}"
-                                     if view.laps_total else "")),
+                f"LAP {view.lap}" + (
+                    f" / {'~' if view.laps_total_hedged else ''}"
+                    f"{view.laps_total}" if view.laps_total else "")),
         "position": ("" if view.position is None else
                      f"P{view.position}" + (f" of {view.field_size}"
                                             if view.field_size else "")),
         "board": ("board not read yet" if age is None
                   else f"board read {age:.0f} s ago"),
         "board_stale": age is None or age > BOARD_FRESH_S,
+        # The seconds themselves, not only the sentence: the page walks the
+        # heads' ink toward struck across them, so a read going cold is
+        # visible before it is refused. None is "no read", which is the far
+        # end of that walk rather than the near one.
+        "board_age_s": age,
         "rows": drawn,
         "left_off": left_off,
         "why": view.why or ("" if drawn else "no other car read yet"),

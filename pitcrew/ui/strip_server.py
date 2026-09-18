@@ -277,13 +277,35 @@ class StripServer:
         """
         import hmac
 
+        # **A refusal that never reads the body is a refusal he never sees.**
+        # Answering and closing with the request body still in flight makes
+        # Windows reset the connection, and the tablet gets
+        # `ConnectionAbortedError` where the server sent a perfectly good
+        # "too many wrong codes" - so the page says the PC is unreachable
+        # when what actually happened is that it said no, and why. The two
+        # branches below both returned before the read: the cool-off, which
+        # is the one refusal with something to tell him, and the content-type
+        # check. Drained first, so every answer on this route is delivered.
+        def drain() -> None:
+            try:
+                length = int(headers.get("Content-Length") or 0)
+            except ValueError:
+                return
+            if 0 < length <= PRESS_MAX_BYTES:
+                try:
+                    stream.read(length)
+                except OSError:
+                    pass
+
         if self._clock() < self._cool_off_until:
+            drain()
             return 429, {"ok": False, "why": "too many wrong codes"}
         # **A press says it is one.** Without this a `text/plain` body is a
         # CORS simple request, so any page open in a browser on his network
         # could post one without a preflight.
         kind = (headers.get("Content-Type") or "").split(";")[0].strip()
         if kind != "application/json":
+            drain()
             return 415, {"ok": False, "why": "not a press"}
         try:
             length = int(headers.get("Content-Length") or 0)

@@ -337,7 +337,7 @@ about it.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRectF, Qt, pyqtProperty
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -378,6 +378,11 @@ PANEL = theme.SHOULDER
 EDGE = theme.TREAD
 INK = theme.STENCIL
 INK_DIM = theme.STENCIL_DIM
+# Crayon at a head's weight. Full `theme.CRAYON` measures 13:1 on this ground
+# - brighter than the figures under it - and a column head that outshouts its
+# own column is an upside-down hierarchy. Same value as the strip's
+# `--reg-declared`, so the mark reads identically on the phone and up here.
+CRAYON_DIM = "#9DCB57"
 # **The state ladder, and what each colour is allowed to claim.**
 #
 # `cool` is white because a temperature below onset is a measured number
@@ -1147,6 +1152,22 @@ TONE_PLAIN = "plain"
 TONE_URGENT = "urgent"
 TONE_GOOD = "good"
 
+# **Where a figure came from, carried with the figure** - the marked set's
+# four registers (DESIGN.md), as a value rather than as an ink, because the
+# same block is drawn by Qt and by a browser and neither should be deciding
+# what a number IS.
+#
+# Rules 3 and 5 are the whole reason. A lap the car drove, a lap the plan
+# asks for, and a lap the app projects are three different claims, and on the
+# face they were three identical white numbers in a row. The screens now say
+# which is which - **in the CAPTION's ink, never the value's.** The value's
+# colour already means quick or slow, and a second meaning on the same pixels
+# is the collision the rack's own note spent three attempts avoiding.
+MEASURED = "measured"     # came off the telemetry stream, or GT7's own screen
+DECLARED = "declared"     # the driver set it, or approved the plan that did
+DERIVED = "derived"       # the app worked it out - a projection, a model
+ABSENT = "absent"         # nothing to show, and saying so
+
 
 @dataclass(frozen=True)
 class Block:
@@ -1156,6 +1177,10 @@ class Block:
     value: str
     sub: str = ""
     tone: str = TONE_PLAIN
+    # Which register this figure belongs to - see the constants above. It is
+    # not a colour and not a tone: a measured figure can be urgent, and a
+    # derived one can be good.
+    register: str = MEASURED
 
     @property
     def urgent(self) -> bool:
@@ -1168,6 +1193,25 @@ class Block:
 
 def _tone(urgent: bool, good: bool = False) -> str:
     return TONE_URGENT if urgent else TONE_GOOD if good else TONE_PLAIN
+
+
+# Every dash this app draws, in one place: a figure that refused. None of them
+# belongs to a register, whatever the block would otherwise have been.
+REFUSALS = ("--", "--.---", "-:--.---", "-:--", "")
+
+
+def stamped(block: Block, register: str) -> Block:
+    """`block` in `register` - unless it is a refusal, which has none.
+
+    The plan's own figures (the countdown to the box, the fill, the laps in
+    hand) are DERIVED: a model with stated assumptions worked them out, and
+    §5 says so in words already. This stamps the same fact on the block so a
+    screen can draw it without re-deciding. A dash is ABSENT whatever the
+    figure would have been, because "the app worked out that it cannot tell
+    you" is not a derived value - it is no value (rule 3).
+    """
+    return replace(block, register=ABSENT if block.value in REFUSALS
+                   else register)
 
 
 def tyre_clause(state: "DriverState", head: str) -> str:
@@ -1458,12 +1502,14 @@ def target_strip_block(state: "DriverState") -> Block:
 
 def face_last_block(state: "DriverState") -> Block:
     """LAST LAP: GT7's own last completed lap."""
-    return Block(format_lap_ms(state.last_lap_ms))
+    return Block(format_lap_ms(state.last_lap_ms),
+                 register=MEASURED if state.last_lap_ms is not None else ABSENT)
 
 
 def face_lap_block(state: "DriverState") -> Block:
     """LAP: the lap his HUD shows."""
-    return Block(str(state.lap_number) if state.lap_number else "--")
+    return Block(str(state.lap_number) if state.lap_number else "--",
+                 register=MEASURED if state.lap_number else ABSENT)
 
 
 def face_best_block(state: "DriverState") -> tuple[str, Block]:
@@ -1475,12 +1521,18 @@ def face_best_block(state: "DriverState") -> tuple[str, Block]:
     """
     if state.session_kind == "race":
         saving = " · SAVE" if state.target_saving else ""
+        # **Declared**: it is the plan he approved asking for this lap, not
+        # anything the car has done or the app has worked out.
         return (f"TARGET LAP{saving}",
-                Block(format_lap_ms(state.target_lap_ms), "", TONE_PLAIN))
+                Block(format_lap_ms(state.target_lap_ms), "", TONE_PLAIN,
+                      register=(DECLARED if state.target_lap_ms is not None
+                                else ABSENT)))
     tyre = f" · {state.reference_compound}" if state.reference_compound else ""
     return (f"BEST{tyre}",
             Block(format_lap_ms(state.file_best_ms), "",
-                  TONE_GOOD if state.file_best_ms is not None else TONE_PLAIN))
+                  TONE_GOOD if state.file_best_ms is not None else TONE_PLAIN,
+                  register=(MEASURED if state.file_best_ms is not None
+                            else ABSENT)))
 
 
 def face_delta_block(state: "DriverState") -> tuple[str, Block]:
@@ -1502,29 +1554,36 @@ def face_delta_block(state: "DriverState") -> tuple[str, Block]:
             # The race is run. A projection of the slow-down lap against a
             # target is a true-looking figure about a lap nobody is racing,
             # and it floods the band red - `box_block` says FLAG here.
-            return "VS TARGET", Block("FLAG", RACE_OVER)
+            return "VS TARGET", Block("FLAG", RACE_OVER, register=ABSENT)
         if state.predicted_ms is not None and state.target_lap_ms is not None:
             delta = (state.predicted_ms - state.target_lap_ms) / 1000.0
             sub = f"projected {format_lap_ms(state.predicted_ms)}"
             caption = "VS TARGET · PROJ"
+            # A projection of a lap still being driven: derived, and the one
+            # figure on this face that is about a lap nobody has finished.
+            register = DERIVED
         elif state.last_vs_target_s is not None:
             delta = state.last_vs_target_s
             sub = "last lap"
             caption = "VS TARGET · LAST"
+            # Two measured laps subtracted. Arithmetic on the stream is not a
+            # model, and calling it derived would make the word mean nothing.
+            register = MEASURED
         else:
-            return "VS TARGET", Block("--", state.target_why or "no target lap")
+            return "VS TARGET", Block("--", state.target_why or "no target lap",
+                                      register=ABSENT)
         # **The caption says WHICH lap**, because one band carries two
         # quantities - the lap he is driving, projected, and the one he has
         # finished - and they are the same size in the same ink (rule 13).
         tone = TONE_URGENT if delta >= ON_TARGET_S else TONE_GOOD
-        return caption, Block(format_delta(delta), sub, tone)
+        return caption, Block(format_delta(delta), sub, tone, register=register)
     delta = state.delta_file_s
     if delta is None:
         why = ("no best on file" if state.file_best_ms is None
                else state.delta_why or "not on a lap")
-        return "VS BEST", Block("--.---", why)
+        return "VS BEST", Block("--.---", why, register=ABSENT)
     tone = TONE_GOOD if delta < 0 else TONE_URGENT if delta > 0 else TONE_PLAIN
-    return "VS BEST", Block(format_delta(delta), "", tone)
+    return "VS BEST", Block(format_delta(delta), "", tone, register=MEASURED)
 
 
 def face_burn_block(state: "DriverState") -> Block | None:
@@ -1550,9 +1609,11 @@ def face_burn_block(state: "DriverState") -> Block | None:
     if delta is None:
         return Block("--", stint or (f"target {state.target_burn_l:.2f} L/lap"
                                      if state.target_burn_l is not None
-                                     else "no target burn"))
+                                     else "no target burn"),
+                     register=ABSENT)
     tone = TONE_URGENT if delta >= ON_TARGET_L else TONE_GOOD
-    return Block(f"{delta:+.2f}", stint, tone)
+    # Litres off the tank, against the plan's figure: a measurement.
+    return Block(f"{delta:+.2f}", stint, tone, register=MEASURED)
 
 
 # How many laps the rack draws. A race is thirty-odd laps and this is read
@@ -2566,6 +2627,27 @@ class _HistoryPanel(QWidget):
 
     COLUMNS = ("LAP", "TIME", "VS TARGET", "BURN  VS TARGET", "")
 
+    # **What each column IS, marked at its head** (DESIGN.md's registers).
+    # Five columns of identical grey heads over figures making three
+    # different claims: the lap and the time and the litres came off the
+    # stream, and the two "vs target" columns are the race measured against
+    # a plan HE approved - which is the whole reason the rack is worth
+    # reading between stints. A head is one label per column, so the mark
+    # costs nothing and never touches a figure.
+    # **One of these heads governs two columns, and they are not the same
+    # claim.** "BURN  VS TARGET" sits over `7.04  +0.03`: litres off the tank,
+    # and those litres judged against a plan he approved. Marking the head
+    # whole said the burn itself was declared, which is the error this system
+    # exists to prevent - so that head is marked in two pieces (`_head_html`).
+    HEAD_INKS = (INK_DIM,          # LAP - GT7's own count
+                 INK_DIM,          # TIME - GT7's own clock
+                 CRAYON_DIM,       # VS TARGET - against the plan he approved
+                 None,             # BURN + VS TARGET - split, see below
+                 INK_DIM)          # the column he was on: a note, not a value
+
+    # The split head, as two marks in one label. `measured  declared`.
+    SPLIT_HEAD = {3: (("BURN", INK_DIM), ("VS TARGET", CRAYON_DIM))}
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         column = QVBoxLayout(self)
@@ -2580,10 +2662,22 @@ class _HistoryPanel(QWidget):
         grid.setHorizontalSpacing(46)
         grid.setVerticalSpacing(4)
         for index, head in enumerate(self.COLUMNS):
-            label = QLabel(head)
+            label = QLabel()
+            parts = self.SPLIT_HEAD.get(index)
+            if parts is None:
+                label.setText(head)
+            else:
+                # Rich text only where a head carries two registers. A label
+                # that needs no split stays plain text, because HTML in a
+                # label is a thing to debug and this needs it twice.
+                label.setText("&nbsp;&nbsp;".join(
+                    f'<span style="color:{ink}">{word}</span>'
+                    for word, ink in parts))
+            ink = self.HEAD_INKS[index] or INK_DIM
             label.setStyleSheet(
                 f"font-family:{LABEL_FACE};font-size:22px;font-weight:600;"
-                f"letter-spacing:5px;color:{INK_DIM};background:transparent;")
+                f"letter-spacing:5px;color:{ink};"
+                f"background:transparent;")
             grid.addWidget(label, 0, index)
         self.cells = []
         for row in range(HISTORY_ROWS):

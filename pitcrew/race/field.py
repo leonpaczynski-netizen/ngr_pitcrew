@@ -92,8 +92,20 @@ class Prediction:
     why: str | None = None
     # Whose burn the arithmetic used: "his" or "ours".
     burn_of: str | None = None
+    # **How many of his stops that burn rests on** (rule 4). One stop is one
+    # stint's worth of evidence about a driver who may have been saving, and
+    # the row said "his burn" identically whether it stood on one or on six.
+    # None where the burn is ours - our own burn is this race's, measured over
+    # every lap of it, and a count there would invite a comparison between two
+    # different kinds of number.
+    burn_stops: int | None = None
     # The shortfall is inside what two readings and a burn can resolve.
     unconfirmed: bool = False
+    # **`stops_seen` is a floor, not a count** - the lane only sees the cars
+    # GT7 draws, and `max(seen, 1)` raises it from the pit flag. So a total
+    # built on it is a lower bound too, and says so rather than reading as a
+    # tally of his race.
+    seen_is_a_floor: bool = True
 
 
 @dataclass(frozen=True)
@@ -123,6 +135,8 @@ class FieldView:
     field_size: int | None = None
     lap: int | None = None
     laps_total: int | None = None
+    # Whether that distance is the plan's estimate rather than a count.
+    laps_total_hedged: bool = False
     why: str | None = None
 
 
@@ -134,6 +148,8 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
                           words=NO_STOP_SEEN if stops_seen == 0 else CANNOT_TELL,
                           why=None if stops_seen == 0 else "no fuel read at his stop")
     burn_of = "his" if rival.burn_per_lap_l else "ours"
+    stops = getattr(rival, "burn_stops", 0) or None
+    evidence = stops if burn_of == "his" else None
     if rival.exit_is_a_bound:
         return Prediction(stops_seen=stops_seen, words=CANNOT_TELL,
                           why="exit fuel a lower bound",
@@ -148,6 +164,7 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
     if short.litres <= 0:
         return Prediction(stops_seen=stops_seen, words=REACHES_FLAG,
                           total_stops=stops_seen, burn_of=burn_of,
+                          burn_stops=evidence,
                           unconfirmed=not short.certain)
     if short.saveable:
         # **`total_stops=None`, because the app does not know.**
@@ -159,12 +176,14 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
         # about one car, from one set of numbers.
         return Prediction(stops_seen=stops_seen, words=SHORT_SAVES,
                           total_stops=None, burn_of=burn_of,
+                          burn_stops=evidence,
                           unconfirmed=not short.certain)
     burn = rival.burn_per_lap_l or our_burn_l
     reaches = rival.stop.lap + int(rival.stop.fuel_out_l / burn)
     return Prediction(stops_seen=stops_seen, words=STOPS_AGAIN,
                       total_stops=stops_seen + 1, reaches_lap=reaches,
-                      burn_of=burn_of, unconfirmed=not short.certain)
+                      burn_of=burn_of, burn_stops=evidence,
+                      unconfirmed=not short.certain)
 
 
 def _on_his_hud(prediction: Prediction) -> Prediction:
@@ -207,7 +226,14 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
     lap_now = on_screen() if callable(on_screen) else getattr(state, "lap", None)
     base = dict(position=ours, field_size=getattr(state, "field_size", None),
                 lap=lap_now,
-                laps_total=getattr(state, "laps_total", None))
+                laps_total=getattr(state, "laps_total", None),
+                # **In a timed race the distance is an ESTIMATE**, and every
+                # spoken call says "about" for it. The header printed a flat
+                # "/ 30" and every prediction on the screen rests on it
+                # (`fuel_shortfall` divides by laps-to-flag), so the hedge
+                # belongs here too or the screen is the confident one (rule 5).
+                laps_total_hedged=bool(
+                    getattr(state, "laps_count_hedged", False)))
     lane = getattr(state, "lane", None)
     rivals = dict(getattr(state, "rivals", None) or {})
     our_burn = getattr(state, "fuel_per_lap_l", None)
@@ -252,8 +278,23 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
             # fresh, so it is not shown as a place at all.
             log("race").info("the tablet has a board read with no packet "
                              "count to age it - places refused")
-    standing = {str(stop.driver).lower()
-                for stop in (lane.in_the_lane() if lane is not None else [])}
+    # **"IN LANE" is the one thing on this screen happening RIGHT NOW, and it
+    # could not expire.** `in_the_lane()` is every visit whose exit was never
+    # filed, and only `note_rival_stop` clears one - which returns early when
+    # the race is not running, among other gates. So a visit the wall never
+    # closed kept the amber plate up for the rest of the race, saying a car
+    # was standing in its box twenty laps after it left. `untold()` has
+    # `STALE_AFTER_LAPS` for exactly this; the plate had nothing.
+    from pitcrew.race.lane import STALE_AFTER_LAPS
+
+    standing = set()
+    for stop in (lane.in_the_lane() if lane is not None else []):
+        began = getattr(stop, "lap", None)
+        our_lap = getattr(state, "lap", None)
+        if (began is not None and our_lap is not None
+                and our_lap - began > STALE_AFTER_LAPS):
+            continue                 # nobody stands in a box for three laps
+        standing.add(str(stop.driver).lower())
 
     names = set(places) | set(rivals)
     rows: list[Car] = []
