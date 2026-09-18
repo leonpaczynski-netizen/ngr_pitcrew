@@ -430,3 +430,61 @@ def test_a_silent_engineer_books_what_the_screen_showed(raced):
     controller._on_position_changed(call)
     assert not race.awaits_delivery(call)
     assert race.state.lane.untold(race.state.lap) == []
+
+
+def test_a_box_call_the_voice_never_said_is_made_again():
+    """**The one call where being wrong costs the race.**
+
+    `record()` books a kind when the call is MADE, and `next_call` will not
+    build that kind again while it is in `state.said`. So a box call the
+    voice dropped - queued behind a 10-12 s line, taken past its 8 s budget,
+    discarded as stale - was booked as said and never repeated. Measured on
+    a realistic state, the next crossing then spent the lap on a HEARTBEAT:
+
+        Lap 8. 13 laps to go. Tyre gauge when you get a straight.
+
+    while the stop he owed went unmentioned, fill and compound and all. This
+    is the Bathurst shape - a fact retired on handover, eight of ten stops
+    never said - pointed at the stop instead of at a rival's.
+    """
+    from pitcrew.race.calls import BOX_NOW, RaceState, next_call
+
+    def state(lap):
+        made = RaceState(lap=lap, laps_total=20, stint_ends_on_lap=7,
+                         fuel_per_lap_l=3.4, fuel_capacity_l=100.0,
+                         mandatory_stops_left=1, next_compound="RS",
+                         next_tyres=True)
+        made.last_said_lap = 0
+        return made
+
+    first = state(6)
+    call = next_call(first)
+    assert call.kind == BOX_NOW and "Fuel to" in call.spoken(), call.spoken()
+    first.record(call)
+    assert BOX_NOW in first.said
+
+    # Not heard. The kind comes back off the said list, and the next
+    # crossing derives the whole instruction again - fill included.
+    lost = state(7)
+    lost.said = [kind for kind in first.said if kind != BOX_NOW]
+    again = next_call(lost)
+    assert again is not None and again.kind == BOX_NOW, again
+    assert "RS on." in again.spoken() and "Fuel to" in again.spoken()
+
+    # Left booked, he is told nothing about the stop at all.
+    kept = state(7)
+    kept.said = list(first.said)
+    silent = next_call(kept)
+    assert silent is None or silent.kind != BOX_NOW, silent
+
+
+def test_the_stop_kinds_take_the_delivery_protocol():
+    """They have to be IN FLIGHT for the release above to ever run: a call
+    that is booked on handover never gets an answer to act on."""
+    from pitcrew.race.calls import (BOX_NOW, BOX_SOON, Call, MEDIUM,
+                                    STOP_BACK, STOPS_OFF)
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    for kind in (BOX_NOW, BOX_SOON, STOPS_OFF, STOP_BACK):
+        call = Call(kind, 6, "Box this lap.", "On the plan.", MEDIUM)
+        assert RaceCoordinator._heard_matters(call), kind

@@ -1765,7 +1765,8 @@ class RaceCoordinator:
     @staticmethod
     def _heard_matters(call) -> bool:
         from pitcrew.race.calls import (
-            CLOSING, POSITION, RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT)
+            BOX_NOW, BOX_SOON, CLOSING, POSITION, RIVAL_BOXED,
+            RIVAL_COMMITTED, RIVAL_SHORT, STOP_BACK, STOPS_OFF)
 
         if call is None:
             return False
@@ -1773,8 +1774,22 @@ class RaceCoordinator:
             return call.position_called is not None
         # The race news books a band, a place or a figure as what he was
         # told - so only when he was told it (`race/news.py`).
+        #
+        # **And the stop, which is the call this most needed to cover.**
+        # `record()` books a kind when the call is MADE, so a box call the
+        # voice dropped - queued behind a 12 s line, taken past its 8 s
+        # budget, discarded as stale - was booked as said and never repeated
+        # in that form. The next crossing does say something, because the
+        # overdue ladder fires: "Box this lap. 1 lap overdue." With no
+        # compound and no fill. The half he acts on ("RS on. Fuel to 48
+        # litres.") was gone, and nothing anywhere said so.
+        #
+        # This is the Bathurst shape - eight of ten stops never said, because
+        # a fact was retired on handover - applied to the one call where
+        # being wrong costs the race.
         return call.kind in (RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT,
-                             CLOSING, *RaceCoordinator._news_kinds())
+                             CLOSING, BOX_NOW, BOX_SOON, STOPS_OFF,
+                             STOP_BACK, *RaceCoordinator._news_kinds())
 
     def _hand_out(self, call) -> None:
         """`call` is being given to the voice: in flight, or booked now."""
@@ -1843,7 +1858,28 @@ class RaceCoordinator:
             # A crossing's tagged rival fact is "said" by its tag
             # (`_worth_saying_again`); unheard, it is sayable again.
             self.state.said_tags.discard(call.tag)
+        # **An instruction nobody heard is an instruction not yet given.**
+        # `record()` appends the kind to `state.said` when the call is made,
+        # and `next_call` will not build that kind again while it is there -
+        # so a dropped box call left only the overdue ladder, which carries
+        # no compound and no fill. Taking the kind back out lets the next
+        # crossing derive the whole call again, fuel figure and all.
+        if call.kind in self._instruction_kinds():
+            try:
+                self.state.said.remove(call.kind)
+            except ValueError:
+                pass
+            log("race").warning(
+                "%s was never said - taken back off the said list so the "
+                "next crossing can make it again", call.kind)
         self._lane_use.pop(id(call), None)
+
+    @staticmethod
+    def _instruction_kinds() -> tuple:
+        """The kinds whose whole content is an instruction about the stop."""
+        from pitcrew.race.calls import BOX_NOW, BOX_SOON, STOP_BACK, STOPS_OFF
+
+        return (BOX_NOW, BOX_SOON, STOPS_OFF, STOP_BACK)
 
     def _place_waiting_on_the_voice(self, proposal) -> bool:
         from pitcrew.race.calls import POSITION
