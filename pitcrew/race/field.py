@@ -12,9 +12,15 @@ car here was read off GT7's own timing board and pit columns on screen - the
 board about every two seconds, and only the rows GT7 draws (about eight). So:
 
 * a car the board never showed has no row; nothing is guessed about it;
-* a place is the board's, and carries how old the read is;
+* **a place is the board's LAST ACCEPTED read, or the row has none.** Not the
+  accumulated `rival_positions`, which is updated once a lap and never pruned:
+  merging it under one age put a name read twenty laps ago beside a live one,
+  two cars at the same place, and a retired car still holding P7;
 * **a gap exists only for the two cars either side of us**, because only they
-  have an interval box on his screen;
+  have an interval box on his screen - and it is attached by the trend's own
+  `subject`, never by "whoever the board last put at `ours ± 1`". It expires
+  with `GAP_STALE_LAPS`, because a reading that cannot go stale is one that
+  sits on screen after the reader has stopped;
 * a fuel figure is the pit column's, and **an exit figure is often a lower
   bound** - a car drops off the visible board while it stands, and the visit
   is closed on the clock with the highest reading anyone got. Marked, never
@@ -27,16 +33,25 @@ him, ours where it has not, and the reading error that grows with the laps
 still to run - is the expression the "short to the flag" and "has to stop
 again" calls are made from. The tablet reads the same one, so the screen and
 the voice cannot disagree about a car (rule 12), and it names whose burn it
-used. **A car a few per cent light drives it out rather than stopping**
-(`SAVEABLE_FRACTION`), which is why "short" and "stops again" are different
-words here.
+used. A car inside `SAVEABLE_FRACTION` may drive it out rather than stopping -
+but that fraction is a QUARTER of the remaining fuel, so the row says what the
+voice says, *"lifts or stops again"*, and carries no total for his race. The
+screen does not get to assert what the voice refuses to (rule 13).
+
+**Every lap number on this screen is a HUD number**, through
+`calls.as_his_hud_numbers_it`. There are three domains in play - the app's
+`state.lap`, GT7's drop-corrected `lap_now()` that the pit wall files a stop
+against, and the HUD's lap-in-progress - and a first attempt here applied OUR
+`laps_missed()` to a rival's stop lap, which `lap_now()` had already
+corrected. It was right only in a race that lost no crossings.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
 from pitcrew.diagnostics import log
-from pitcrew.race.news import SAMPLE_HZ
+from pitcrew.race.calls import as_his_hud_numbers_it
+from pitcrew.race.news import BOARD_FRESH_S, SAMPLE_HZ
 from pitcrew.race.rival_calls import Rival, _snapshot, fuel_shortfall
 
 # The prediction, as the tablet words it. Each is a claim of a different
@@ -47,8 +62,20 @@ STOPS_AGAIN = "stops again"
 NO_STOP_SEEN = "no stop seen"
 CANNOT_TELL = "can't tell"
 
-# How old a board read may be before the places are marked as a moment behind.
-BOARD_FRESH_S = 6.0
+# How old a board read may be before the places are marked as a moment behind
+# is `news.BOARD_FRESH_S`, imported above and NOT a second copy of the name.
+# This file declared its own at 6.0 against the 12.0 George refuses a board
+# at, so between the two the tablet called a read stale while the voice was
+# still building "2 ahead still to stop" from it, and past 12 the voice
+# refused the board outright while the tablet kept drawing its places under
+# an amber caption. One name, one value, one question - rule 13, applied to
+# the code rather than to the words.
+
+# How many of OUR laps a gap reading may be behind before the row stops
+# carrying it. The trend is keyed by lap, not by packet, so this is the lap
+# equivalent of `news.GAP_FRESH_S` - a reading from the lap before is what a
+# crossing-time read looks like; one older than that is history.
+GAP_STALE_LAPS = 1
 
 
 @dataclass(frozen=True)
@@ -82,6 +109,8 @@ class Car:
     fuel_out_l: float | None = None
     # The exit figure is the highest reading, not the fill (see module note).
     out_is_bound: bool = False
+    # The entry figure is an UPPER bound: the wall joined the fill running.
+    in_is_bound: bool = False
     prediction: Prediction | None = None
 
 
@@ -121,8 +150,15 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
                           total_stops=stops_seen, burn_of=burn_of,
                           unconfirmed=not short.certain)
     if short.saveable:
+        # **`total_stops=None`, because the app does not know.**
+        # `short_to_the_flag` says this same shortfall as "he lifts OR he
+        # stops again" and its docstring is explicit that asserting either
+        # half is the defect it was written to fix - and the threshold here
+        # is a QUARTER of the remaining fuel, not "a few per cent". The row
+        # said "1 STOP / short, saves it" while George said he might come in,
+        # about one car, from one set of numbers.
         return Prediction(stops_seen=stops_seen, words=SHORT_SAVES,
-                          total_stops=stops_seen, burn_of=burn_of,
+                          total_stops=None, burn_of=burn_of,
                           unconfirmed=not short.certain)
     burn = rival.burn_per_lap_l or our_burn_l
     reaches = rival.stop.lap + int(rival.stop.fuel_out_l / burn)
@@ -131,11 +167,18 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
                       burn_of=burn_of, unconfirmed=not short.certain)
 
 
-def _on_his_hud(prediction: Prediction, offset: int) -> Prediction:
-    """The lap a prediction names, as his HUD will number it."""
-    if prediction.reaches_lap is None or not offset:
+def _on_his_hud(prediction: Prediction) -> Prediction:
+    """The lap a prediction names, as his HUD will number it.
+
+    `reaches_lap` is built from `rival.stop.lap`, which the pit wall files in
+    our own COMPLETED-lap count - the same domain `must_stop_by` speaks in.
+    One conversion, `calls.as_his_hud_numbers_it`, so the row and the voice
+    cannot name two different laps for one car.
+    """
+    if prediction.reaches_lap is None:
         return prediction
-    return replace(prediction, reaches_lap=prediction.reaches_lap + offset)
+    return replace(prediction,
+                   reaches_lap=as_his_hud_numbers_it(prediction.reaches_lap))
 
 
 def field_view(state, board, *, packet: int | None) -> FieldView:
@@ -152,13 +195,16 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
     # in the pit lane put Road Atlanta +1 on lap 1 and +2 by lap 20 - so a
     # tablet counting in the app's domain would disagree with the phone a foot
     # away, with the HUD, and with George. `lap_on_screen` is the one
-    # expression for it; `offset` carries it onto the stop laps, which the
-    # pit wall files against our own completed count.
+    # expression for OUR lap.
+    #
+    # **A rival's stop lap is a different conversion, and it was the wrong
+    # one.** This used to add `lap_on_screen() - lap - 1` - which is
+    # `laps_missed()` - to a figure the pit wall had ALREADY drop-corrected,
+    # so the row was a lap early in a clean race and drifted further in a
+    # dirty one. `as_his_hud_numbers_it` is the conversion, and `must_stop_by`
+    # now speaks through the same one.
     on_screen = getattr(state, "lap_on_screen", None)
     lap_now = on_screen() if callable(on_screen) else getattr(state, "lap", None)
-    offset = 0
-    if lap_now is not None and getattr(state, "lap", None) is not None:
-        offset = lap_now - state.lap - 1
     base = dict(position=ours, field_size=getattr(state, "field_size", None),
                 lap=lap_now,
                 laps_total=getattr(state, "laps_total", None))
@@ -167,10 +213,20 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
     our_burn = getattr(state, "fuel_per_lap_l", None)
     laps_total = base["laps_total"]
 
-    places: dict[str, int] = dict(getattr(state, "rival_positions", None) or {})
+    # **A place is the board's, or the row has none.** This used to start
+    # from `state.rival_positions` - which the coordinator `update()`s once a
+    # lap and NEVER prunes - and merge the board over it, so a name read at
+    # P5 twenty laps ago kept that row for the rest of the race, sitting next
+    # to a live one under one caption that said how old the BOARD was. Two
+    # cars at P5, and a P7 that retired ten laps back, all reading as current.
+    #
+    # A rival we hold no fresh place for still gets his row: the stop and the
+    # fuel are facts about a stop that happened, and they do not go stale the
+    # way a position does. He sorts to the bottom with no place shown, which
+    # is what a car whose row was never read has always done here.
+    places: dict[str, int] = {}
     age = None
     if board is not None:
-        places.update(board.places)           # the fresher read wins
         if packet is not None:
             seconds = (int(packet) - int(board.packet)) / SAMPLE_HZ
             # **A negative age is a refusal, not a zero** (rule 9). The packet
@@ -178,12 +234,24 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
             # and a read stamped against the last race clamped to "0 s ago"
             # would put the PREVIOUS race's places on screen as current.
             if seconds < 0:
+                # **And its PLACES are refused with it, which they were not.**
+                # The guard took the age and kept the data, so the page said
+                # "board not read yet" while drawing a full timing tower - of
+                # the previous race, whose order it had carried over. A page
+                # that hedges in one corner and asserts in the middle is
+                # worse than either half alone.
                 log("race").warning(
                     "the tablet's board read is stamped %.0f s ahead of the "
-                    "packet count - refused rather than shown as fresh",
-                    -seconds)
+                    "packet count - refused, places and all, rather than "
+                    "shown as fresh", -seconds)
             else:
                 age = seconds
+                places.update(board.places)
+        else:
+            # No packet count to age it against: the read cannot be shown as
+            # fresh, so it is not shown as a place at all.
+            log("race").info("the tablet has a board read with no packet "
+                             "count to age it - places refused")
     standing = {str(stop.driver).lower()
                 for stop in (lane.in_the_lane() if lane is not None else [])}
 
@@ -203,16 +271,25 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
         rows.append(Car(
             name=name, place=place,
             in_lane=str(name).lower() in standing,
-            last_stop_lap=(None if getattr(stop, "lap", None) is None
-                           else stop.lap + offset),
+            last_stop_lap=as_his_hud_numbers_it(getattr(stop, "lap", None)),
             fuel_in_l=getattr(stop, "fuel_in_l", None),
             fuel_out_l=getattr(stop, "fuel_out_l", None),
             out_is_bound=bool(getattr(rival, "exit_is_a_bound", False)),
+            in_is_bound=bool(getattr(rival, "entry_is_a_bound", False)),
             prediction=_on_his_hud(
                 predict(rival, stops_seen=seen, our_burn_l=our_burn,
-                        laps_total=laps_total), offset)))
+                        laps_total=laps_total))))
     if ours:
-        gaps = {}
+        # **A gap belongs to the car it was read against, by NAME.**
+        # This used to pin it to whoever the board last put at `ours ± 1`,
+        # discarding `GapTrend.subject` - which exists because the trend was
+        # on file reporting confident numbers about a car that was no longer
+        # there, and which every other reader carries (`_gap_view` prints the
+        # name with the figure; `closing_call` tags per driver). Pass a car
+        # into the last corner and the board is a few seconds behind: the row
+        # for the car you just passed took the gap to the car you are now
+        # chasing.
+        by_name: dict[str, float] = {}
         for side, step in (("ahead", -1), ("behind", 1)):
             # **Snapshotted, because the wall's thread rebinds it.**
             # `GapTrend.latest` loads `seen` twice and `_rederive` rebinds it
@@ -221,10 +298,30 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
             # was the only reader that did not.
             trend = _snapshot(getattr(state, f"gap_{side}", None))
             seconds = trend.latest() if trend is not None else None
-            if seconds is not None:
-                gaps[int(ours) + step] = seconds
-        rows = [row if row.place not in gaps
-                else Car(**{**row.__dict__, "gap_s": gaps[row.place]})
+            if seconds is None:
+                continue
+            who = getattr(trend, "subject", None)
+            if who is None:
+                who = getattr(state, f"gap_{side}_name", None)
+            # **No name, no gap.** The figure is real but the app cannot say
+            # whose it is, and a number against the wrong row is worse than
+            # no number - it is the shape of the mistake, not its size.
+            if who is None:
+                log("race").info(
+                    "the tablet has a gap %s with no subject - not drawn "
+                    "against a row", side)
+                continue
+            # **And it goes stale like every other reading.** `latest()` is
+            # keyed by lap and never expires, so a board reader that stops
+            # left a bare "1.4" on screen for the rest of the race.
+            read_on = max(trend.seen) if getattr(trend, "seen", None) else None
+            if (read_on is not None and lap_now is not None
+                    and lap_now - read_on > GAP_STALE_LAPS):
+                continue
+            by_name[str(who).lower()] = seconds
+        rows = [row if str(row.name).lower() not in by_name
+                else Car(**{**row.__dict__,
+                            "gap_s": by_name[str(row.name).lower()]})
                 for row in rows]
         rows.append(Car(name=None, place=int(ours), us=True))
     # By place; a car with no place (his stop was read, his row never was)

@@ -31,11 +31,25 @@ def test_a_car_that_left_with_enough_reaches_the_flag_on_one_stop():
     assert got.unconfirmed is False
 
 
-def test_a_few_per_cent_light_is_short_and_saves_not_a_second_stop():
-    """He lifts rather than stopping: `SAVEABLE_FRACTION`."""
-    got = predict(_rival("B", 10, 85.0), stops_seen=1, our_burn_l=5.0,
-                  laps_total=30)
-    assert (got.words, got.total_stops, got.burn_of) == (SHORT_SAVES, 1, "ours")
+def test_a_saveable_shortfall_counts_no_total_and_says_what_george_says():
+    """**The screen may not assert what the voice refuses to.**
+
+    `short_to_the_flag` says this same shortfall as "he lifts or he stops
+    again" and says in its own docstring that asserting either half is the
+    defect it exists to fix - and `SAVEABLE_FRACTION` is a QUARTER of the
+    remaining fuel, not "a few per cent". The row used to read "1 STOP /
+    short, saves it" off the same numbers: a total for the rest of his race,
+    from an assumption about how he would drive it.
+    """
+    from pitcrew.race.rival_calls import short_to_the_flag
+
+    rival = _rival("B", 10, 85.0)
+    got = predict(rival, stops_seen=1, our_burn_l=5.0, laps_total=30)
+    assert (got.words, got.total_stops, got.burn_of) == (SHORT_SAVES, None,
+                                                         "ours")
+    spoken = short_to_the_flag(rival, 5.0, lap=12, laps_total=30)
+    assert spoken is not None, "the voice must have something to say here"
+    assert "he lifts or he stops again" in spoken.spoken(), spoken.spoken()
 
 
 def test_a_car_well_short_stops_again_and_says_by_when():
@@ -104,16 +118,57 @@ def test_only_the_two_neighbours_carry_a_gap():
 
 
 def test_a_row_carries_the_stop_the_fuel_and_the_same_prediction_george_uses():
+    """**And it asks George**, which the test of this name never did.
+
+    It asserted the row against constants, so the row and the voice could -
+    and did - name two different laps for one car: the tablet added
+    `laps_missed()` to a stop lap the pit wall had already drop-corrected,
+    and `must_stop_by` spoke a completed-lap count where the HUD numbers the
+    lap in progress. Three domains, one car. Rule 13 is about the words; this
+    is the same failure in figures, and only a test that runs both catches it.
+    """
+    from pitcrew.race.rival_calls import must_stop_by
+
     board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
                       visible=frozenset({3, 5}), windowed=False)
-    rows = {row.name: row for row in field_view(_state(), board, packet=1).rows}
+    state = _state()
+    rows = {row.name: row for row in field_view(state, board, packet=1).rows}
     punished = rows["PUNISHED"]
+    # Filed against our completed count; his HUD read one more than that.
     assert (punished.last_stop_lap, punished.fuel_in_l, punished.fuel_out_l) == (
-        12, 8.0, 50.0)
+        13, 8.0, 50.0)
     assert punished.prediction.words == STOPS_AGAIN
     assert punished.prediction.total_stops == 2
+
+    spoken = must_stop_by(state.rivals["PUNISHED"], state.fuel_per_lap_l,
+                          lap=state.lap, laps_total=state.laps_total)
+    assert spoken is not None
+    assert f"lap {punished.prediction.reaches_lap}," in spoken.spoken(), (
+        spoken.spoken(), punished.prediction.reaches_lap)
+
     graebs = rows["K.Graebs"]
     assert graebs.out_is_bound and graebs.prediction.words == CANNOT_TELL
+
+
+def test_a_missed_crossing_does_not_move_a_rivals_stop_lap():
+    """Our own drift is ours. `lap_on_screen` corrects OUR number; a rival's
+    stop lap is already in the drop-corrected domain, so applying our offset
+    to it moved his stop a lap per lap we lost."""
+    board = BoardRead(packet=1, places={"PUNISHED": 3}, visible=frozenset({3}),
+                      windowed=False)
+    clean = _state()
+    drifted = _state()
+    drifted.screen_lap = drifted.lap + 3        # GT7 two ahead of our count
+
+    def punished(state):
+        rows = {r.name: r for r in field_view(state, board, packet=1).rows}
+        return rows["PUNISHED"]
+
+    assert punished(clean).last_stop_lap == punished(drifted).last_stop_lap
+    assert (punished(clean).prediction.reaches_lap
+            == punished(drifted).prediction.reaches_lap)
+    # ...while OUR header still follows the HUD.
+    assert field_view(drifted, board, packet=1).lap == drifted.lap + 3
 
 
 def test_no_race_says_so():
@@ -449,11 +504,12 @@ def test_the_tablet_words_what_each_figure_is_worth():
     rows = {row["name"]: row for row in got["rows"]}
     assert rows["PUNISHED"]["fuel"] == "8 → 50"
     assert (rows["PUNISHED"]["prediction"], rows["PUNISHED"]["detail"]) == (
-        "2 STOPS", "in by L22 · our burn")
+        "2 STOPS", "in by L23 · our burn")
     assert rows["PUNISHED"]["tone"] == "stops" and rows["PUNISHED"]["gap"] == "1.4"
     assert rows["K.Graebs"]["fuel"] == "8 → ≥30"
     assert rows["K.Graebs"]["prediction"] == "CAN'T TELL"
-    assert rows["Close"]["prediction"] == "1 STOP?"
+    assert rows["Close"]["prediction"] == "1 STOP SO FAR"
+    assert "lifts or stops again" in rows["Close"]["detail"]
     assert rows["YOU"]["us"] is True and rows["YOU"]["place"] == "P4"
     assert got["board"] == "board read 20 s ago" and got["board_stale"] is True
 
@@ -470,3 +526,116 @@ def test_a_long_field_keeps_the_rows_nearest_him_and_says_how_many_it_left():
     assert len(shown) == MAX_ROWS and "P10" in shown
     assert shown == sorted(shown, key=lambda p: int(p[1:]))
     assert got["left_off"] == 20 - MAX_ROWS
+
+
+def test_a_refused_board_read_takes_its_places_with_it():
+    """The guard refused the AGE and kept the DATA.
+
+    So the page said "board not read yet" in one corner and drew a full
+    timing tower in the middle - of the previous race, whose order the wall
+    had carried across the arm. The comment on the guard names that exact
+    hazard; only half of it was implemented.
+    """
+    from pitcrew.ui.tablet import compose
+
+    state = _state()
+    board = BoardRead(packet=5_000, places={"PUNISHED": 3, "K.Graebs": 5},
+                      visible=frozenset({3, 5}), windowed=False)
+    # The packet counter reset at the arm: the read is stamped in the future.
+    view = field_view(state, board, packet=10)
+    assert view.board_age_s is None
+    assert not [row for row in view.rows if not row.us and row.place is not None]
+    got = compose(view)
+    assert not [row for row in got["rows"] if not row["us"] and row["place"]]
+
+
+def test_a_place_nobody_read_this_time_is_not_drawn_as_one():
+    """`rival_positions` is `update()`d once a lap and never pruned, so a name
+    read at P5 twenty laps ago kept that row for the rest of the race - beside
+    a live one, under one caption saying how old the BOARD was. Two cars at
+    P5, and a retired car still holding P7."""
+    state = _state()
+    state.rival_positions.update({"Ghost": 5, "Faded": 7})
+    board = BoardRead(packet=1, places={"PUNISHED": 3, "Beeni": 4},
+                      visible=frozenset({3, 4}), windowed=False)
+    rows = {row.name: row for row in field_view(state, board, packet=1).rows}
+    assert rows["PUNISHED"].place == 3
+    # Ghost and Faded keep their rows - the stop and fuel on them are facts -
+    # but neither claims a place the board did not just read.
+    for name in ("Ghost", "Faded"):
+        if name in rows:
+            assert rows[name].place is None, name
+    places = [row.place for row in rows.values() if row.place is not None]
+    assert len(places) == len(set(places)), f"two rows at one place: {places}"
+
+
+def test_the_entry_figure_is_marked_where_the_wall_joined_the_fill():
+    """`boxed_call` refuses to SAY the litres in that case; the screen drew
+    them as read. A car that dropped in on 4 L and took 76 read "42 -> 80"."""
+    from pitcrew.race.rival_calls import Rival
+    from pitcrew.race.rivals import Stop
+    from pitcrew.ui.tablet import _fuel
+
+    partial = Rival(name="P", stop=Stop(lap=9, fuel_in_l=42.0, fuel_out_l=80.0),
+                    pitted=True, entry_is_a_bound=True)
+    state = _state()
+    state.rivals["P"] = partial
+    board = BoardRead(packet=1, places={"P": 6, "Beeni": 4},
+                      visible=frozenset({4, 6}), windowed=False)
+    row = {r.name: r for r in field_view(state, board, packet=1).rows}["P"]
+    assert row.in_is_bound is True
+    assert _fuel(row) == "≤42 → 80"
+
+
+def test_the_tablet_and_george_call_a_board_stale_at_the_same_second():
+    """One name, one value. `field` declared its own `BOARD_FRESH_S` at 6.0
+    against the 12.0 George refuses a board at, so between the two the screen
+    said stale while the voice still built a picture from it."""
+    from pitcrew.race import field as field_module
+    from pitcrew.race import news as news_module
+
+    assert field_module.BOARD_FRESH_S is news_module.BOARD_FRESH_S
+
+
+def test_a_gap_goes_to_the_car_it_was_read_against_not_to_a_place():
+    """`GapTrend` carries its `subject` because it is on file reporting
+    confident numbers about a car that was no longer there. This reader threw
+    it away and pinned the figure to whoever the board last put at `ours ± 1`,
+    so a pass into the last corner gave the passed car's row the gap to the
+    car now being chased."""
+    state = _state()
+    # The board still has the old order; the trends know who they watched.
+    state.gap_ahead.subject = "K.Graebs"
+    state.gap_behind.subject = "PUNISHED"
+    board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
+                      visible=frozenset({3, 5}), windowed=False)
+    rows = {row.name: row for row in field_view(state, board, packet=1).rows}
+    assert rows["K.Graebs"].gap_s == 1.4      # the ahead trend's own subject
+    assert rows["PUNISHED"].gap_s == 0.8      # the behind trend's
+    assert rows["PUNISHED"].place == 3        # the board's place is untouched
+
+
+def test_a_gap_with_no_subject_is_not_drawn_against_anyone():
+    state = _state()
+    state.gap_ahead.subject = None
+    state.gap_behind.subject = None
+    state.gap_ahead_name = state.gap_behind_name = None
+    board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
+                      visible=frozenset({3, 5}), windowed=False)
+    rows = field_view(state, board, packet=1).rows
+    assert all(row.gap_s is None for row in rows)
+
+
+def test_a_gap_from_laps_ago_is_not_still_on_the_screen():
+    """`latest()` is keyed by lap and never expires, so a reader that stopped
+    left a bare "1.4" up for the rest of the race. `news` bounds a spoken gap
+    at `GAP_FRESH_S`; the screen bounded nothing."""
+    state = _state()
+    state.gap_ahead.subject = "PUNISHED"
+    board = BoardRead(packet=1, places={"PUNISHED": 3}, visible=frozenset({3}),
+                      windowed=False)
+    fresh = {r.name: r for r in field_view(state, board, packet=1).rows}
+    assert fresh["PUNISHED"].gap_s == 1.4
+    state.lap += 5                              # five laps with no new read
+    stale = {r.name: r for r in field_view(state, board, packet=1).rows}
+    assert stale["PUNISHED"].gap_s is None

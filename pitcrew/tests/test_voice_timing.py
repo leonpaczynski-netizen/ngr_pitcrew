@@ -320,3 +320,53 @@ def test_a_pack_line_is_timed_off_its_clips(tmp_path):
     assert speaker.duration_s(DATA_LINE) == pytest.approx(2.5)
     assert speaker.duration_s("Not in the pack at all.") == pytest.approx(
         len("Not in the pack at all.") * voice_module.LIVE_SECONDS_PER_CHAR)
+
+
+def test_a_brief_is_never_truncated_by_the_queue_that_holds_it():
+    """**Measured 18 Sep 2026: 5 of 8 brief lines spoken, the first 3 lost.**
+
+    Every line of the brief is the same class, and the eviction rule is
+    lowest class then OLDEST - so each line after the fifth threw away the
+    front of the brief. What went missing was the shape of his race ("20
+    laps, 2 stops, RS onto RH.") and the gauge caveat, while the line that
+    DISCLAIMS the caveat - "If I'm quiet about tyres it means I can't see
+    them, not that they're fine" - survived. He would have gone to the green
+    having heard a disclaimer for a claim nobody made.
+
+    A brief is not a backlog. `MAX_QUEUED` exists so stale race calls cannot
+    pile up behind the driver; these are one thing said in parts.
+    """
+    from pitcrew.engineer.voice import MAX_QUEUED, _LineQueue
+
+    lines = [f"brief line {n}." for n in range(1, 9)]
+    assert len(lines) > MAX_QUEUED, "the test must overfill the queue"
+
+    loose = _LineQueue()
+    for text in lines:
+        loose.offer(loose.line(text, None))
+    assert [o.text for o in loose.snapshot()] == lines[-MAX_QUEUED:], (
+        "the plain path still drops - that is what `keep` is for")
+
+    held = _LineQueue()
+    for text in lines:
+        held.offer(held.line(text, None, keep=True))
+    assert [o.text for o in held.snapshot()] == lines
+
+
+def test_a_kept_line_does_not_stop_a_race_call_from_getting_in():
+    """`keep` must not turn the brief into a wall an instruction cannot pass.
+
+    It only removes the line from the VICTIM pool; ranking is untouched, so a
+    box call still sorts ahead of every brief line waiting behind it.
+    """
+    from pitcrew.race.calls import BOX_NOW
+    from pitcrew.engineer.voice import _LineQueue, class_of
+
+    queue = _LineQueue()
+    for n in range(8):
+        queue.offer(queue.line(f"brief {n}.", None, keep=True))
+    queue.offer(queue.line("Box this lap.", BOX_NOW))
+    order = [o.text for o in queue.snapshot()]
+    assert order[0] == "Box this lap.", order[:3]
+    assert len([o for o in queue.snapshot() if o.keep]) == 8
+    assert class_of(BOX_NOW) < class_of(None)

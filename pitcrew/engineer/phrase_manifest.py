@@ -900,10 +900,15 @@ def replan_lines() -> tuple[str, ...]:
         blind_note,
     )
 
+    # The rig's own two sentences. Held until the flag, so the pause they
+    # would take is cheap - but they are two clips, and unreachable is not a
+    # state any speech in this app should be left in.
+    from pitcrew.rig.supervisor import HAPTICS_BACK, HAPTICS_MUTED
+
     # **The "I cannot see it" message**, whose whole purpose is to stop
     # silence being read as "tyres are fine". Its sibling `lost_the_gauge()`
     # has been declared since the openers existed; this one never was.
-    lines = [REPLANNING_OFF,
+    lines = [REPLANNING_OFF, HAPTICS_BACK, HAPTICS_MUTED,
              blind_note(GAUGE_NOT_IN_FRAME), blind_note(GAUGE_UNREADABLE)]
     for stops in (None, 0, *range(1, MAX_STOPS + 1)):
         said = Replan(verdict=RECOMMENDED, reason="", stops=stops).call()

@@ -2738,8 +2738,13 @@ class PitCrewController(QObject):
         # assigned until later in the arming sequence, so reading it here got
         # the *previous* race's answer - and a silent run spoke.
         if speaks:
-            for line in lines:
-                self.voice.say(line)
+            # **`say_all`, because a brief is one thing said in parts.**
+            # Offered line by line it was silently truncated: eight lines,
+            # all the same class, into a queue of five that evicts the
+            # OLDEST - so he went to the green never having heard "20 laps,
+            # 2 stops, RS onto RH." or the gauge caveat, while the sentence
+            # that disclaims the caveat survived.
+            self.voice.say_all(lines)
 
     def _announce_quali_fuel(self, event: dict) -> None:
         """Say the qualifying load, or say why there is not one.
@@ -3139,9 +3144,10 @@ class PitCrewController(QObject):
         lines = spoken_lines(debrief)
         if not lines:
             return
-        for line in lines:
-            if self._engineer_speaks:
-                self.voice.say(line)
+        # The debrief is a sequence too, and the same eviction took the front
+        # of it - post-session, so cheaper, but no more correct.
+        if self._engineer_speaks:
+            self.voice.say_all(lines)
         self.practice.set_status(" ".join(lines))
         log("session").info("debrief: %s", " | ".join(lines))
 

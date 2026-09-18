@@ -816,6 +816,26 @@ class Call:
         }
 
 
+def as_his_hud_numbers_it(completed_lap: int | None) -> int | None:
+    """A lap counted as COMPLETED, numbered as GT7 numbers it on screen.
+
+    **A third lap domain, and it caught both a screen and a call.** The
+    pit wall files a rival's stop against `lap_of` - our own `lap_now()`,
+    the drop-corrected count of laps BEHIND us - and `must_stop_by` does
+    its arithmetic in that same domain. The HUD numbers the lap in
+    PROGRESS, which is one more. So a stop taken while his HUD read 13 was
+    filed as 12; the tablet drew "L12" and George said "that reaches lap
+    22" about a lap the HUD would call 23.
+
+    The tablet's first attempt added `lap_on_screen() - lap - 1` to it,
+    which is `laps_missed()` - a correction `lap_now()` has ALREADY made,
+    so it was right only in the race where nothing was missed, and drifted
+    further the more the app lost. This is the one expression, used by the
+    screen and by the call, because rule 13 is what the two got wrong.
+    """
+    return None if completed_lap is None else completed_lap + 1
+
+
 @dataclass
 class RaceState:
     """What is true right now, as far as the app can tell."""

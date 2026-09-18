@@ -468,15 +468,20 @@ def spoken_form(text: str) -> str:
 class _Line:
     """One thing to say, and what the queue needs to know about it."""
 
-    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "on_done")
+    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "on_done", "keep")
 
     def __init__(self, text: str, kind: str | None, queued_at: float,
-                 seq: int, on_done=None) -> None:
+                 seq: int, on_done=None, keep: bool = False) -> None:
         self.text = text
         self.kind = kind
         self.cls = class_of(kind)
         self.queued_at = queued_at
         self.seq = seq
+        # **One thing the engineer says, cut up only so the pack can play it.**
+        # A sentence with `keep` is never the victim when the queue is full:
+        # it is not competing with its neighbours, it IS its neighbours. See
+        # `Voice.say_all`.
+        self.keep = keep
         # `on_done(played)`, once, when the line is finished with - see
         # `Voice.say`.
         self.on_done = on_done
@@ -507,9 +512,10 @@ class _LineQueue:
             return len(self._lines)
 
     def line(self, text: str, kind: str | None = None,
-             queued_at: float | None = None, on_done=None) -> _Line:
+             queued_at: float | None = None, on_done=None,
+             keep: bool = False) -> _Line:
         return _Line(text, kind, _now() if queued_at is None else queued_at,
-                     next(self._seq), on_done)
+                     next(self._seq), on_done, keep)
 
     def take(self, now: float) -> tuple[_Line | None,
                                         list[tuple[_Line, float]]]:
@@ -554,11 +560,28 @@ class _LineQueue:
                             if _coalesce_key(o.kind, o.text) == key]:
                     self._lines.remove(old)
                     dropped.append((old, f"replaced by a newer {key} line"))
-            while len(self._lines) + 1 > MAX_QUEUED:
+            # **A `keep` line is outside the cap entirely - neither a victim
+            # nor a reason to evict.** The pre-race brief is eight lines
+            # offered in a tight loop, every one of them the same class, so
+            # the rule below picked the OLDEST each time and threw away the
+            # front of it: measured, 5 of 8 spoken, and the three lost were
+            # the race shape ("20 laps, 2 stops, RS onto RH.") and the gauge
+            # caveat, while the sentence that DISCLAIMS that caveat survived.
+            #
+            # Exempting them from being a VICTIM was not enough and was worse:
+            # eight kept lines filled the queue, so the next box call became
+            # the only candidate and was dropped as "the queue is full of
+            # lines that outrank it". A brief must not be able to silence an
+            # instruction. So the depth is counted over the lines the cap is
+            # actually for.
+            def _capped(extra=0):
+                return len([o for o in self._lines if not o.keep]) + extra
+
+            while not line.keep and _capped(1) > MAX_QUEUED:
                 # The lowest class first, and inside it the oldest - the
                 # newer of two equal calls is the one still true.
-                victim = max([*self._lines, line],
-                             key=lambda o: (o.cls, -o.seq))
+                candidates = [o for o in [*self._lines, line] if not o.keep]
+                victim = max(candidates, key=lambda o: (o.cls, -o.seq))
                 if victim is line:
                     dropped.append((line, "the queue is full of lines that "
                                           "outrank it"))
@@ -717,8 +740,35 @@ class Voice:
         return (f"The engineer has said nothing for {self._failures} "
                 f"{calls}: {self.last_error}")
 
+    def say_all(self, lines, kind: str | None = None) -> None:
+        """Say these, in order, all of them - a brief, or a debrief.
+
+        **The queue is built to drop, and this is the one caller it must not
+        drop for.** `MAX_QUEUED` exists so a backlog of stale race calls
+        cannot pile up behind the driver; a brief is not a backlog. It is one
+        thing the engineer says on the grid, cut into sentences only so the
+        pack can play it, and it is said when nothing else is competing.
+
+        Offering it line by line through `say` lost the front of it silently:
+        same class throughout, so the eviction rule - lowest class, then
+        oldest - took line 1 to make room for line 6.
+        """
+        for line in lines:
+            if not line:
+                continue
+            try:
+                self.say(line, kind, keep=True)
+            except TypeError:
+                # **A test double is standing in for `say`.** Several suites
+                # replace it with a narrower callable (`spoken.append`), and a
+                # brief that raised there would fail a test about the debrief
+                # rather than about the queue. The lines are still all said;
+                # the no-drop guarantee is the real queue's, and is tested
+                # against the real queue.
+                self.say(line)
+
     def say(self, text: str, kind: str | None = None,
-            on_done=None) -> None:
+            on_done=None, keep: bool = False) -> None:
         """Queue `text`. `kind` is the call kind (`race.calls`, `race.colour`,
         `race.refuel`) and decides its class - see the table above `_Line`.
 
@@ -749,7 +799,7 @@ class Voice:
                 _finish(self._queue.line(text, kind, on_done=on_done), False,
                         "the voice is off")
             return
-        line = self._queue.line(text, kind, on_done=on_done)
+        line = self._queue.line(text, kind, on_done=on_done, keep=keep)
         for dropped, why in self._queue.offer(line):
             log("voice").info("not saying %r (%s, %s): %s", dropped.text,
                               dropped.kind or "no kind",

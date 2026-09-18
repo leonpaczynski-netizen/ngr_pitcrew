@@ -116,7 +116,10 @@ def test_without_our_own_stop_it_still_reports_his_standing_time():
 def test_a_forced_second_stop_is_said():
     call = must_stop_by(_rival(left_on=41.0), SPA_BURN, lap=11, laps_total=20)
     assert call is not None
-    assert "lap 16" in call.reason and "stop again" in call.reason
+    # **His HUD's number.** `stop.lap` is filed against `lap_now()` -
+    # the laps BEHIND him - and the HUD numbers the lap in progress, so
+    # the spoken lap is one more. The tablet now says the same one.
+    assert "lap 17" in call.reason and "stop again" in call.reason
 
 
 def test_a_limit_beyond_the_flag_binds_nothing_so_is_not_said():
@@ -208,16 +211,17 @@ def test_a_rivals_own_burn_is_used_where_the_book_has_watched_him():
     gated at eight, so a call could fire on nothing but the mismatch."""
     thirsty = Rival(name="Rocky", pitted=True, burn_per_lap_l=10.0,
                     stop=Stop(lap=11, fuel_in_l=12.0, fuel_out_l=41.0))
-    # 41 L at HIS 10 L a lap reaches lap 15, not the lap 16 ours would give.
+    # 41 L at HIS 10 L a lap reaches lap 15 in the completed count, which
+    # his HUD numbers 16 - not the 17 ours would give.
     call = must_stop_by(thirsty, SPA_BURN, lap=11, laps_total=20)
-    assert call is not None and "lap 15" in call.reason
+    assert call is not None and "lap 16" in call.reason
 
 
 def test_without_his_own_burn_ours_stands_in(): 
     borrowed = Rival(name="Rocky", pitted=True,
                      stop=Stop(lap=11, fuel_in_l=12.0, fuel_out_l=41.0))
     call = must_stop_by(borrowed, SPA_BURN, lap=11, laps_total=20)
-    assert call is not None and "lap 16" in call.reason
+    assert call is not None and "lap 17" in call.reason
 
 
 # --- the rejoin, which decides a place rather than seconds ------------------

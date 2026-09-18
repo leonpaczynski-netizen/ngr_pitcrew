@@ -1193,6 +1193,7 @@ class RaceCoordinator:
             name=name, stop=seen.stop, pitted=True,
             burn_per_lap_l=burn_per_lap_l, burn_stops=burn_stops,
             exit_is_a_bound=getattr(seen, "exit_is_a_bound", False),
+            entry_is_a_bound=bool(getattr(seen, "partial", False)),
             position=self.state.rival_positions.get(name))
         log("race").info(
             "rival stop filed: %s out on %s L on lap %s, burn %s L/lap from "

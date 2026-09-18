@@ -56,6 +56,7 @@ from dataclasses import dataclass, replace
 
 from pitcrew.race.calls import (
     CLOSING,
+    as_his_hud_numbers_it,
     HIGH,
     LOW,
     MEDIUM,
@@ -192,6 +193,15 @@ class Rival:
     # no shortfall at all reads as short. Every call that prices a shortfall
     # refuses on it.
     exit_is_a_bound: bool = False
+    # **And his ENTRY fuel can be a bound too**, the other way: True where the
+    # wall joined the fill already running, so the first reading is an UPPER
+    # bound on what he arrived with. `boxed_call` has always refused to speak
+    # the litres in that case - "an entry figure nobody saw him arrive with is
+    # a bound, and a bound is not said as a reading (rule 5)" - but the flag
+    # stopped at the wall and never reached a `Rival`, so the tablet printed
+    # it as read: a car that dropped in on 4 L and took 76 drew "42 -> 80",
+    # which reads as a splash and a second stop coming.
+    entry_is_a_bound: bool = False
     # How many stops are behind his burn figure. CLAUDE.md rule 4: one stop is
     # one stint's worth of evidence about a driver who may have been saving.
     burn_stops: int = 0
@@ -637,7 +647,13 @@ def must_stop_by(rival: Rival, burn_per_lap_l: float | None,
     who = rival.name or "He"
     return Call(RIVAL_COMMITTED, lap,
                 f"{who} left on {out:.0f} litres.",
-                f"That reaches lap {last}, so he has to stop again.", MEDIUM,
+                # **The number his HUD shows**, not the completed count this
+                # arithmetic runs in. `stop.lap` is filed against `lap_now()`,
+                # so `last` is a count of laps BEHIND - and he was told "lap
+                # 22" about a lap GT7 would call 23, while the tablet drew a
+                # third number for the same car. One conversion, rule 13.
+                f"That reaches lap {as_his_hud_numbers_it(last)}, so he has "
+                f"to stop again.", MEDIUM,
                 # **Severity, so several forced stops rank by urgency.** With
                 # none, they all tied at zero and the stable sort picked
                 # whichever car's columns the sampler happened to catch first -

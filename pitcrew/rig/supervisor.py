@@ -60,6 +60,15 @@ from pitcrew.rig import transducer
 from pitcrew.rig.haptics import HapticsEngine, TransducerWatchdog
 from pitcrew.rig.wind import WindSim
 
+# **What the rig says out loud, named so `phrase_manifest` can render it.**
+# A sentence the manifest cannot obtain is a sentence synthesised live; these
+# two are held until the flag by `_deliver_rig_notice`, so the pause is cheap
+# - but cheap is not a reason to leave them unreachable.
+HAPTICS_MUTED = ("Haptics muted. The sound card is running them at the wrong "
+                 "speed, so every cue would land in the wrong place. I have "
+                 "stopped sending rather than give you a wrong one.")
+HAPTICS_BACK = "Haptics are back."
+
 
 class RigSupervisor:
     """The rig's lifecycle and its health, for one run of the app."""
@@ -582,11 +591,7 @@ class RigSupervisor:
                     "open so the frame clock can still be watched.",
                     reason, 38.0, 38.0 * ratio,
                     transducer.BAND_LOW_HZ, transducer.BAND_HIGH_HZ)
-                self.voice.say(
-                    "Haptics muted. The sound card is running them at the "
-                    "wrong speed, so every cue would land in the wrong "
-                    "place. I have stopped sending rather than give you a "
-                    "wrong one.")
+                self.voice.say(HAPTICS_MUTED)
             return
         if haptics.allow():
             # **The one place the ladder can be told it is over, because it
@@ -605,7 +610,7 @@ class RigSupervisor:
             log("haptics").warning(
                 "the transducer's frame clock is back at the rate the mix is "
                 "generated for, so it is being sent to again.")
-            self.voice.say("Haptics are back.")
+            self.voice.say(HAPTICS_BACK)
 
     def _deliver_rig_notice(self, watchdog) -> None:
         """The one operational instruction, where the driver will get it.

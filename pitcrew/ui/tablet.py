@@ -51,8 +51,11 @@ def prediction_words(prediction) -> tuple[str, str, str]:
         return (f"{_stops(prediction.total_stops)}{maybe}",
                 f"reaches the flag{burn}", "reaches")
     if prediction.words == SHORT_SAVES:
-        return (f"{_stops(prediction.total_stops)}{maybe}",
-                f"short, saves it{burn}", "reaches")
+        # The voice's own hedge, not a stop count: "he lifts or he stops
+        # again" is what the app can stand behind, and `total_stops` is None
+        # here for that reason. "LIFTS?" reads as the question it is.
+        return (f"{_stops(prediction.stops_seen)} SO FAR",
+                f"short - lifts or stops again{burn}", "plain")
     if prediction.words == NO_STOP_SEEN:
         # About the instrument, not the car: the board may simply not have
         # been read while he was in the lane.
@@ -64,7 +67,12 @@ def _fuel(car) -> str:
     """`8 → 50`, `8 → ≥30` for a bound, or what was read of it."""
     if car.fuel_in_l is None and car.fuel_out_l is None:
         return ""
-    fuel_in = "?" if car.fuel_in_l is None else f"{car.fuel_in_l:.0f}"
+    # `<=` on the entry for the same reason `>=` marks the exit: a figure
+    # read after the fill started bounds what he arrived with, it does not
+    # measure it (rule 5, and `boxed_call` refuses to SAY it at all).
+    inward = "≤" if getattr(car, "in_is_bound", False) else ""
+    fuel_in = ("?" if car.fuel_in_l is None
+               else f"{inward}{car.fuel_in_l:.0f}")
     if car.fuel_out_l is None:
         return f"{fuel_in} → ?"
     bound = "≥" if car.out_is_bound else ""
