@@ -175,6 +175,111 @@ def test_the_board_hands_its_gaps_over_only_while_the_tablet_reads():
     assert body["controls"]["racing"] is False
 
 
+def test_between_sessions_both_pages_are_told_there_is_no_session():
+    """The board timer stops between sessions, so this is the last thing
+    either page hears. Told only the phone, the tablet's numbers simply
+    stopped - and a page whose numbers stop says the PC has died."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.ui.strip import StripComposer
+
+    class Server:
+        def __init__(self):
+            self.published = []
+
+        def publish(self, body, page="strip"):
+            self.published.append((page, body))
+
+    ctl = PitCrewController.__new__(PitCrewController)
+    ctl.race = None
+    ctl.strip = Server()
+    ctl._strip_composer = StripComposer()
+    ctl._strip_idle()
+    pages = {page: body for page, body in ctl.strip.published}
+    assert pages["strip"]["idle"] is True
+    assert pages["tablet"]["idle"] is True
+    # The buttons still read the app back with no session running: George
+    # on/off is meant to work there.
+    assert pages["tablet"]["controls"]["racing"] is False
+
+
+def test_the_cover_hides_the_numbers_and_never_the_buttons():
+    """Over the whole screen it swallowed every press - including George
+    on/off, which is for exactly the moments the cover is up."""
+    from pitcrew.ui.strip_server import PAGE
+
+    page = PAGE.with_name("tablet.html").read_text(encoding="utf-8")
+    assert "#cover { position: fixed; inset: 0 19vw 0 0;" in page
+    assert "#buttons { position: relative; z-index: 6;" in page
+    # And installed on the tablet it opens the tablet's page, not the phone's.
+    assert 'href="/tablet.webmanifest"' in page
+    assert 'rel="apple-touch-icon"' in page
+
+
+def test_a_tablet_that_is_being_sent_nothing_does_not_take_the_gaps():
+    """`live` means a page polled, not that it is showing anything. Returning
+    it after a failed build surrendered the ultrawide's gaps to a page reading
+    NO DATA - and turned that screen to history at the same time."""
+    from pitcrew.controller import PitCrewController
+
+    class Server:
+        def __init__(self):
+            self.published = []
+
+        def live(self, page="strip"):
+            return True
+
+        def last_client_of(self, page="strip"):
+            return "10.0.0.9"
+
+        def publish(self, body, page="strip"):
+            self.published.append((page, body))
+
+    class Broken:
+        running = True
+        state = C.RaceState()
+
+        def field_view(self):
+            raise ValueError("a data race on the board read")
+
+    ctl = PitCrewController.__new__(PitCrewController)
+    ctl.race = Broken()
+    server = Server()
+    assert ctl._publish_tablet(server) is False
+    assert server.published == []
+
+
+def test_the_press_route_refuses_a_body_that_is_not_a_press_and_cools_off():
+    from pitcrew.ui.strip_server import PRESS_WRONG_LIMIT
+
+    server, port, presses = _press_server()
+    try:
+        import urllib.error
+        import urllib.request
+
+        def post(body, kind="application/json"):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/tablet/press",
+                data=body.encode("utf-8"), method="POST",
+                headers={"Content-Type": kind})
+            try:
+                with urllib.request.urlopen(request, timeout=5) as reply:
+                    return reply.status
+            except urllib.error.HTTPError as refused:
+                return refused.code
+
+        # A form post is a CORS simple request: any page on his network could
+        # send one without a preflight. A press says it is JSON.
+        assert post('{"action": "george", "value": false, "key": "123456"}',
+                    kind="text/plain") == 415
+        for _ in range(PRESS_WRONG_LIMIT):
+            assert post('{"action": "george", "value": false, "key": "000000"}') == 403
+        # Hammering a six-digit code is answered with a cool-off, not a log flood.
+        assert post('{"action": "george", "value": false, "key": "123456"}') == 429
+        assert presses == []
+    finally:
+        server.stop()
+
+
 # ------------------------------------------------------------- the buttons
 
 def _press_server():
@@ -305,10 +410,17 @@ def test_the_controller_routes_each_press_and_confirms_a_stop_out_loud():
     ctl._engineer_speaks = True
     ctl._fuel_mode_on_beep = None
     ctl._follow_fuel_mode = lambda: None
+    # The press moves the beep itself now, whatever the column was before.
+    beeps = []
+    ctl.bridge = type("Bridge", (), {"set_short_shift": lambda _self, drop:
+                                     beeps.append(drop)})()
     ctl._on_tablet_press("george", False)
     assert ctl._engineer_speaks is False
     ctl._on_tablet_press("fuel", "save")
     assert ctl.race.state.fuel_column_held is True
+    # **The beep is set on every press**, not only when the column moved: a
+    # one-off "Short-shift 450." had left it where his press says it is not.
+    assert beeps == [C.FUEL_MODE_DROP_RPM]
     ctl._on_tablet_press("pit", True)
     assert ctl.race.state.laps_to_stop() == 1
     assert ctl.voice.said and ctl.voice.said[-1].startswith("Boxing this lap.")
@@ -316,7 +428,11 @@ def test_the_controller_routes_each_press_and_confirms_a_stop_out_loud():
     assert ctl.voice.said[-1] == "Stop cancelled. Back on the plan."
     controls = ctl._tablet_controls()
     assert controls == {"george": False, "fuel": "save", "fuel_held": True,
-                        "pit": None, "racing": True}
+                        "pit": None, "pit_cancellable": False, "racing": True}
+    # A hold past the lap it was declared for has nothing to take back, and
+    # the button says so rather than answering with silence.
+    ctl._on_tablet_press("pit", False)
+    assert ctl.voice.said[-1].startswith("Too late")
 
 
 # ------------------------------------------------------------- the words

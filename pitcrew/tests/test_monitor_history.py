@@ -83,6 +83,59 @@ def test_the_monitor_turns_to_history_only_with_both_screens_up(app):
     view.close()
 
 
+def test_the_flag_keeps_the_race_on_the_history_page():
+    """At the flag the board builds its own state, and it carried no history:
+    the monitor turned to twelve empty rows and "0 laps" at the one moment
+    the page is read."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.race import calls as C
+
+    ctl = PitCrewController.__new__(PitCrewController)
+    race = type("Race", (), {"running": False, "armed": True})()
+    race.state = C.RaceState(lap=20, laps_total=20, finished=True,
+                             position=3, field_size=20)
+    race.state.lap_history = [_lap(19), _lap(20)]
+    ctl.race = race
+    ctl._board_temps = lambda *a, **k: {}
+    ctl._split_rates = lambda: {}
+    ctl._board_live_fields = lambda: {}
+    ctl._board_call = None
+    state = ctl._driver_board_state()
+    assert state.finished is True
+    assert [lap["lap"] for lap in state.history] == [19, 20]
+    assert history_rows(state.history)[-1].lap == "20"
+
+
+def test_the_monitor_does_not_turn_to_an_empty_rack_in_practice():
+    """Both pages poll in practice too. Without a race behind him the rack is
+    twelve blank rows under "0 laps", in place of the live board."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.ui.driver_view import DriverState as DS
+
+    class Server:
+        def live(self, page="strip"):
+            return True
+
+        def last_client_of(self, page="strip"):
+            return "10.0.0.9"
+
+        def publish(self, body, page="strip"):
+            pass
+
+    ctl = PitCrewController.__new__(PitCrewController)
+    ctl.race = None
+    ctl._strip_composer = type("C", (), {"compose": lambda _s, state: {}})()
+    ctl._strip_was_live = True
+    ctl._strip_failures = 0
+    ctl.strip = Server()
+    ctl._driver_board_state = lambda: DS(session_kind="practice")
+    state = ctl._publish_strip()
+    assert state.show_history is False
+    ctl._driver_board_state = lambda: DS(session_kind="race",
+                                         history=(_lap(3),))
+    assert ctl._publish_strip().show_history is True
+
+
 def test_every_lap_is_filed_as_it_was_judged():
     from pitcrew.tests.test_field import _coordinator
 

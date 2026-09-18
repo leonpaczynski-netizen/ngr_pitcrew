@@ -1475,7 +1475,7 @@ def face_best_block(state: "DriverState") -> tuple[str, Block]:
     """
     if state.session_kind == "race":
         saving = " · SAVE" if state.target_saving else ""
-        return (f"PLAN LAP{saving}",
+        return (f"TARGET LAP{saving}",
                 Block(format_lap_ms(state.target_lap_ms), "", TONE_PLAIN))
     tyre = f" · {state.reference_compound}" if state.reference_compound else ""
     return (f"BEST{tyre}",
@@ -1498,16 +1498,26 @@ def face_delta_block(state: "DriverState") -> tuple[str, Block]:
     if state.session_kind == "race":
         from pitcrew.race.targets import ON_TARGET_S
 
+        if state.finished:
+            # The race is run. A projection of the slow-down lap against a
+            # target is a true-looking figure about a lap nobody is racing,
+            # and it floods the band red - `box_block` says FLAG here.
+            return "VS TARGET", Block("FLAG", RACE_OVER)
         if state.predicted_ms is not None and state.target_lap_ms is not None:
             delta = (state.predicted_ms - state.target_lap_ms) / 1000.0
             sub = f"projected {format_lap_ms(state.predicted_ms)}"
+            caption = "VS TARGET · PROJ"
         elif state.last_vs_target_s is not None:
             delta = state.last_vs_target_s
             sub = "last lap"
+            caption = "VS TARGET · LAST"
         else:
-            return "VS PLAN LAP", Block("--", state.target_why or "no plan lap")
+            return "VS TARGET", Block("--", state.target_why or "no target lap")
+        # **The caption says WHICH lap**, because one band carries two
+        # quantities - the lap he is driving, projected, and the one he has
+        # finished - and they are the same size in the same ink (rule 13).
         tone = TONE_URGENT if delta >= ON_TARGET_S else TONE_GOOD
-        return "VS PLAN LAP", Block(format_delta(delta), sub, tone)
+        return caption, Block(format_delta(delta), sub, tone)
     delta = state.delta_file_s
     if delta is None:
         why = ("no best on file" if state.file_best_ms is None
@@ -1538,9 +1548,9 @@ def face_burn_block(state: "DriverState") -> Block | None:
                  + (f" · {column}" if column else ""))
     delta = state.last_burn_vs_target_l
     if delta is None:
-        return Block("--", stint or (f"plan {state.target_burn_l:.2f} L/lap"
+        return Block("--", stint or (f"target {state.target_burn_l:.2f} L/lap"
                                      if state.target_burn_l is not None
-                                     else "no plan burn"))
+                                     else "no target burn"))
     tone = TONE_URGENT if delta >= ON_TARGET_L else TONE_GOOD
     return Block(f"{delta:+.2f}", stint, tone)
 
@@ -1609,6 +1619,8 @@ def history_summary(history) -> str:
     six litres in the car at Sardegna.
     """
     laps = [lap for lap in list(history or ()) if lap.get("lap_ms")]
+    # Every lap of the race, not a window: `RaceCoordinator` keeps them all,
+    # so "14 laps" and "best" are the race's and not the buffer's (rule 4).
     counted = [lap for lap in laps if lap.get("lap_delta_s") is not None]
     parts = [f"{len(laps)} laps"]
     if counted:
@@ -1616,7 +1628,8 @@ def history_summary(history) -> str:
         parts.append(f"best {format_lap_ms(best)}")
     for saving, word in ((True, "save"), (False, "full")):
         burns = [lap["burn_l"] for lap in laps
-                 if lap.get("saving") is saving and lap.get("burn_l")]
+                 if lap.get("saving") is saving
+                 and lap.get("burn_l") is not None]
         if burns:
             parts.append(f"{word} {sum(burns) / len(burns):.2f} L/lap "
                          f"over {len(burns)}")
@@ -2543,7 +2556,7 @@ class _HistoryPanel(QWidget):
     is how a row comes to show one lap's time beside another's burn.
     """
 
-    COLUMNS = ("LAP", "TIME", "VS PLAN", "BURN  VS PLAN", "")
+    COLUMNS = ("LAP", "TIME", "VS TARGET", "BURN  VS TARGET", "")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2595,10 +2608,14 @@ class _HistoryPanel(QWidget):
                     NEAR if (row and row.burn_tone == TONE_URGENT) else
                     GOOD if (row and row.burn_tone == TONE_GOOD) else INK,
                     INK_DIM)
-            for label, value, ink in zip(line, values, inks):
+            for index, (label, value, ink) in enumerate(zip(line, values,
+                                                            inks)):
                 label.setText(value)
-                label.setStyleSheet(self._css(ink, 26 if value is values[-1]
-                                              else 34))
+                # By POSITION, not by identity: `"" is ""` is True for an
+                # interned empty string, so an empty cell on an empty row
+                # was drawn at the note's size and the row wobbled.
+                last = index == len(values) - 1
+                label.setStyleSheet(self._css(ink, 26 if last else 34))
         self.summary.setText(history_summary(state.history))
 
 
@@ -2744,9 +2761,12 @@ class DriverView(QWidget):
         stacked.setContentsMargins(0, 0, 0, 0)
         stacked.setSpacing(12)
 
-        # Top of the panel and the quietest thing on it: a record of what was
-        # said, not a thing to act on.
-        stacked.addWidget(self.last_call)
+        # **The last call sits ABOVE the pages, not inside one.** Kept in the
+        # running page it went off screen the moment the monitor turned to
+        # history - which is the configuration the George-off button assumes,
+        # where "the call is still shown on the screen" is the whole of what
+        # he gets. It is a record either way, so it belongs to the board and
+        # not to a page of it.
 
         # **Neither block may expand into the other's room.** Both default to
         # growing, so the corner grid drifted a couple of hundred pixels away
@@ -2858,6 +2878,8 @@ class DriverView(QWidget):
         self.history = _HistoryPanel()
         self.history.setSizePolicy(QSizePolicy.Policy.Preferred,
                                    QSizePolicy.Policy.Maximum)
+
+        outer.addWidget(self.last_call)
 
         self.states = QStackedLayout()
         self.states.addWidget(self.running)

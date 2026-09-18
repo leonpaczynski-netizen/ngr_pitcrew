@@ -427,6 +427,11 @@ class RaceCoordinator:
         self.state.lane.new_session()
         self.news.new_session()
         self.state.rival_gaps = {}
+        # The monitor's history is about one race too, and it is no longer
+        # trimmed - a re-arm on one coordinator would show the last attempt's
+        # laps under this one's (rule 11).
+        self.state.lap_history = []
+        self.state.stint_burns = []
         self._reset_mid_lap()
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
@@ -2546,15 +2551,12 @@ class RaceCoordinator:
             target.lap_source or target.why_no_lap,
             None if verdict is None else verdict.burn_l, target.burn_l)
 
-    # How many laps of history the monitor keeps. A race is thirty-odd laps
-    # and the rack draws a dozen; the rest is the export's job, not a screen's.
-    HISTORY_LAPS = 40
-
     def _file_lap_history(self, lap, verdict, saving, why) -> None:
         """This lap, as it was judged, for the monitor to draw afterwards."""
         history = self.state.lap_history
         history.append({
-            "lap": int(getattr(lap, "lap_num", 0) or 0),
+            "lap": (int(lap.lap_num)
+                    if getattr(lap, "lap_num", None) is not None else None),
             "lap_ms": getattr(lap, "lap_time_ms", None),
             "target_ms": getattr(verdict, "target_ms", None),
             "lap_delta_s": getattr(verdict, "lap_delta_s", None),
@@ -2568,8 +2570,9 @@ class RaceCoordinator:
             "out": bool(getattr(lap, "is_out_lap", False)),
             "compound": self.state.tyre_compound,
         })
-        if len(history) > self.HISTORY_LAPS:
-            del history[:-self.HISTORY_LAPS]
+        # **Not trimmed.** A race is dozens of laps, not thousands, and a
+        # window would make the rack's "N laps" and "best" the buffer's rather
+        # than the race's (rule 4) - a best set on lap 3 quietly replaced.
 
     def _target_next_lap(self, lap) -> None:
         """What the plan asks of the lap now being driven, for the board.
@@ -2919,6 +2922,11 @@ class RaceCoordinator:
         #
         # George deciding a *planned and still-reachable* stop is unnecessary
         # is `drop_stop`, it is structural, and it is gated. This is not it.
+        # **The fold answers a declared stop too.** He said he was coming in,
+        # drove past it twice, and the plan has folded to what he is actually
+        # doing - so the tablet must stop saying "Boxing L14" to the flag.
+        state.box_declared_lap = None
+        self._before_declared = None
         if remaining:
             self.adopt((remaining,))
         else:
@@ -3182,6 +3190,15 @@ class RaceCoordinator:
         """
         saving = bool(saving)
         state = self.state
+        if state.fuel_save_engaged is None:
+            # **The laps already driven were driven on a column too.** With
+            # no column declared they are filed under none, and splitting the
+            # population here would orphan every one of them - the race's own
+            # burn, pace and sigma falling back to the practice figures for
+            # the next five laps, with the fill frozen on the figure before
+            # the press. They were full-revs laps: a saving lap only happens
+            # under an instruction, and those are excluded already.
+            self.expect.adopt_unfiled_column(False)
         state.fuel_column_held = saving
         if state.fuel_save_engaged != saving:
             state.fuel_save_engaged = saving
@@ -3190,6 +3207,26 @@ class RaceCoordinator:
         log("race").info("the driver holds the beep on its %s points, from "
                          "lap %s", "fuel-saving" if saving else "full-revs",
                          state.lap)
+        return self.column_without_targets(saving)
+
+    def column_without_targets(self, saving: bool) -> str | None:
+        """Why his column has no per-lap verdict, or None where it has one.
+
+        A plan that never named a fuel-save lap time has no target for one,
+        so the lap verdict goes quiet for the rest of the race. That is
+        honest (rule 3) and it must be SAID once, not discovered by a driver
+        watching a figure stop moving.
+        """
+        targets = self.targets
+        if targets is None:
+            return None
+        target = targets.for_lap(
+            compound=self.state.tyre_compound, saving=saving,
+            lap_on_set=max(1, self.state.laps_since_stop),
+            fuel_at_start_l=None)
+        if target is None or target.lap_ms is not None:
+            return None
+        return target.why_no_lap or "no target for that column"
 
     def declare_box_this_lap(self) -> bool:
         """He is pitting this lap. False where there is no lap to box on.
@@ -3207,8 +3244,23 @@ class RaceCoordinator:
             return False
         if state.box_declared_lap == state.lap + 1:
             return True
-        self._before_declared = ([dict(s) for s in self._stints],
-                                 state.stint_index)
+        # **Everything the restore has to put back**, not the stints alone:
+        # `_apply_stint` retires the stop latch (`stop_needed_held`, the
+        # flip count, the STOPS_OFF/STOP_BACK tags), so a declare-then-cancel
+        # brought back a stop the fuel had already cancelled - five surfaces
+        # counting down to it again.
+        self._before_declared = (
+            [dict(s) for s in self._stints], state.stint_index,
+            state.stop_needed_held, state.stop_flip_laps,
+            state.stop_back_due, state.stops_off_said,
+            list(state.said), dict(state.said_at))
+        # **The pointer can be past the plan** - more stops taken than the
+        # plan holds, or no plan at all. `adopt` keeps `self._stints[:index]`
+        # and then applies `index`, which lands on the tail stint and leaves
+        # the race with no stop at all. Rebased, so the declared lap is the
+        # stint that gets applied.
+        if state.stint_index > len(self._stints):
+            state.stint_index = len(self._stints)
         remaining = state.laps_remaining()
         if remaining is not None and remaining > 1:
             self.adopt((1, remaining - 1))
@@ -3226,9 +3278,18 @@ class RaceCoordinator:
         if (state.box_declared_lap is None or saved is None or state.in_pit
                 or state.box_declared_lap != state.lap + 1):
             return False
-        stints, index = saved
+        (stints, index, held, flips, back_due, stops_off, said,
+         said_at) = saved
         self._stints = stints
         self._apply_stint(index)
+        # `_apply_stint` cleared the latch on the way in and on the way out;
+        # the stop the fuel had retired is retired again.
+        state.stop_needed_held = held
+        state.stop_flip_laps = flips
+        state.stop_back_due = back_due
+        state.stops_off_said = stops_off
+        state.said = said
+        state.said_at = said_at
         state.box_declared_lap = None
         self._before_declared = None
         log("race").info("the driver took back the declared stop on lap %s",
@@ -3267,6 +3328,11 @@ class RaceCoordinator:
             # longer line up there is no answer to carry, and `None` there is
             # the truth rather than a discard.
             was = planned[offset] if offset < len(planned) else {}
+            # **The stint's declared column is carried, like its compound.**
+            # Dropped, a re-plan or a declared stop retired the plan's own
+            # fuel-save stint: `_apply_stint` can only read `fuel_save` where
+            # the stint still has it, so the beep never went back.
+            column = was.get("fuel_save")
             compound = (compounds[offset]
                         if compounds is not None and offset < len(compounds)
                         else was.get("compound"))
@@ -3304,7 +3370,8 @@ class RaceCoordinator:
                 decided = True
             fresh.append({"laps": laps, "compound": compound,
                           "fuel_l": litres, "start_lap": start,
-                          "tyres": decided})
+                          "tyres": decided,
+                          **({} if column is None else {"fuel_save": column})})
             start += laps
         self._stints = done + fresh
         self._apply_stint(self.state.stint_index)

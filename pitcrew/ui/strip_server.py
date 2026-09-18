@@ -57,6 +57,10 @@ LIVE_WITHIN_S = 2.0
 PRESS_ACTIONS = {"george": (True, False), "fuel": ("save", "full"),
                  "pit": (True, False)}
 PRESS_MAX_BYTES = 512
+# Wrong codes before presses are refused for a while. A six-digit code on a
+# LAN listener is small enough to hammer, and each refusal writes a log line.
+PRESS_WRONG_LIMIT = 5
+PRESS_COOL_OFF_S = 30.0
 
 PAGE = Path(__file__).with_name("strip.html")
 # The pages served: the routes that draw each, its file, and where its numbers
@@ -76,6 +80,10 @@ PAGES = {
 STATIC = {
     "/manifest.webmanifest": ("strip.webmanifest",
                               "application/manifest+json"),
+    # The tablet's own, because the phone's `start_url` is "/" - installed
+    # from the tablet, that manifest would launch the phone's page.
+    "/tablet.webmanifest": ("tablet.webmanifest",
+                            "application/manifest+json"),
     "/icon-180.png": ("icon-180.png", "image/png"),
     "/icon-192.png": ("icon-192.png", "image/png"),
     "/icon-512.png": ("icon-512.png", "image/png"),
@@ -137,6 +145,8 @@ class StripServer:
         # called with `(action, value)` once it does. None refuses them all.
         self.press_key: str | None = None
         self.on_press = None
+        self._wrong_presses = 0
+        self._cool_off_until = 0.0
 
     # ------------------------------------------------------------ lifecycle
 
@@ -267,6 +277,14 @@ class StripServer:
         """
         import hmac
 
+        if self._clock() < self._cool_off_until:
+            return 429, {"ok": False, "why": "too many wrong codes"}
+        # **A press says it is one.** Without this a `text/plain` body is a
+        # CORS simple request, so any page open in a browser on his network
+        # could post one without a preflight.
+        kind = (headers.get("Content-Type") or "").split(";")[0].strip()
+        if kind != "application/json":
+            return 415, {"ok": False, "why": "not a press"}
         try:
             length = int(headers.get("Content-Length") or 0)
         except ValueError:
@@ -281,14 +299,29 @@ class StripServer:
             return 400, {"ok": False, "why": "not a press"}
         key = self.press_key
         if not key or not hmac.compare_digest(str(press.get("key", "")), key):
-            log("ui").warning("tablet press refused: wrong code")
+            self._wrong_presses += 1
+            if self._wrong_presses >= PRESS_WRONG_LIMIT:
+                self._cool_off_until = self._clock() + PRESS_COOL_OFF_S
+                self._wrong_presses = 0
+                log("ui").warning("tablet presses refused for %.0f s: %d wrong "
+                                  "codes", PRESS_COOL_OFF_S, PRESS_WRONG_LIMIT)
+            else:
+                log("ui").warning("tablet press refused: wrong code")
             return 403, {"ok": False, "why": "wrong code"}
+        self._wrong_presses = 0
         action, value = press.get("action"), press.get("value")
         if action not in PRESS_ACTIONS or value not in PRESS_ACTIONS[action]:
             return 400, {"ok": False, "why": "unknown press"}
         if self.on_press is None:
             return 503, {"ok": False, "why": "the app is not taking presses"}
-        self.on_press(action, value)
+        try:
+            self.on_press(action, value)
+        except Exception as exc:                            # noqa: BLE001
+            # The app went away under a press in flight. A 500 to the tablet,
+            # never an exception out of a request thread.
+            log("ui").warning("a tablet press could not be handed over: %s",
+                              exc)
+            return 500, {"ok": False, "why": "the app did not take it"}
         return 202, {"ok": True}
 
     def _answer(self, page: str, client: str) -> bytes:

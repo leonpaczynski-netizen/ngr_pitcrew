@@ -58,6 +58,10 @@ SUBJECT_FUEL_TO_STOP = "fuel_to_stop"
 
 PAYLOAD_VERSION = 2
 
+# What a lamp says when it has no reading at all, from the lamp helpers in
+# `driver_view` - never "the answer is no".
+UNREAD_LIGHT = ("no reading", "no signal", "cannot see")
+
 
 @dataclass(frozen=True)
 class Item:
@@ -140,11 +144,16 @@ class StripComposer:
                 # **Absent, not dashed, outside a race**: practice has no plan
                 # burn, and a dash there would be a reason nobody needs.
                 "burn": (None if burn is None
-                         else Item("BURN VS PLAN", burn).to_json()),
+                         else Item("BURN VS TARGET", burn).to_json()),
             }
         lights = [wet_light(state.wet),
                   abs_light(state.abs_setting, state.front_lock),
                   tcs_light(state.tcs_active)]
-        body["lights"] = [{"word": word.upper(), "sub": sub, "ink": ink}
+        # `unread` is the distinction the lamp helpers were written to keep:
+        # "no reading" and "no signal" are the instrument saying it cannot
+        # see, where "no lock" and "" are measured negatives (rule 3). The
+        # page has no way to tell them apart from the word alone.
+        body["lights"] = [{"word": word.upper(), "sub": sub, "ink": ink,
+                           "unread": sub in UNREAD_LIGHT}
                           for word, sub, ink in lights]
         return {"v": PAYLOAD_VERSION, "idle": False, **body}

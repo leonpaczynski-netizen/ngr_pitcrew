@@ -6,7 +6,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0C0B09">
+<link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<!-- Its own manifest: the phone's opens "/", which would launch the tablet
+     into the phone's page from its home screen. -->
+<link rel="manifest" href="/tablet.webmanifest">
 <title>Pit Crew field</title>
 <!--
   The tablet page: what everyone is doing, on the tablet left of the wheel
@@ -35,12 +39,19 @@
                   env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
   /* The table, and the buttons down the edge nearest the wheel. */
-  #shell { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 19vw; }
+  /* **The row track is explicit.** Left implicit it is `auto`, so the shell
+     sized to the table's max-content and the page overflowed a short panel:
+     measured at 1280x800, the footnote never rendered and most of the PIT
+     button was off the bottom edge. */
+  #shell { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 19vw;
+    grid-template-rows: minmax(0, 1fr); }
   #app { height: 100%; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
     padding: 1.6vh 1.4vw 1.6vh 2vw; row-gap: 1.2vh; }
 
   /* ---- the buttons: big, far apart, and each shows what the APP has */
-  #buttons { display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 2vh;
+  #buttons.stale { opacity: 0.55; }
+  #buttons { position: relative; z-index: 6;
+    display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 2vh;
     padding: 1.6vh 1.6vw 1.6vh 0; }
   .btn { position: relative; overflow: hidden; isolation: isolate; border: 3px solid var(--edge);
     border-radius: 1.4vh; background: var(--panel); color: var(--ink); touch-action: none;
@@ -78,7 +89,11 @@
   #board.stale { color: var(--near); }
 
   /* One grid for header and rows, so every column lines up down the table. */
-  #table { display: grid; align-content: start; min-height: 0; row-gap: 0.6vh;
+  /* **The rows share the height the table has**, rather than each claiming a
+     fixed one and the last of them falling off the bottom. A dozen cars on a
+     short panel then draw a little tighter instead of not at all. */
+  #table { display: grid; align-content: stretch; min-height: 0; overflow: hidden;
+    grid-auto-rows: minmax(0, 1fr); row-gap: 0.6vh;
     grid-template-columns: 7vw minmax(0, 1fr) 7vw 8.5vw 13vw minmax(0, 1.05fr); column-gap: 0; }
   /* The stop column starts clear of the gap figure beside it. */
   .row > .cell:nth-child(4), .th:nth-child(4) { padding-left: 1.8vw; }
@@ -86,7 +101,7 @@
     letter-spacing: 0.1em; text-transform: uppercase; padding: 0 0.8vw 0.4vh; white-space: nowrap; }
   .row { display: contents; }
   .cell { display: flex; flex-direction: column; justify-content: center; min-width: 0;
-    padding: 0.5vh 0.8vw; min-height: 6.6vh; border-top: 1px solid var(--edge); }
+    padding: 0.4vh 0.8vw; border-top: 1px solid var(--edge); }
   .num { font-family: var(--number); font-weight: 700; font-variant-numeric: tabular-nums;
     font-size: 4.4vh; line-height: 1; white-space: nowrap; }
   .txt { font-family: var(--label); font-weight: 700; font-size: 4.6vh; line-height: 1;
@@ -107,7 +122,10 @@
 
   #foot { font-family: var(--label); font-weight: 700; font-size: 3vh; color: var(--dim); }
 
-  #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
+  /* **The cover takes the table, not the buttons.** Over the whole screen it
+     swallowed every press - including George on/off, which is meant to work
+     with no race running at all, which is exactly when the cover is up. */
+  #cover { position: fixed; inset: 0 19vw 0 0; display: none; flex-direction: column; align-items: center;
     justify-content: center; background: var(--ground); text-align: center; padding: 4vh 4vw; }
   #cover.on { display: flex; }
   #cover .big { font-family: var(--label); font-weight: 700; letter-spacing: 0.1em; font-size: 16vh; line-height: 1; }
@@ -139,7 +157,7 @@
   <div class="btn" id="b-pit"><div class="fill"></div><div class="what">Pit</div><div class="now">This lap</div><div class="hint">hold</div></div>
 </div>
 </div>
-<div id="pair"><div class="t">Buttons code</div><div class="s">shown in Pit Crew settings, beside the tablet address</div>
+<div id="pair"><div class="t">Buttons code</div><div class="s" id="pair-why">shown in Pit Crew settings, beside the tablet address</div>
   <input id="pair-code" inputmode="numeric" maxlength="12" autocomplete="off"><button id="pair-go">Use this code</button></div>
 <div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
 <script>
@@ -148,7 +166,9 @@
   var POLL_MS = 500, TIMEOUT_MS = 1500;
   var staleAfter = 1.5, lastOk = null;
   var cover = document.getElementById("cover");
-  var HEAD = ["P", "Driver", "Gap", "Stop", "Fuel in → out", "Stops"];
+  // **The last column is derived and its heading says so** (rule 5): "Stop"
+  // and "Fuel" are read off GT7's pit columns, "Fuel says" is worked out.
+  var HEAD = ["P", "Driver", "Gap", "Stop", "Fuel in → out", "Fuel says"];
   // Shorter where the column is narrow; the arrow in each row says in → out.
   HEAD[4] = "Fuel";
 
@@ -157,6 +177,9 @@
     cover.querySelector(".big").textContent = big;
     cover.querySelector(".why").textContent = why;
     cover.className = "on" + (fault ? " fault" : "");
+    // The buttons stay reachable beside the cover, but what they READ is
+    // only as fresh as the last answer - so they say they are stale.
+    $("buttons").classList.toggle("stale", !!fault);
   }
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -211,7 +234,15 @@
     var timer = setTimeout(function () { if (ctl) ctl.abort(); }, TIMEOUT_MS);
     fetch("/tablet/state", { cache: "no-store", signal: ctl ? ctl.signal : undefined })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (d) { lastOk = performance.now(); render(d); drawButtons(d && d.controls); })
+      .then(function (d) {
+        // **Stamped after the render, not before.** Stamped first, a render
+        // that threw kept the watchdog satisfied and the last numbers on
+        // screen for ever - the one failure CLAUDE.md 7 says survives into a
+        // decision, in the one place the page can still catch it.
+        render(d);
+        drawButtons(d && d.controls);
+        lastOk = performance.now();
+      })
       .catch(function () { /* the watchdog says so */ })
       .then(function () { clearTimeout(timer); setTimeout(poll, POLL_MS); });
   }
@@ -229,9 +260,24 @@
   // **A press asks for a setting, never a flip**, so a retry or a double tap
   // cannot undo itself; and a button only ever shows what the app sent back.
   var HOLD_MS = 500, controls = null;
-  function key() { try { return localStorage.getItem("pitcrew-tablet-key") || ""; } catch (e) { return ""; } }
-  function setKey(k) { try { localStorage.setItem("pitcrew-tablet-key", k); } catch (e) {} }
-  function pair(on) { $("pair").className = on ? "on" : ""; if (on) $("pair-code").focus(); }
+  // **Held here first, stored second.** With site data blocked the store
+  // throws, and a page that only read it back asked for the code for ever.
+  var heldKey = "";
+  function key() {
+    if (heldKey) return heldKey;
+    try { heldKey = localStorage.getItem("pitcrew-tablet-key") || ""; } catch (e) {}
+    return heldKey;
+  }
+  function setKey(k) {
+    heldKey = k;
+    try { localStorage.setItem("pitcrew-tablet-key", k); } catch (e) {}
+  }
+  function pair(on, why) {
+    $("pair").className = on ? "on" : "";
+    $("pair-why").textContent = why ||
+      "shown in Pit Crew settings, beside the tablet address";
+    if (on) $("pair-code").focus();
+  }
   $("pair-go").addEventListener("click", function () {
     var k = $("pair-code").value.trim();
     if (k) { setKey(k); pair(false); }
@@ -242,7 +288,10 @@
     fetch("/tablet/press", { method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: action, value: value, key: key() }) })
-      .then(function (r) { if (r.status === 403) pair(true); })
+      .then(function (r) {
+        if (r.status === 403) { heldKey = ""; pair(true, "that code was refused"); }
+        else if (!r.ok) pair(true, "the app did not take that press");
+      })
       .catch(function () { /* the button does not change, which says so */ });
   }
 
@@ -260,14 +309,29 @@
     p.classList.toggle("armed", !!(c && c.pit));
     p.classList.toggle("dead", !racing);
     p.querySelector(".now").textContent = c && c.pit ? "Boxing " + c.pit : "This lap";
-    p.querySelector(".hint").textContent = c && c.pit ? "hold to cancel" : "hold";
+    p.querySelector(".hint").textContent = !c || !c.pit ? "hold" :
+      (c.pit_cancellable ? "hold to cancel" : "in this lap");
   }
 
   function tap(el, fn) {
-    el.addEventListener("pointerdown", function (e) { e.preventDefault(); el.classList.add("pressed"); });
-    el.addEventListener("pointerup", function () { el.classList.remove("pressed"); fn(); });
-    el.addEventListener("pointercancel", function () { el.classList.remove("pressed"); });
-    el.addEventListener("pointerleave", function () { el.classList.remove("pressed"); });
+    // **A finger that slid off does not press.** With touch capture
+    // `pointerleave` only fires at release, so the release has to check
+    // where it happened rather than trusting a leave to have cancelled it.
+    var down = false;
+    el.addEventListener("pointerdown", function (e) {
+      e.preventDefault(); down = true; el.classList.add("pressed");
+    });
+    el.addEventListener("pointerup", function (e) {
+      el.classList.remove("pressed");
+      var box = el.getBoundingClientRect();
+      var inside = e.clientX >= box.left && e.clientX <= box.right &&
+                   e.clientY >= box.top && e.clientY <= box.bottom;
+      if (down && inside) fn();
+      down = false;
+    });
+    el.addEventListener("pointercancel", function () {
+      down = false; el.classList.remove("pressed");
+    });
   }
   tap($("b-george"), function () { if (controls) press("george", !controls.george); });
   tap($("b-fuel"), function () {

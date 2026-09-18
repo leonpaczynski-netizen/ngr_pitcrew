@@ -6478,11 +6478,27 @@ class PitCrewController(QObject):
             strip.stop()
 
     def _strip_idle(self) -> None:
+        """Both pages: no session. **Both**, or the tablet reads as a fault.
+
+        The board timer stops between sessions, so this is the last thing
+        either page hears until the next one opens - and a page whose numbers
+        simply stop shows NO DATA, which says the PC has died. Each page
+        checks `idle` before it checks the age, so one publish holds.
+        """
         strip = self.__dict__.get("strip")
         if strip is None:
             return
+        from pitcrew.ui import tablet
+        from pitcrew.ui.strip_server import TABLET
+
         self._strip_composer.new_session()
         strip.publish(self._strip_composer.compose(None))
+        idle = tablet.compose(None)
+        idle["controls"] = self._tablet_controls()
+        try:
+            strip.publish(idle, TABLET)
+        except TypeError:                       # a server with one page
+            pass
 
     def _publish_strip(self):
         """Build the board's state once, hand it to the phone, and return it
@@ -6518,7 +6534,12 @@ class PitCrewController(QObject):
             # and this screen the one he looks at least. Either of them gone
             # and it is his live pit board again.
             state = replace(board, strip_live=tablet_live,
-                            show_history=tablet_live and live)
+                            # **And only with a race behind him.** Both pages
+                            # poll in practice too, and an empty rack under
+                            # "THE RACE SO FAR · 0 laps" replaced the live
+                            # practice board.
+                            show_history=(tablet_live and live
+                                          and bool(board.history)))
             strip.publish(self._strip_composer.compose(state))
             self._strip_failures = 0
             return state
@@ -6554,7 +6575,16 @@ class PitCrewController(QObject):
         call is still worked out, logged and put on the board.
         """
         speaks = bool(speaks)
-        self._engineer_speaks = speaks
+        was, self._engineer_speaks = self.__dict__.get(
+            "_engineer_speaks", True), speaks
+        if speaks and not was:
+            # The race start warms the voice for the same reason: the first
+            # line after a cold model paid 550 ms at Bathurst, on a call at
+            # racing speed.
+            try:
+                self.voice.warm()
+            except Exception:                               # noqa: BLE001
+                log("race").warning("the voice would not warm", exc_info=True)
         screen = self.__dict__.get("race_screen")
         picker = getattr(screen, "engineer_picker", None)
         if picker is not None:
@@ -6576,8 +6606,20 @@ class PitCrewController(QObject):
             log("race").info("tablet press %s ignored: no race running", action)
             return
         if action == "fuel":
-            race.hold_fuel_column(value == "save")
-            self._follow_fuel_mode()
+            saving = value == "save"
+            why = race.hold_fuel_column(saving)
+            # **Set unconditionally, because a press is an instruction.**
+            # `_follow_fuel_mode` only acts when the column CHANGED, and a
+            # one-off "Short-shift 450." had already put the beep where his
+            # press says it should not be: pressing Full then did nothing at
+            # all while the tablet said it was held.
+            self.bridge.set_short_shift(race.beep_drop_rpm(None))
+            self._fuel_mode_on_beep = race.state.fuel_save_engaged
+            if why and self._engineer_speaks:
+                # Said once: the plan has no figures for the column he chose,
+                # so the lap verdict goes quiet rather than lying.
+                self.voice.say(f"Fuel-save beeps. {why.capitalize()}, so no "
+                               f"lap target while you hold it.")
             return
         if action == "pit":
             if value:
@@ -6587,6 +6629,13 @@ class PitCrewController(QObject):
                 # **Said whatever George's setting**, like the declaration:
                 # a stop he took back has to be heard as taken back.
                 self.voice.say("Stop cancelled. Back on the plan.")
+            else:
+                # **A press that changed nothing says so.** Past the lap it
+                # was declared for there is nothing to take back, and a
+                # button that answers a hold with silence is one he presses
+                # again at the worst moment.
+                self.voice.say("Too late to take that back. You are on the "
+                               "in-lap.")
 
     def _say_declared_box(self) -> None:
         """"Boxing this lap, fuel to 62." - **spoken even with George off.**
@@ -6596,14 +6645,16 @@ class PitCrewController(QObject):
         lane costs the race. The fill is `fuel_target_l`, the one expression
         the box call and the refuel watch use.
         """
-        from pitcrew.race.calls import fuel_target_l
+        from pitcrew.race.calls import _fuel_instruction
 
-        target = fuel_target_l(self.race.state)
-        capacity = self.race.state.fuel_capacity_l
-        if target is not None and capacity:
-            target = min(target, capacity)
-        said = ("Boxing this lap." if target is None or target <= 0
-                else f"Boxing this lap. Fuel to {target:.0f}.")
+        # **The box call's own sentence, not a second copy of it.**
+        # `fuel_target_l`'s docstring says why: a second copy is how the
+        # engineer tells him two numbers about one stop. This one had
+        # `min(target, capacity)` - rule 9 - which turned "Fuel to full.
+        # Still 15 laps short." into a confident "Fuel to 100", on the one
+        # sentence he gets when he declares a stop with George switched off.
+        instruction = _fuel_instruction(self.race.state)
+        said = f"Boxing this lap. {instruction}".strip()
         self.voice.say(said)
         log("race").info("declared stop confirmed: %s", said)
 
@@ -6613,11 +6664,18 @@ class PitCrewController(QObject):
         state = race.state if race is not None else None
         engaged = getattr(state, "fuel_save_engaged", None)
         declared = getattr(state, "box_declared_lap", None)
+        cancellable = (declared is not None and state is not None
+                       and declared == state.lap + 1)
+        if declared is not None and state is not None:
+            # His HUD's number for it, like everything else he reads.
+            declared = state.lap_on_screen() + (declared - state.lap - 1)
         return {
             "george": bool(self.__dict__.get("_engineer_speaks", True)),
             "fuel": None if engaged is None else ("save" if engaged else "full"),
             "fuel_held": getattr(state, "fuel_column_held", None) is not None,
             "pit": None if declared is None else f"L{declared}",
+            # Past the lap it was declared for there is nothing to take back.
+            "pit_cancellable": cancellable,
             "racing": bool(race is not None and race.running),
         }
 
@@ -6653,6 +6711,11 @@ class PitCrewController(QObject):
             strip.publish(body, TABLET)
             self._tablet_failures = 0
         except Exception as exc:                            # noqa: BLE001
+            # **A tablet that is polling but being sent nothing is not
+            # carrying the gaps.** Returning `live` here surrendered them off
+            # the ultrawide to a page showing NO DATA, and turned that screen
+            # to history at the same time: the field on no screen at all.
+            live = False
             failures = self.__dict__.get("_tablet_failures", 0)
             if failures % BOARD_TRACEBACK_EVERY == 0:
                 log("ui").warning("the tablet could not be built: %s: %s",
@@ -6803,6 +6866,9 @@ class PitCrewController(QObject):
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
                 last_call=self._board_call,
+                # On the grid the plan already asks something of lap 1, and
+                # the phone reads "no plan lap" without them.
+                **board_target_fields(state),
                 **self._board_live_fields())
         # **The flag is not a teardown, and this is why that matters here.**
         # `_close_out_finished_race` deliberately leaves the race running -
@@ -6831,7 +6897,14 @@ class PitCrewController(QObject):
                 split_rates=self._split_rates(),
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
-                last_call=self._board_call, **self._board_live_fields())
+                # **The race he has just finished, at the flag.** Without it
+                # the monitor turned to a rack of twelve empty rows and "0
+                # laps" at the one moment it is read - the history is the
+                # page's whole subject and it outlives the running race.
+                lap_number=state.lap_on_screen(),
+                history=tuple(getattr(state, "lap_history", ()) or ()),
+                last_call=self._board_call, **self._board_live_fields(),
+                **board_target_fields(state))
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
         # in the box there are no crossings - so the countdown and the figure

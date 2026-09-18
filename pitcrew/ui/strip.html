@@ -95,7 +95,9 @@
   #band .cap { position: absolute; top: 1vh; left: 2vw; font-size: 4.4vh; color: var(--dim); }
   #band .val { font-size: 38vh; line-height: 0.95; max-width: 100%; }
   #band .sub { font-size: 4.6vh; }
-  #band.quick .cap, #band.slow .cap, #band.quick .sub, #band.slow .sub { color: rgba(255, 255, 255, 0.78); }
+  /* 0.88, not 0.78: at 0.78 over the green this line measured 3.9:1, just
+     under the bar for text this size. */
+  #band.quick .cap, #band.slow .cap, #band.quick .sub, #band.slow .sub { color: rgba(255, 255, 255, 0.88); }
   #band.act .val, #band.act .cap, #band.act .sub { color: var(--ground); transition: color 0s 70ms; }
 
   /* ---- bottom: the lap, the burn, the lamps */
@@ -113,6 +115,7 @@
   .light::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--fill, transparent);
     clip-path: inset(0 0 100% 0); transition: clip-path var(--wipe); }
   .light.lit::before { clip-path: inset(0 0 0 0); }
+  .light.unread { border-style: dashed; }
   .light.lit { color: var(--ground); transition: color 0s 70ms; }
 
   .ch { display: inline-block; position: relative; overflow: hidden; vertical-align: top; white-space: pre; }
@@ -158,7 +161,7 @@
   "use strict";
   var POLL_MS = 250, TIMEOUT_MS = 1000, ROLL_MS = 260;
   var staleAfter = 1.5;                 // replaced by the server's own figure
-  var lastOk = null;
+  var lastOk = null, last = null;        // the last answer, for a refit
   var cover = document.getElementById("cover");
   var covered = true;                   // numbers come back without rolling
   var reduce = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
@@ -268,7 +271,12 @@
     if (lit) { el.style.setProperty("--fill", data.ink); el.style.borderColor = data.ink; }
     else { el.style.borderColor = ""; }
     el.classList.toggle("lit", lit);
-    el.textContent = data.word;
+    // **An unread lamp is not a lamp reading "no".** `abs_light(None)` is
+    // "no reading" and `abs_light(False)` is "no lock"; both draw unlit, so
+    // without this the phone shows a missing reading as a measured negative
+    // (rule 3). The server decides which is which.
+    el.textContent = data.word + (data.unread ? " ?" : "");
+    el.classList.toggle("unread", !!data.unread);
   }
 
   function render(d) {
@@ -295,7 +303,11 @@
     var timer = setTimeout(function () { if (ctl) ctl.abort(); }, TIMEOUT_MS);
     fetch("/strip/state", { cache: "no-store", signal: ctl ? ctl.signal : undefined })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (d) { lastOk = performance.now(); render(d); })
+      .then(function (d) {
+        // Stamped after the render: a render that threw would otherwise keep
+        // the watchdog happy and the stale numbers on screen for ever.
+        render(d); lastOk = performance.now(); last = d;
+      })
       .catch(function () { /* the watchdog below says so */ })
       .then(function () { clearTimeout(timer); setTimeout(poll, POLL_MS); });
   }
@@ -308,6 +320,17 @@
       show("NO DATA", "lost the connection to the PC", true);
     }
   }, POLL_MS);
+
+  // **A turn of the phone changes the room every figure was fitted to**, and
+  // nothing re-fits until the next answer - which left two figures drawn over
+  // each other for a poll. The last answer is drawn again at once.
+  window.addEventListener("resize", function () {
+    ["last", "best", "band", "lap", "burn"].forEach(function (id) {
+      var el = $(id).querySelector ? $(id).querySelector(".val") : null;
+      if (el) delete el.dataset.fitted;
+    });
+    if (last) render(last);
+  });
 
   // Keep the screen on where the browser allows it (secure pages only, so
   // usually not here - set Auto-Lock to Never on the phone instead).

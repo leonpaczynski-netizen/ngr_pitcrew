@@ -33,10 +33,11 @@ words here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from pitcrew.diagnostics import log
 from pitcrew.race.news import SAMPLE_HZ
-from pitcrew.race.rival_calls import Rival, fuel_shortfall
+from pitcrew.race.rival_calls import Rival, _snapshot, fuel_shortfall
 
 # The prediction, as the tablet words it. Each is a claim of a different
 # strength, and they are kept apart for that reason (rule 13).
@@ -114,7 +115,7 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
     short = fuel_shortfall(rival, our_burn_l, laps_total=laps_total)
     if short is None:
         return Prediction(stops_seen=stops_seen, words=CANNOT_TELL,
-                          why="no fuel or burn to reckon with", burn_of=burn_of)
+                          why="no fuel or burn read", burn_of=burn_of)
     if short.litres <= 0:
         return Prediction(stops_seen=stops_seen, words=REACHES_FLAG,
                           total_stops=stops_seen, burn_of=burn_of,
@@ -130,6 +131,13 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
                       burn_of=burn_of, unconfirmed=not short.certain)
 
 
+def _on_his_hud(prediction: Prediction, offset: int) -> Prediction:
+    """The lap a prediction names, as his HUD will number it."""
+    if prediction.reaches_lap is None or not offset:
+        return prediction
+    return replace(prediction, reaches_lap=prediction.reaches_lap + offset)
+
+
 def field_view(state, board, *, packet: int | None) -> FieldView:
     """Everyone the app knows about, as of now.
 
@@ -139,8 +147,20 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
     if state is None:
         return FieldView(why="no race running")
     ours = getattr(state, "position", None)
+    # **Every lap number here is the one his HUD shows.** `state.lap` is the
+    # app's count of completed laps and the two drift apart - a crossing lost
+    # in the pit lane put Road Atlanta +1 on lap 1 and +2 by lap 20 - so a
+    # tablet counting in the app's domain would disagree with the phone a foot
+    # away, with the HUD, and with George. `lap_on_screen` is the one
+    # expression for it; `offset` carries it onto the stop laps, which the
+    # pit wall files against our own completed count.
+    on_screen = getattr(state, "lap_on_screen", None)
+    lap_now = on_screen() if callable(on_screen) else getattr(state, "lap", None)
+    offset = 0
+    if lap_now is not None and getattr(state, "lap", None) is not None:
+        offset = lap_now - state.lap - 1
     base = dict(position=ours, field_size=getattr(state, "field_size", None),
-                lap=getattr(state, "lap", None),
+                lap=lap_now,
                 laps_total=getattr(state, "laps_total", None))
     lane = getattr(state, "lane", None)
     rivals = dict(getattr(state, "rivals", None) or {})
@@ -152,7 +172,18 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
     if board is not None:
         places.update(board.places)           # the fresher read wins
         if packet is not None:
-            age = max(0.0, (int(packet) - int(board.packet)) / SAMPLE_HZ)
+            seconds = (int(packet) - int(board.packet)) / SAMPLE_HZ
+            # **A negative age is a refusal, not a zero** (rule 9). The packet
+            # counter resets at the arm while the wall's thread is mid-read,
+            # and a read stamped against the last race clamped to "0 s ago"
+            # would put the PREVIOUS race's places on screen as current.
+            if seconds < 0:
+                log("race").warning(
+                    "the tablet's board read is stamped %.0f s ahead of the "
+                    "packet count - refused rather than shown as fresh",
+                    -seconds)
+            else:
+                age = seconds
     standing = {str(stop.driver).lower()
                 for stop in (lane.in_the_lane() if lane is not None else [])}
 
@@ -172,16 +203,23 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
         rows.append(Car(
             name=name, place=place,
             in_lane=str(name).lower() in standing,
-            last_stop_lap=getattr(stop, "lap", None),
+            last_stop_lap=(None if getattr(stop, "lap", None) is None
+                           else stop.lap + offset),
             fuel_in_l=getattr(stop, "fuel_in_l", None),
             fuel_out_l=getattr(stop, "fuel_out_l", None),
             out_is_bound=bool(getattr(rival, "exit_is_a_bound", False)),
-            prediction=predict(rival, stops_seen=seen, our_burn_l=our_burn,
-                               laps_total=laps_total)))
+            prediction=_on_his_hud(
+                predict(rival, stops_seen=seen, our_burn_l=our_burn,
+                        laps_total=laps_total), offset)))
     if ours:
         gaps = {}
         for side, step in (("ahead", -1), ("behind", 1)):
-            trend = getattr(state, f"gap_{side}", None)
+            # **Snapshotted, because the wall's thread rebinds it.**
+            # `GapTrend.latest` loads `seen` twice and `_rederive` rebinds it
+            # between the two - `rival_calls._snapshot` exists for this and
+            # says "Reproduced.", and `controller._gap_view` takes one. This
+            # was the only reader that did not.
+            trend = _snapshot(getattr(state, f"gap_{side}", None))
             seconds = trend.latest() if trend is not None else None
             if seconds is not None:
                 gaps[int(ours) + step] = seconds

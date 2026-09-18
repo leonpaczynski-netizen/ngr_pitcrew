@@ -372,6 +372,21 @@ class ExpectationTracker:
             return
         self._column = bool(column)
 
+    def adopt_unfiled_column(self, column: bool) -> None:
+        """File every lap that has no column under `column`.
+
+        **A race with no declared column still drove its laps on one.** When
+        the driver takes the beep himself mid-race (the tablet's button, 17
+        Sep 2026) the population splits from that moment - and every lap
+        already driven was filed with no column at all, so a plain split
+        orphans them: `_on_column` matches on `is`, `None is False` is False,
+        and the race loses its measured burn, its pace and its sigma back to
+        the practice figures. Those laps are evidence about the column he was
+        on until he pressed, and this says so.
+        """
+        self._green_column = [column if on is None else on
+                              for on in self._green_column]
+
     def revise_lap_column(self, lap_num: int, column: bool) -> None:
         """File a lap under the column the frames say it was driven on.
 

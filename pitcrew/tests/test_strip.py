@@ -87,9 +87,12 @@ def test_with_no_best_on_file_the_delta_says_so_rather_than_a_zero():
 def test_the_race_delta_is_the_projected_lap_against_the_plans_lap():
     got = StripComposer().compose(racing())
     assert (got["best"]["caption"], got["best"]["value"]) == (
-        "PLAN LAP · SAVE", "1:41.100")
+        "TARGET LAP · SAVE", "1:41.100")
     assert got["centre"]["id"] == CENTRE_DELTA
-    assert got["centre"]["caption"] == "VS PLAN LAP"
+    # **The caption says which lap** - the one being driven, projected, or the
+    # one just finished. One band, two quantities, same ink (rule 13). And the
+    # word is the voice's own: "Pace on target".
+    assert got["centre"]["caption"] == "VS TARGET · PROJ"
     assert got["centre"]["value"] == "+0.310"
     # A projection, and it says so (rule 5).
     assert got["centre"]["sub"] == "projected 1:41.410"
@@ -100,13 +103,14 @@ def test_the_race_delta_is_the_projected_lap_against_the_plans_lap():
 def test_before_a_projection_exists_the_last_lap_stands_in_and_says_so():
     got = StripComposer().compose(racing(predicted_ms=None))
     assert (got["centre"]["value"], got["centre"]["sub"]) == ("+0.312", "last lap")
+    assert got["centre"]["caption"] == "VS TARGET · LAST"
 
 
 def test_the_burn_is_this_lap_against_the_plan_with_the_stint_on_its_column():
     """The stint figure names its column and its lap count: the two beeps
     burn ~30% apart, and pooling them looks right and is not."""
     burn = StripComposer().compose(racing())["burn"]
-    assert burn["caption"] == "BURN VS PLAN"
+    assert burn["caption"] == "BURN VS TARGET"
     assert (burn["value"], burn["tone"]) == ("+0.12", "urgent")
     assert burn["sub"] == "stint +0.05 · 6 laps · save"
 
@@ -154,6 +158,24 @@ def test_the_lights_carry_their_own_ink_and_never_claim_a_reading_they_lack():
     assert tcs["ink"] is not None and tcs["word"] == "TCS"
 
 
+def test_an_unread_lamp_is_not_a_lamp_reading_no():
+    """`abs_light(None)` is "no reading" and `abs_light(False)` is "no lock";
+    both draw unlit, so the page is told which is which (rule 3)."""
+    unread = StripComposer().compose(DriverState(
+        session_kind="practice", wet=None, front_lock=None, tcs_active=None))
+    assert [light["unread"] for light in unread["lights"]] == [True, True, True]
+    measured = StripComposer().compose(DriverState(
+        session_kind="practice", wet="dry", abs_setting="Weak",
+        front_lock=False, tcs_active=False))
+    assert [light["unread"] for light in measured["lights"]] == [False] * 3
+
+
+def test_the_band_says_flag_rather_than_flooding_red_on_the_slow_down_lap():
+    got = StripComposer().compose(racing(finished=True))
+    assert got["centre"]["value"] == "FLAG"
+    assert got["centre"]["tone"] == "plain"
+
+
 def test_the_page_is_laid_out_like_the_lap_timer():
     from pitcrew.ui.strip_server import PAGE
 
@@ -164,6 +186,12 @@ def test_the_page_is_laid_out_like_the_lap_timer():
     # The band's colour is its meaning: amber only for an instruction.
     assert "data.act === true" in page
     assert "#band.quick { --fill: var(--quick); }" in page
+    # The watchdog is armed by a render that FINISHED: stamped first, a render
+    # that threw left the last numbers up for ever (CLAUDE.md 7).
+    assert "render(d); lastOk = performance.now(); last = d;" in page
+    # An unread lamp is marked, and a turn of the phone re-fits the figures.
+    assert 'data.unread ? " ?" : ""' in page
+    assert 'window.addEventListener("resize"' in page
 
 
 # ------------------------------------------------------------- the ultrawide

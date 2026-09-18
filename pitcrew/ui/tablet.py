@@ -54,7 +54,9 @@ def prediction_words(prediction) -> tuple[str, str, str]:
         return (f"{_stops(prediction.total_stops)}{maybe}",
                 f"short, saves it{burn}", "reaches")
     if prediction.words == NO_STOP_SEEN:
-        return "NO STOP YET", "", "plain"
+        # About the instrument, not the car: the board may simply not have
+        # been read while he was in the lane.
+        return "NONE SEEN", "no stop read", "plain"
     return "CAN'T TELL", prediction.why or "", "plain"
 
 

@@ -498,7 +498,7 @@ def test_the_phone_strip_carries_the_plan_lap_and_the_burn_against_it(qt_app):
     # No targets: dashes that say why, never a zero.
     bare = StripComposer().compose(DriverState(**racing))
     assert bare["centre"]["value"] == "--" and bare["best"]["value"] == "-:--.---"
-    assert bare["burn"]["value"] == "--" and bare["burn"]["sub"] == "no plan burn"
+    assert bare["burn"]["value"] == "--" and bare["burn"]["sub"] == "no target burn"
     # And practice has no plan burn at all.
     assert StripComposer().compose(
         DriverState(session_kind="practice"))["burn"] is None
