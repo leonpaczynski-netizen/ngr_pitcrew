@@ -438,7 +438,19 @@ def _coalesce_key(kind: str | None, text: str) -> str | None:
     on it."), and only the first is superseded by a newer one. So the place
     is recognised by its shape, which `phrase_manifest` already relies on.
     """
-    from pitcrew.race.calls import GAPS, POSITION, STATUS, STOPS_PICTURE
+    from pitcrew.race.calls import (
+        BOX_NOW,
+        BOX_SOON,
+        GAPS,
+        POSITION,
+        STATUS,
+        STAY_OUT,
+        STAY_OUT_FUEL,
+        STOP_BACK,
+        STOPS_OFF,
+        STOPS_PICTURE,
+        UNDERCUT,
+    )
     from pitcrew.race.colour import DATA
 
     if kind == POSITION and re.match(r"P\d+\b", text):
@@ -448,6 +460,25 @@ def _coalesce_key(kind: str | None, text: str) -> str | None:
     # them read out in turn is the older one said as though it still were.
     if kind in (STATUS, DATA, GAPS, STOPS_PICTURE):
         return kind
+    # **And the stop is ONE thing to say, whichever way it moved.** The class
+    # with the strictest cost for being late was the only one with no
+    # replacement policy at all, while the cheapest - a gap, a place - had
+    # one. A `BOX_SOON` still queued when `BOX_NOW` arrives is "Box in 2
+    # laps." read out immediately before "Box this lap.", and the box call is
+    # 10-12 s of speech, so the pair is twenty seconds of stop talk whose
+    # first half stopped being true before it finished saying so. The two that
+    # REVERSE a stop belong to the same question: `STOPS_OFF` cancels it,
+    # `STOP_BACK` puts it back, and the one he must hear is the newest.
+    #
+    # The coordinator arbitrates one call per crossing, which is why this has
+    # not bitten yet - but that is the coordinator being careful rather than
+    # the queue being safe. `on_done(False)` still tells the owner what went.
+    # `UNDERCUT` ("Box now to undercut him.") and the two that argue for
+    # staying out answer the same question from the other side, and a pair
+    # read out in turn is one stop sentence immediately before its opposite.
+    if kind in (BOX_NOW, BOX_SOON, STOPS_OFF, STOP_BACK, UNDERCUT,
+                STAY_OUT, STAY_OUT_FUEL):
+        return "the stop"
     return None
 
 
@@ -556,8 +587,14 @@ class _LineQueue:
         with self._cond:
             key = _coalesce_key(line.kind, line.text)
             if key is not None:
+                # **A `keep` line is never a victim here either.** `keep`
+                # means "one thing said in parts, not a competitor", and a
+                # brief line sharing a coalesce key with a race call would
+                # have been silently removed by it - the exact opposite of
+                # what the flag is for, next to a comment saying so.
                 for old in [o for o in self._lines
-                            if _coalesce_key(o.kind, o.text) == key]:
+                            if not o.keep
+                            and _coalesce_key(o.kind, o.text) == key]:
                     self._lines.remove(old)
                     dropped.append((old, f"replaced by a newer {key} line"))
             # **A `keep` line is outside the cap entirely - neither a victim
@@ -737,8 +774,30 @@ class Voice:
         if not self._failures:
             return None
         calls = "call" if self._failures == 1 else "calls"
-        return (f"The engineer has said nothing for {self._failures} "
-                f"{calls}: {self.last_error}")
+        # **The count, and not the exception.** This line is read from the
+        # driving position by a man with a wheel in his hands, and it used to
+        # end "PortAudioError: Error opening OutputStream: -9985". This
+        # method's own docstring says the exception "is in the log for
+        # afterwards"; it was in both. What he can act on is that the
+        # engineer is not reaching him.
+        return (f"No sound from the engineer for {self._failures} {calls}")
+
+    def new_session(self) -> None:
+        """Forget what went wrong last time. CLAUDE.md rule 11.
+
+        `Voice` is built once and lives for the whole app, so nothing cleared
+        this: an audio fault in practice put "No sound from the engineer for
+        3 calls" on the RACE board at the lights, and with George switched
+        off almost nothing speaks - so nothing could clear it and the top
+        line held a ten-minute-old fault for the rest of the race while every
+        real call was written behind it and never shown.
+
+        The board's own last call is cleared at the start and end of every
+        race for exactly this reason (`_note_board_call`); the thing that
+        annotates it was not.
+        """
+        self._failures = 0
+        self.last_error = None
 
     def say_all(self, lines, kind: str | None = None) -> None:
         """Say these, in order, all of them - a brief, or a debrief.
@@ -1249,12 +1308,32 @@ class VoicePackEngine:
                 # be rid of, re-entered from the pack's side. The `LineCut`
                 # branch above refuses to do it in as many words; this branch
                 # was doing it.
-                rest = list(segments[len(played):])
-                say = " ".join(rest) if played else text
+                # **Only ever at a sentence boundary.** A pack segment is
+                # not a sentence: `segments_for("4.5 laps of fuel in hand to
+                # the flag.")` is `('four', 'point', 'five', 'laps of fuel
+                # ...')`, so resuming after two played clips says "five laps
+                # of fuel in hand to the flag" - a DIFFERENT NUMBER, spoken
+                # confidently, which is the failure class rules 3 and 9 exist
+                # to prevent and far worse than the stammer this branch was
+                # written to stop. `"Box in 2 laps."` resumes as `"laps."`.
+                #
+                # So the resume point is the last clip that ENDED a sentence.
+                # "Box this lap." | "RS on." | "Fuel to 48 litres." splices
+                # cleanly - that is the case the branch is actually for - and
+                # anything cut mid-figure says the whole line again instead,
+                # which repeats words but never invents one.
+                spliceable = 0
+                for index in range(len(played)):
+                    if str(segments[index]).rstrip().endswith((".", "!", "?")):
+                        spliceable = index + 1
+                rest = list(segments[spliceable:])
+                say = " ".join(rest) if spliceable else text
+                # **What he actually heard, in the log** (rule 10): after a
+                # race "synthesising the rest of it" does not say which rest.
                 log("voice").warning(
-                    "voice pack playback failed for %r (%s: %s) - "
-                    "synthesising %s", text, type(exc).__name__, exc,
-                    "the rest of it" if played else "instead")
+                    "voice pack playback failed for %r (%s: %s) - played %d "
+                    "of %d clips, synthesising %r", text,
+                    type(exc).__name__, exc, len(played), len(segments), say)
                 if self._fallback is None:
                     raise NotSpoken(
                         f"the pack could not play {text!r} and there is no "

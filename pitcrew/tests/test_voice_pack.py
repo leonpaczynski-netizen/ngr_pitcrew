@@ -634,8 +634,24 @@ def test_silence_is_counted_so_it_can_be_reported():
     voice.say("Box this lap.")
     _drain(voice)
     assert voice.silent_calls == 2
-    assert "said nothing for 2 calls" in voice.health()
-    assert "OSError" in voice.health()
+    # **The count, in driver terms, and not the exception.** This line is
+    # read from the driving position; it used to end "PortAudioError: Error
+    # opening OutputStream: -9985". The log keeps the exception.
+    # Read ONCE: the voice thread is still live, and three calls to a
+    # property that counts a running failure is three different questions.
+    reported = voice.health()
+    assert reported == "No sound from the engineer for 2 calls", reported
+    assert "PortAudio" not in reported and "Error" not in reported
+    # The exception is still kept - it is what the log and the afterwards
+    # need - it just does not go to a man holding a steering wheel.
+    assert "OSError" in (voice.last_error or "")
+
+    # And it is forgotten at the next session (rule 11): `Voice` lives for
+    # the whole app, so a practice fault otherwise sat on the race board at
+    # the lights with nothing able to clear it.
+    voice.new_session()
+    assert voice.silent_calls == 0
+    assert voice.health() is None and voice.last_error is None
 
 
 def test_a_call_that_plays_clears_the_count():
@@ -998,3 +1014,61 @@ def test_a_failure_before_anything_played_still_says_the_whole_line(pack,
     monkeypatch.setattr(engine, "_play", dead)
     engine.speak("Box this lap.")
     assert spy.spoken[-1] == "Box this lap."
+
+
+def test_a_splice_never_cuts_inside_a_figure(pack, monkeypatch):
+    """**A pack segment is not a sentence.**
+
+    `segments_for("4.5 laps of fuel in hand to the flag.")` is
+    `('four', 'point', 'five', 'laps of fuel ...')`, so resuming after two
+    played clips says "five laps of fuel in hand to the flag" - a DIFFERENT
+    NUMBER, spoken confidently, which is the failure rules 3 and 9 exist to
+    prevent and far worse than the stammer the splice was written to stop.
+    Anything cut mid-figure says the whole line again: that repeats words,
+    but it never invents one.
+    """
+    folder, clips = pack
+    line = "4.5 laps of fuel in hand to the flag."
+    segments = manifest.segments_for(line)
+    assert segments[:3] == ("four", "point", "five"), segments
+
+    spy = Spy()
+    engine = VoicePackEngine(folder, clips, spy)
+    # Pretend the pack holds every clip of it, and die after the number's
+    # first two words.
+    engine._clips = {name: {"file": next(iter(clips.values()))["file"]}
+                     for name in segments}
+
+    def half(_segments, heard=None):
+        if heard is not None:
+            heard.extend(_segments[:2])
+        raise OSError("device gone")
+
+    monkeypatch.setattr(engine, "_play", half)
+    engine.speak(line)
+    assert spy.spoken[-1] == line, (
+        "a cut inside a number must say the whole line, not its tail")
+    assert "five laps" not in spy.spoken[-1].replace("4.5 laps", "")
+
+
+def test_a_splice_at_a_sentence_boundary_is_taken(pack, monkeypatch):
+    """The case the branch is actually for: whole sentences, so the resume
+    cannot change a figure."""
+    folder, clips = pack
+    line = "Box this lap. RS on. On the plan."
+    segments = manifest.segments_for(line)
+    assert all(name.endswith(".") for name in segments), segments
+
+    spy = Spy()
+    engine = VoicePackEngine(folder, clips, spy)
+    engine._clips = {name: {"file": next(iter(clips.values()))["file"]}
+                     for name in segments}
+
+    def half(_segments, heard=None):
+        if heard is not None:
+            heard.append(_segments[0])
+        raise OSError("device gone")
+
+    monkeypatch.setattr(engine, "_play", half)
+    engine.speak(line)
+    assert spy.spoken[-1] == "RS on. On the plan."

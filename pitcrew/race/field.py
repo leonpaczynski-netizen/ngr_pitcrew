@@ -52,7 +52,12 @@ from dataclasses import dataclass, replace
 from pitcrew.diagnostics import log
 from pitcrew.race.calls import as_his_hud_numbers_it
 from pitcrew.race.news import BOARD_FRESH_S, SAMPLE_HZ
-from pitcrew.race.rival_calls import Rival, _snapshot, fuel_shortfall
+from pitcrew.race.rival_calls import (
+    Rival,
+    _snapshot,
+    fuel_shortfall,
+    must_stop_again,
+)
 
 # The prediction, as the tablet words it. Each is a claim of a different
 # strength, and they are kept apart for that reason (rule 13).
@@ -161,12 +166,17 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
     if short is None:
         return Prediction(stops_seen=stops_seen, words=CANNOT_TELL,
                           why="no fuel or burn read", burn_of=burn_of)
-    if short.litres <= 0:
+    # **`must_stop_again` decides, here and in the voice.** The branch used
+    # to be re-derived from `short` in both places, so the row and
+    # `news.picture` could answer "will he stop again" two ways about one car
+    # from one state (rule 13).
+    verdict = must_stop_again(rival, our_burn_l, laps_total=laps_total)
+    if verdict is False:
         return Prediction(stops_seen=stops_seen, words=REACHES_FLAG,
                           total_stops=stops_seen, burn_of=burn_of,
                           burn_stops=evidence,
                           unconfirmed=not short.certain)
-    if short.saveable:
+    if verdict is None:
         # **`total_stops=None`, because the app does not know.**
         # `short_to_the_flag` says this same shortfall as "he lifts OR he
         # stops again" and its docstring is explicit that asserting either

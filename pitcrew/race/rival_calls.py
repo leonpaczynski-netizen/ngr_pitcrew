@@ -503,6 +503,49 @@ class Shortfall:
     at_the_brim: bool
 
 
+def must_stop_again(rival: Rival, burn_per_lap_l: float | None, *,
+                    laps_total: int | None, firm: bool = False) -> bool | None:
+    """Does his fuel force another stop? `None` where the app cannot tell.
+
+    **One expression, because two things were answering this question.** The
+    tablet worked it out per car from the fuel (`field.predict`), and
+    `news.picture` assumed instead that every rival stops exactly as many
+    times as the regulations require - so the screen could read "PUNISHED 2
+    STOPS" while the voice, from the same `RaceState`, worked his effective
+    place on the assumption PUNISHED stopped once. Two answers to one
+    question, one spoken and one a foot to the left (rule 13).
+
+    `None` is not "no": an exit figure that is a lower bound, a race with no
+    known distance, or a shortfall inside what he can lift for are all states
+    where the honest answer is that nobody knows, and a caller that treats
+    them as a "no" is asserting the half this refuses to.
+    """
+    if rival is None or rival.stop is None or rival.exit_is_a_bound:
+        return None
+    if laps_total is None:
+        return None
+    short = fuel_shortfall(rival, burn_per_lap_l, laps_total=laps_total)
+    if short is None:
+        return None
+    if short.litres <= 0:
+        return False                # the tank reaches the flag
+    if short.saveable:
+        return None                 # he lifts, or he stops - `SHORT_SAVES`
+    if firm and not short.certain:
+        # **`firm` is for a caller that will ACT on the answer** rather than
+        # draw it with a marker beside it. The tablet prints this verdict
+        # with "?" and "our burn" next to it, so an unconfirmed one is
+        # honestly shown; a caller that folds it into a spoken place has
+        # nowhere to put those words, and a shortfall inside the reading
+        # error is not evidence a place should move on.
+        return None
+    if firm and not rival.burn_per_lap_l:
+        # Ours, standing in for his. Fine for a marked screen, not for a
+        # claim about HIM that changes what we do (rule 5).
+        return None
+    return True
+
+
 def fuel_shortfall(rival: Rival, burn_per_lap_l: float | None, *,
                    laps_total: int | None,
                    capacity_l: float = TANK_L) -> Shortfall | None:

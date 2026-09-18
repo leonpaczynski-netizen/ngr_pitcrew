@@ -258,3 +258,60 @@ def test_the_two_sample_counts_are_stored_apart(store):
                       laps_total=20)
     row = store.rival_stops("Rocky")[0]
     assert row["reads"] == 21 and row["compound_reads"] == 3
+
+
+def test_a_burn_is_litres_of_ONE_circuits_lap():
+    """**Litres a LAP is a property of the lap.**
+
+    `burn_per_lap_l` pooled every race a driver had ever been watched in, so
+    a Monza stint and a Bathurst stint were averaged - two different
+    distances - and the tablet printed the result as "his burn": its most
+    reassuring case, resting on its weakest evidence. Scoped to the circuit
+    now, like it was already scoped to the car.
+    """
+    from pitcrew.race.profile import Observation, Profile
+
+    book = Profile("PUNISHED")
+    # Same car, same driver, two circuits, two very different laps.
+    book.add(Observation(driver="PUNISHED", race="1", lap=10, fuel_in_l=20.0,
+                         car="Huracan", circuit="Monza"))
+    book.add(Observation(driver="PUNISHED", race="2", lap=10, fuel_in_l=60.0,
+                         car="Huracan", circuit="Bathurst"))
+
+    monza, monza_stops = book.burn_per_lap_l("Huracan", "Monza")
+    bathurst, bathurst_stops = book.burn_per_lap_l("Huracan", "Bathurst")
+    assert monza_stops == 1 and bathurst_stops == 1
+    assert monza != bathurst, (monza, bathurst)
+
+    # Unscoped still pools, for the questions that are genuinely not about
+    # one circuit - and it is now a decision the caller makes, not a default.
+    pooled, pooled_stops = book.burn_per_lap_l("Huracan")
+    assert pooled_stops == 2
+    assert min(monza, bathurst) < pooled < max(monza, bathurst)
+
+    # A circuit with nothing on file says so rather than borrowing another's.
+    assert book.burn_per_lap_l("Huracan", "Spa") == (None, 0)
+
+
+def test_the_circuit_key_is_one_expression_on_both_sides():
+    """The stop's key and the race's key have to be built the same way, or the
+    scoping matches nothing and every rival's burn becomes "nothing on file"
+    - which reads as ours, says so, and is a worse answer than before."""
+    from pitcrew.analysis.resolve import circuit_key
+    from pitcrew.controller import circuit_key_for
+    from pitcrew.race.rival_book import _circuit_of
+
+    # **The store's own vocabulary, not a fourth spelling.** The first
+    # version composed `f"{track} {layout}"`, which matched nothing else on
+    # disk - self-consistent, so it worked, and the same defect this change
+    # set out to remove one layer down. `db.py` says outright that no caller
+    # should compose a circuit key.
+    for row in ({"track": "Monza", "layout": None},
+                {"track": "Spa", "layout": "24h"}):
+        assert _circuit_of(row) == circuit_key(row["track"], row["layout"])
+        # And the live race builds the identical key from the event row, or
+        # the scoping silently matches nothing and every rival's burn
+        # quietly becomes "nothing on file".
+        assert _circuit_of(row) == circuit_key_for(row)
+    assert _circuit_of({"track": None, "layout": "24h"}) is None
+    assert _circuit_of({}) is None

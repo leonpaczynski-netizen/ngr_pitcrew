@@ -110,6 +110,14 @@ class Observation:
     # already on file predates them.
     series: str | None = None
     car: str | None = None
+    # **Where it was raced.** Litres a LAP is a property of the lap, so a
+    # figure pooled across circuits is a mean of two different distances.
+    # Nullable like the two above, and for the same reason: it is DERIVED at
+    # read time from the `events` join rather than stored on the row, so it
+    # is None only where the event itself has no track. A burn with no
+    # circuit can still answer a question that is not about one
+    # (`fill_surplus_l`).
+    circuit: str | None = None
 
     @property
     def stop(self) -> Stop:
@@ -171,7 +179,8 @@ class Profile:
     def races_seen(self) -> int:
         return len({o.race for o in self.observations})
 
-    def burn_per_lap_l(self, car: str | None = None
+    def burn_per_lap_l(self, car: str | None = None,
+                       circuit: str | None = None
                        ) -> tuple[float | None, int]:
         """Mean litres a lap, and the number of stops behind it.
 
@@ -181,11 +190,26 @@ class Profile:
         neither race. He races several leagues at once, so pooling here would
         quietly average across them.
 
+        **And to one CIRCUIT, for the same reason one step further in.**
+        Litres a lap is a property of the LAP: Monza's 5.8 km and Bathurst's
+        6.2 km are not the same lap, and a car's burn at one says little about
+        the other. This pooled every race a driver had ever been watched in,
+        and the tablet then printed the result as "his burn" - its most
+        reassuring case, resting on its weakest evidence. An observation with
+        **The circuit is derived at read time, not persisted** - it comes off
+        the `events` join in `store.rival_stops`, exactly like `series` and
+        `car_name` - so scoping it discards no history: every row on file
+        comes back with a real circuit. Measured against the live book, only
+        the one car raced at two circuits changes at all, and there the count
+        falls 2 to 1 with the burn moving 0.45-0.95 L/lap, which is the
+        correction this is for. The sample count is taken after the filter.
+
         The count is half the answer and travels with it - one stop is one
         stint's worth of evidence about a driver who may have been saving.
         """
         wanted = [o for o in self.observations
-                  if car is None or o.car == car]
+                  if (car is None or o.car == car)
+                  and (circuit is None or o.circuit == circuit)]
         # **Only the FIRST stop of each race.** `Observation.burn_per_lap_l` is
         # `(assumed_start - fuel_in) / lap`, which assumes he has not refuelled
         # since the start - true of his first stop and false of every one
@@ -214,6 +238,11 @@ class Profile:
         car. The burn it is measured against is still the car's, so that is
         scoped even when this is not.
         """
+        # **Unscoped on purpose here**, and it is the one place that is
+        # right: this asks whether he HABITUALLY carries a spare lap, which
+        # is a habit of his. The burn it is priced against is the car's, and
+        # a circuit-scoped burn would leave most drivers with nothing to
+        # price against at all.
         burn, _ = self.burn_per_lap_l(car)
         seen = [o.fill_surplus_l(burn) for o in self.observations]
         seen = [s for s in seen if s is not None]
@@ -283,19 +312,25 @@ def field_without(profiles: list[Profile], driver: str) -> float | None:
 
 
 def burn_against(profile: Profile, ours_l: float | None,
-                 car: str | None = None) -> tuple[float | None, int]:
+                 car: str | None = None,
+                 circuit: str | None = None) -> tuple[float | None, int]:
     """Litres a lap he uses more than us. Negative means he uses less.
 
     Scoped to the car, because ours is the car's number too and comparing two
-    different cars' burn says nothing about either driver.
+    different cars' burn says nothing about either driver - **and to the
+    circuit, because litres a LAP is a property of the lap.** Ours is this
+    circuit's number; his pooled across circuits is not the same quantity,
+    and the difference between them was being reported against
+    `BURN_DIFFERENCE_L`, this module's own "outside reading error" threshold.
     """
-    theirs, count = profile.burn_per_lap_l(car)
+    theirs, count = profile.burn_per_lap_l(car, circuit)
     if theirs is None or ours_l is None:
         return None, count
     return theirs - ours_l, count
 
 
 def describe(profile: Profile, *, ours_burn_l: float | None = None,
+             circuit: str | None = None,
              field_fraction: float | None = None,
              refuel_rate_lps: float | None = None,
              car: str | None = None) -> list[str]:
@@ -314,10 +349,14 @@ def describe(profile: Profile, *, ours_burn_l: float | None = None,
             % (profile.stops_seen, "" if profile.stops_seen == 1 else "s",
                races, "" if races == 1 else "s"))
 
-    burn, burn_n = profile.burn_per_lap_l(car)
+    # **The same scope the live race reads it at.** Unscoped here and scoped
+    # there, the briefing and the race held two different numbers both called
+    # "his burn" - measured on the live book, 0.45-0.95 L/lap apart, which is
+    # past `BURN_DIFFERENCE_L` (rule 13).
+    burn, burn_n = profile.burn_per_lap_l(car, circuit)
     if burn is not None:
         line = "%s burns about %.1f L a lap (%s)." % (profile.driver, burn, span)
-        difference, _ = burn_against(profile, ours_burn_l, car)
+        difference, _ = burn_against(profile, ours_burn_l, car, circuit)
         if difference is not None and abs(difference) >= BURN_DIFFERENCE_L:
             line += (" That is %.1f L a lap %s than you."
                      % (abs(difference), "more" if difference > 0 else "less"))

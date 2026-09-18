@@ -1452,12 +1452,23 @@ def test_the_board_says_when_the_engineer_has_gone_silent():
     stub.voice = Voice(None)
     assert stub._board_call_now() is said
 
-    # Silent: the board says so, and keeps the lap it was on.
+    # Silent: the board says so BESIDE the call, never instead of it. When
+    # the voice has failed the board is the only channel left, and the first
+    # version of this deleted the call from it at exactly that moment.
     stub.voice = Voice("The engineer has said nothing for 3 calls: no device")
     shown = stub._board_call_now()
     assert shown is not said
-    assert "said nothing for 3 calls" in shown.text
-    assert shown.mark == MARK_UNCONFIRMED and shown.lap == 12
+    assert shown.text == "Box this lap.", "the call must survive the fault"
+    assert "said nothing for 3 calls" in (shown.note or "")
+    # And the mark is untouched: `MARK_UNCONFIRMED` says THE ADVICE may be
+    # wrong, and a broken speaker is not a claim about the advice (rule 13).
+    assert shown.mark == MARK_INSTRUCTION and shown.lap == 12
+    assert MARK_UNCONFIRMED not in (shown.mark,)
+
+    # Nothing said yet, and the voice already broken: the fault still shows.
+    stub._board_call = None
+    empty = stub._board_call_now()
+    assert empty is not None and "said nothing" in (empty.note or "")
 
 
 def test_a_health_check_that_raises_does_not_cost_him_the_board():

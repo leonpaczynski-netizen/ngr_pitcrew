@@ -3708,6 +3708,33 @@ class PitCrewController(QObject):
                                    exc_info=True)
             return None
 
+    def _circuit_now(self) -> str | None:
+        """This race's circuit, keyed as `rival_book` keys a stop's.
+
+        One expression on both sides of the comparison, or the scoping
+        silently matches nothing and every rival's burn quietly becomes
+        "nothing on file" - which reads as our burn and says so, but is a
+        worse answer than the one it replaced.
+        """
+        try:
+            # `circuit_key_for` is this file's own canonical spelling, and
+            # `rival_book._circuit_of` now goes through the same
+            # `circuit_key` - so the two sides of the comparison cannot drift.
+            event = self._event_record()
+            return circuit_key_for(event) if event else None
+        except Exception as exc:                            # noqa: BLE001
+            # **Said out loud, because the fallback is the defect.** None
+            # here means "scope to the car alone", which is the
+            # cross-circuit pooling this exists to stop - so a key that
+            # could not be built must not be indistinguishable from a race
+            # with no event row (rule 10: log the accepts, not only the
+            # refusals).
+            log("race").warning(
+                "this race's circuit key could not be built (%s: %s), so a "
+                "rival's burn falls back to every circuit pooled",
+                type(exc).__name__, exc)
+            return None
+
     def _event_record(self) -> dict | None:
         """The active event's row, read without `active_event`'s side effects
         (it re-points the shift table and the assists), for a per-lap read."""
@@ -4907,6 +4934,23 @@ class PitCrewController(QObject):
 
     def start_race(self) -> bool:
         """Arm the race. Nothing fires until the car actually goes green."""
+        # **The model loads while the rest of arming happens.** `warm()`
+        # returns immediately - it spawns a thread - so putting it just
+        # before the brief bought almost nothing: the brief queued a few
+        # milliseconds later and its first line still waited the ~1.7 s load.
+        # What that move DID fix was the second load, because `_load` now
+        # takes a lock; the wait needs real work in front of it, and the
+        # whole of arming is that work.
+        #
+        # **Warmed whatever George's setting**, because the pit button's
+        # confirmation speaks with him off (his call, 17 Sep) - so gating it
+        # on `speaks` made the one sentence a silenced engineer still says
+        # the only one guaranteed to be cold. It costs one daemon thread and
+        # a model that the first press would otherwise have paid for.
+        try:
+            self.voice.warm()
+        except Exception:                                   # noqa: BLE001
+            log("race").warning("the voice could not be warmed for this race")
         self._pit_loss_recorded = False
         # **A board showing a race that is over comes down before anything
         # can refuse** (critic pass 3 on row 1.8). Only `stop_race` and
@@ -5123,19 +5167,6 @@ class PitCrewController(QObject):
         # had raced PREVIOUSLY. Wrong is worse than absent here: he would act
         # on a title margin belonging to another championship.
         self._open_the_league(event)
-        # **Warmed BEFORE the first line is queued, not ninety lines later.**
-        # `warm()` was called further down the arming sequence, after the
-        # brief had already been handed to the voice thread - so the one line
-        # it exists to protect was the line that paid the cold load, and the
-        # warm then RACED the speaking thread for the same model. Measured:
-        # `PiperVoice.load` ran twice, on two threads, at the busiest moment
-        # of the night, one of them orphaned.
-        #
-        # **And warmed whatever George's setting**, because the pit button's
-        # confirmation speaks with him off (his call, 17 Sep) - so gating the
-        # warm on `speaks` made the one sentence a silenced engineer still
-        # says the only one guaranteed to be cold.
-        self.voice.warm()
         self._say_brief(event, plan, speaks=speaks)
 
         self.bridge.reset(race=True)
@@ -5160,6 +5191,16 @@ class PitCrewController(QObject):
         # as though it belongs to this one, and the last race's last call
         # would otherwise be the first thing on the screen at the lights.
         self._board_call = None
+        # **And the voice forgets last session's fault with it** (rule 11).
+        # `Voice` is built once and lives for the app, so an audio failure in
+        # practice put "No sound from the engineer for 3 calls" on the race
+        # board at the lights - and with George off almost nothing speaks, so
+        # nothing could clear it. The board's last call has been cleared here
+        # since it existed; the thing that annotates it was not.
+        try:
+            self.voice.new_session()
+        except Exception:                                   # noqa: BLE001
+            log("race").warning("the voice could not be reset for this race")
         self.bridge.take_corner_means()
         if table is None:
             self.race_screen.set_status(
@@ -5753,7 +5794,14 @@ class PitCrewController(QObject):
             # there is nothing on file for this car.
             burn, stops = rival_book.profile_of(
                 self.store, seen.driver).burn_per_lap_l(
-                    getattr(self.bridge, "_car_name", None))
+                    getattr(self.bridge, "_car_name", None),
+                    # **And to this circuit.** Litres a LAP is a property of
+                    # the lap: pooled across tracks it was a mean of two
+                    # different distances, printed on the tablet as "his
+                    # burn" - its most reassuring case, on its weakest
+                    # evidence. `None` scopes to the car alone, which is what
+                    # a race with no event row on file falls back to.
+                    self._circuit_now())
             if not stops:
                 burn = None
         except Exception:
@@ -7139,11 +7187,31 @@ class PitCrewController(QObject):
             pass
         if not health:
             return self._board_call
-        from pitcrew.race.calls import MARK_UNCONFIRMED
-        from pitcrew.ui.driver_view import BoardCall
+        try:
+            from dataclasses import replace
 
-        return BoardCall(text=health, mark=MARK_UNCONFIRMED,
-                         lap=getattr(self._board_call, "lap", None))
+            from pitcrew.ui.driver_view import BoardCall
+
+            # **Beside the call, never instead of it.** When the voice has
+            # failed the board is the only channel he has left, and the first
+            # version of this replaced "Box this lap. RS on. Fuel to 48
+            # litres." with the fault - deleting the call from the one
+            # surface still carrying it, at the exact moment that surface
+            # became the only one. `_LastCall`'s own note says the
+            # alternative to reading it there is acting on a guess.
+            #
+            # The mark is left alone too: `MARK_UNCONFIRMED` is the one ink
+            # on this board that says THE ADVICE may be wrong, and a broken
+            # speaker is not a claim about the advice (rule 13).
+            if self._board_call is not None:
+                return replace(self._board_call, note=health)
+            return BoardCall(text="", mark="", lap=None, note=health)
+        except Exception:                                   # noqa: BLE001
+            # The board costs nothing to keep and everything to lose: the
+            # construction is inside the guard for the same reason the health
+            # check is - `_driver_board_state` runs inside the board's own
+            # failure count, and a raise here can take the board down.
+            return self._board_call
 
     def _note_board_call(self, text: str, mark: str, lap: int | None) -> None:
         """Hold the last thing said, for the board's top line.

@@ -1670,8 +1670,13 @@ class Store:
         a judgement about the figure it is computing**, not about the storage:
         litres a lap is a property of the CAR, while whether a driver stops
         early is a habit of the driver. See `race/rival_book.py`.
+
+        **The circuit comes with the row too**, because litres a LAP is a
+        property of the lap: a Monza lap and a Bathurst lap are different
+        distances, and a mean over both describes no track anybody races on.
         """
-        sql = ("SELECT r.*, e.series AS series, e.car_name AS car_name "
+        sql = ("SELECT r.*, e.series AS series, e.car_name AS car_name, "
+               "e.track AS track, e.layout AS layout "
                "FROM rival_stops r "
                "LEFT JOIN sessions s ON s.id = r.session_id "
                "LEFT JOIN events e ON e.id = s.event_id")

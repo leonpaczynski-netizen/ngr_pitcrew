@@ -171,13 +171,26 @@ def test_a_full_queue_drops_colour_before_an_instruction(monkeypatch):
 
 
 def test_never_an_instruction_for_a_colour_line(monkeypatch):
+    """**Three DIFFERENT instructions, because three box calls are one.**
+
+    This filled the queue with "Box this lap.", "Box next lap." and "Box in 2
+    laps." - a state the queue no longer allows, since a newer stop call
+    replaces the one still queued (they answer one question). The claim under
+    test is about CLASS, not about the box: a colour line never costs an
+    instruction its place, whatever the instructions happen to be.
+    """
+    from pitcrew.race.calls import FUEL_SAVE, REJOIN
+
     monkeypatch.setattr(voice_module, "MAX_QUEUED", 3)
     q = _LineQueue()
-    for text in ("Box this lap.", "Box next lap.", "Box in 2 laps."):
-        q.offer(q.line(text, BOX_NOW))
+    filler = [("Box this lap.", BOX_NOW),
+              ("Save 0.7 litres a lap to make the flag.", FUEL_SAVE),
+              ("You come out behind him.", REJOIN)]
+    for text, kind in filler:
+        q.offer(q.line(text, kind))
     dropped = q.offer(q.line(DATA_LINE, DATA))
     assert [line.text for line, _ in dropped] == [DATA_LINE]
-    assert _texts(q) == ["Box this lap.", "Box next lap.", "Box in 2 laps."]
+    assert _texts(q) == [text for text, _ in filler]
 
 
 def test_inside_one_class_the_oldest_goes(monkeypatch):
@@ -370,3 +383,60 @@ def test_a_kept_line_does_not_stop_a_race_call_from_getting_in():
     assert order[0] == "Box this lap.", order[:3]
     assert len([o for o in queue.snapshot() if o.keep]) == 8
     assert class_of(BOX_NOW) < class_of(None)
+
+
+def test_a_newer_stop_call_replaces_the_one_still_queued():
+    """**The class with the strictest cost for being late had no replacement
+    policy**, while the cheapest - a gap, a place - had one.
+
+    A `BOX_SOON` still queued when `BOX_NOW` arrives is "Box in 2 laps." read
+    out immediately before "Box this lap.", and a box call is 10-12 s of
+    speech, so the pair is twenty seconds of stop talk whose first half
+    stopped being true before it finished saying so.
+    """
+    from pitcrew.engineer.voice import _LineQueue
+    from pitcrew.race.calls import BOX_NOW, BOX_SOON, STOP_BACK, STOPS_OFF
+
+    queue = _LineQueue()
+    queue.offer(queue.line("Box in 2 laps. Stop 1, on the plan.", BOX_SOON))
+    dropped = queue.offer(queue.line("Box this lap. RH on.", BOX_NOW))
+    assert [line.text for line, _ in dropped] == [
+        "Box in 2 laps. Stop 1, on the plan."]
+    assert [o.text for o in queue.snapshot()] == ["Box this lap. RH on."]
+
+    # The two that REVERSE a stop are the same question, so the newest wins.
+    for kind in (STOPS_OFF, STOP_BACK):
+        queue = _LineQueue()
+        queue.offer(queue.line("Box this lap.", BOX_NOW))
+        dropped = queue.offer(queue.line("The stop has moved.", kind))
+        assert [line.text for line, _ in dropped] == ["Box this lap."], kind
+
+
+def test_a_dropped_stop_call_tells_its_owner_it_was_never_said():
+    """`on_done(False)` is how a caller learns that queued was not heard - the
+    Bathurst defect (eight of ten stops never said) moved one layer down."""
+    from pitcrew.engineer.voice import _LineQueue
+    from pitcrew.race.calls import BOX_NOW, BOX_SOON
+
+    told = []
+    queue = _LineQueue()
+    queue.offer(queue.line("Box in 2 laps.", BOX_SOON,
+                           on_done=lambda played: told.append(played)))
+    dropped = queue.offer(queue.line("Box this lap.", BOX_NOW))
+    assert dropped, "the older call must be dropped"
+    for line, why in dropped:
+        if line.on_done is not None:
+            line.on_done(False)
+    assert told == [False]
+
+
+def test_an_unrelated_instruction_is_not_swallowed_by_a_stop_call():
+    """Coalescing is per question. A fuel call and a box call are two."""
+    from pitcrew.engineer.voice import _LineQueue
+    from pitcrew.race.calls import BOX_NOW, FUEL_SHORT
+
+    queue = _LineQueue()
+    queue.offer(queue.line("Save 0.7 litres a lap.", FUEL_SHORT))
+    dropped = queue.offer(queue.line("Box this lap.", BOX_NOW))
+    assert dropped == []
+    assert len(queue.snapshot()) == 2

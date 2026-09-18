@@ -452,6 +452,12 @@ class BoardCall:
     text: str
     mark: str
     lap: int | None = None
+    # **What is wrong with the CHANNEL, beside what was said on it** - not
+    # instead of it. `Voice.health()` fills this when the engineer has been
+    # silent, and that is exactly the moment the board is the only thing
+    # left: replacing the call's text with the fault deleted "Box this lap.
+    # RS on. Fuel to 48 litres." from the one surface still carrying it.
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2239,7 +2245,10 @@ class _LastCall(QWidget):
             self.mark.setText("")
             return
         where = f"L{call.lap}  " if call.lap is not None else ""
-        self._text = f"{where}{call.text}"
+        # The fault rides in FRONT of the call, because it changes what the
+        # line under it is worth - and the call itself is still there.
+        note = f"{call.note}  ·  " if call.note else ""
+        self._text = f"{where}{note}{call.text}"
         self.mark.setText(call.mark.upper())
         self._fit(self._text)
         # **Only "unconfirmed" gets an ink of its own.** It is the one mark

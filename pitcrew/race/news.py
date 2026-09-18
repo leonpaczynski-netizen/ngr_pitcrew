@@ -102,6 +102,7 @@ from pitcrew.diagnostics import log
 from pitcrew.race.calls import (GAPS, LOW, MEDIUM, PACE, STOPS_PICTURE,
                                 WATCHED, Call)
 from pitcrew.race.gaps import MIN_LAPS_FOR_TREND, GapTrend, trend_words
+from pitcrew.race.rival_calls import must_stop_again
 from pitcrew.race.rival_pace import RivalPace
 from pitcrew.race.tow import CLEAR_GAP_S, HELD_UP_GAP_S
 from pitcrew.telemetry.recorder import SAMPLE_HZ
@@ -296,13 +297,25 @@ def if_they_stop(required: int) -> str:
     return f"If they stop {required} times."
 
 
-def picture_words(position: int, line: tuple, required: int) -> tuple[str, str]:
-    """`(call, reason)` for the stop picture."""
+def picture_words(position: int, line: tuple, required: int, *,
+                  on_fuel: bool = False) -> tuple[str, str]:
+    """`(call, reason)` for the stop picture.
+
+    **The hedge has to describe the sum that was done** (rule 12). "If they
+    stop once." is the regulation assumption said out loud, and it stayed
+    word for word after the count started taking a car's own fuel into
+    account - so he heard "Effectively P1. If they stop once." about a place
+    computed with a rival stopping twice. The error only ever runs one way:
+    a car forced to stop again is a car that drops behind us, so the wrong
+    hedge always flatters.
+    """
     call = f"P{position} on the road."
     what, value = line
     if what == "still":
         return call, f"{value} ahead still to stop."
-    return call, f"Effectively P{value} after the stops. {if_they_stop(required)}"
+    hedge = ("Some on their own fuel." if on_fuel
+             else if_they_stop(required))
+    return call, f"Effectively P{value} after the stops. {hedge}"
 
 
 def watched_sentence(name: str, place: int, ours: int) -> str:
@@ -1020,8 +1033,45 @@ class RaceNews:
         fresh = board is not None and now - board.packet <= packets(
             BOARD_FRESH_S)
         if fresh:
+            # **The regulations are a floor, and his fuel can raise it.**
+            # This counted every rival as stopping exactly `required` times,
+            # while the tablet worked the same question out per car from the
+            # fuel - so the screen could read "PUNISHED 2 STOPS" while this
+            # placed him on the assumption he stopped once (rule 13).
+            # `rival_calls.must_stop_again` is now the one expression, and it
+            # can only ADD: a mandatory stop he has not taken is owed
+            # whatever his tank says, and a `None` - a bound exit figure, a
+            # shortfall he can lift for - is not a "no".
+            rivals = dict(getattr(state, "rivals", None) or {})
+            # Matched the way `lane.visits_by` matches, or the fuel half
+            # silently vanishes on a case difference while the regulation
+            # half still counts (`lane.py`: "Matched without case").
+            by_lower = {str(k).lower(): v for k, v in rivals.items()}
+            our_burn = getattr(state, "fuel_per_lap_l", None)
+            laps_total = getattr(state, "laps_total", None)
+            # **Not on an estimated distance.** In a timed race `laps_total`
+            # is a re-estimate the tablet hedges on screen, and one lap of
+            # error flips this verdict - for every car at once, because the
+            # error is common to all of them, which moves the place by
+            # several in one call.
+            firm_enough = not getattr(state, "laps_count_hedged", False)
+            moved: list[str] = []
+
             def owed(name):
-                return max(0, int(required) - len(lane.visits_by(name)))
+                by_rule = max(0, int(required) - len(lane.visits_by(name)))
+                rival = by_lower.get(str(name).lower())
+                if rival is None or not firm_enough:
+                    return by_rule
+                # `firm`: outside the reading error, and on HIS burn, not
+                # ours standing in for it. This figure moves a place he will
+                # race to, and it has nowhere to carry a "?" the way the row
+                # on the tablet does.
+                forced = must_stop_again(rival, our_burn,
+                                         laps_total=laps_total, firm=True)
+                if not forced:
+                    return by_rule
+                moved.append(str(name))
+                return max(by_rule, 1)
             ahead = [n for n, p in board.places.items() if p < position]
             behind = [n for n, p in board.places.items() if p > position]
             seen_ahead = len([p for p in board.visible if p < position])
@@ -1031,7 +1081,10 @@ class RaceNews:
             if ours_owed > 0 and still:
                 return (("still", len(still)), everyone_ahead,
                         f"{len(still)} of {len(ahead)} named cars ahead not "
-                        f"seen stopping")
+                        f"seen stopping"
+                        + (f", {len(moved)} of them on their own fuel"
+                           if moved else ""),
+                        bool(moved))
             place = (position
                      - sum(1 for n in ahead if owed(n) > ours_owed)
                      + sum(1 for n in behind if owed(n) < ours_owed))
@@ -1039,9 +1092,15 @@ class RaceNews:
             everyone = everyone_ahead and (
                 ours_owed == 0
                 or (field is not None and seen_behind >= field - position))
+            # **The basis names what actually produced the number** (rule
+            # 12). It said "each rival assumed to stop N times, from the
+            # regulations" whatever the fuel had done to the count.
             return (("effective", place), everyone,
                     f"board: {len(ahead)} named ahead, {len(behind)} behind, "
-                    f"we owe {ours_owed}")
+                    f"we owe {ours_owed}"
+                    + (f"; {len(moved)} car(s) owe another on their own fuel: "
+                       f"{', '.join(moved)}" if moved else ""),
+                    bool(moved))
         if ours_owed == 0:
             return None
         dropped = len(lane.dropped_behind()) + int(extra_dropped)
@@ -1050,7 +1109,7 @@ class RaceNews:
         return (("effective", position + dropped), False,
                 f"lane only: {dropped} car(s) that were ahead boxed and are "
                 f"behind on the road, we owe {ours_owed}; the board's picture "
-                f"of the rest is not in hand")
+                f"of the rest is not in hand", False)
 
     def picture_call(self, state, now: int, *, required: int | None,
                      required_source: str | None, planned: int,
@@ -1062,7 +1121,7 @@ class RaceNews:
                              planned=planned, extra_dropped=extra_dropped)
         if found is None:
             return None
-        line, everyone, basis = found
+        line, everyone, basis, on_fuel = found
         position = state.position
         with self._lock:
             said = self._said_picture
@@ -1078,7 +1137,8 @@ class RaceNews:
         if said is None and line == ("effective", position):
             return None                 # nothing changed by the stops yet
         confident = everyone and required_source == "the regulations"
-        call, reason = picture_words(position, line, int(required))
+        call, reason = picture_words(position, line, int(required),
+                                     on_fuel=on_fuel)
         made = Call(
             STOPS_PICTURE, state.lap, call, reason,
             MEDIUM if confident else LOW,
@@ -1086,8 +1146,8 @@ class RaceNews:
             # was told when it is heard, and what `call_outcome` holds it to.
             position_called=(position_called if position_called is not None
                              else position),
-            why_spoken=(f"{basis}; each rival assumed to stop {required} "
-                        f"time(s), from {required_source}"
+            why_spoken=(f"{basis}; rivals with no fuel read assumed to stop "
+                        f"{required} time(s), from {required_source}"
                         + ("" if everyone else
                            "; the board does not show every car counted")),
             tag=f"{STOPS_PICTURE}:{line[0]}:{line[1]}")

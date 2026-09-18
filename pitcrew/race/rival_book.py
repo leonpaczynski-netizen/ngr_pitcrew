@@ -77,6 +77,29 @@ def record(store, session_id, seen, *, laps_total=None,
         watched_s=seen.watched_s, partial=seen.partial)
 
 
+def _circuit_of(row) -> str | None:
+    """The stop's circuit, in the store's own vocabulary.
+
+    **`analysis.resolve.circuit_key`, not a key composed here.** The first
+    version built `f"{track} {layout}"`, which is a fourth spelling of a
+    thing this codebase already has one canonical spelling for - the same
+    key `grip_observations`, `tyre_models` and `controller.circuit_key_for`
+    are indexed on, and `store/db.py` says outright that no caller should
+    compose its own. It was self-consistent, so it worked; it was also
+    exactly the defect this change set out to remove, one layer down.
+
+    Joined onto the stop rather than looked up later, so a burn always knows
+    which lap it is litres of.
+    """
+    track = row.get("track") if hasattr(row, "get") else None
+    if not track:
+        return None
+    from pitcrew.analysis.resolve import circuit_key
+
+    return circuit_key(str(track),
+                       row.get("layout") if hasattr(row, "get") else None)
+
+
 def profile_of(store, driver: str, *,
                include_partial: bool = COUNT_PARTIAL_IN_RATES,
                series: str | None = None) -> Profile:
@@ -103,7 +126,8 @@ def profile_of(store, driver: str, *,
             assumed_start_l=(row["assumed_start_l"]
                              if row["assumed_start_l"] is not None
                              else FULL_TANK_L),
-            series=row.get("series"), car=row.get("car_name")))
+            series=row.get("series"), car=row.get("car_name"),
+            circuit=_circuit_of(row)))
     return profile
 
 
@@ -121,7 +145,8 @@ def everyone(store, *, series: str | None = None) -> list[Profile]:
 def briefing(store, *, ours_burn_l: float | None = None,
              drivers: list[str] | None = None,
              refuel_rate_lps: float | None = None,
-             series: str | None = None, car: str | None = None) -> list[str]:
+             series: str | None = None, car: str | None = None,
+             circuit: str | None = None) -> list[str]:
     """What is known about the field, in plain sentences, before a race.
 
     The pre-race read: who uses more fuel than us, who carries what he does not
@@ -138,9 +163,13 @@ def briefing(store, *, ours_burn_l: float | None = None,
     lines: list[str] = []
     for profile in sorted(profiles, key=lambda p: -p.stops_seen):
         # The field he is judged against excludes him.
+        # **The circuit travels with the car**, so the briefing quotes the
+        # figure the live race will quote. Unscoped here and scoped there,
+        # the two held different numbers under one name (rule 13).
         said = describe(profile, ours_burn_l=ours_burn_l,
                         field_fraction=field_without(profiles, profile.driver),
-                        refuel_rate_lps=refuel_rate_lps, car=car)
+                        refuel_rate_lps=refuel_rate_lps, car=car,
+                        circuit=circuit)
         if said:
             lines.extend(said)
     return lines

@@ -793,3 +793,100 @@ def test_an_unpaired_button_says_so_rather_than_looking_live():
     assert 'var locked = !key();' in source
     assert '"tap for the code"' in source
     assert "#buttons.locked" in source
+
+
+def test_the_screen_and_the_voice_answer_the_stop_question_the_same_way():
+    """**Two mechanisms were answering "will he stop again".**
+
+    The tablet worked it out per car from the fuel; `news.picture` assumed
+    every rival stops exactly as many times as the regulations require. So
+    the screen could read "PUNISHED 2 STOPS" while the voice, from the same
+    `RaceState`, placed him on the assumption he stopped once - two answers
+    to one question, one spoken and one a foot to the left (rule 13).
+    `must_stop_again` is the one expression now, and both read it.
+    """
+    from pitcrew.race.field import CANNOT_TELL, REACHES_FLAG, STOPS_AGAIN
+    from pitcrew.race.rival_calls import Rival, must_stop_again
+    from pitcrew.race.rivals import Stop
+
+    def car(out, bound=False, lap=10):
+        return Rival(name="R", stop=Stop(lap=lap, fuel_in_l=8.0,
+                                         fuel_out_l=out),
+                     pitted=True, exit_is_a_bound=bound)
+
+    cases = [
+        (car(50.0), STOPS_AGAIN, True),      # well short: he must come in
+        (car(60.0, lap=25), REACHES_FLAG, False),   # the tank covers it
+        (car(30.0, bound=True), CANNOT_TELL, None),  # a bound is not a figure
+    ]
+    for rival, expected_words, expected_verdict in cases:
+        got = predict(rival, stops_seen=1, our_burn_l=5.0, laps_total=30)
+        assert got.words == expected_words, (got.words, expected_words)
+        assert must_stop_again(rival, 5.0, laps_total=30) is expected_verdict
+
+
+def test_a_forced_stop_raises_the_regulation_count_and_never_lowers_it():
+    """A mandatory stop he has not taken is owed whatever his tank says, and
+    a `None` - a bound exit figure, a shortfall he can lift for - is not a
+    "no". The fuel can only ADD."""
+    from pitcrew.race.rival_calls import Rival, must_stop_again
+    from pitcrew.race.rivals import Stop
+
+    covers = Rival(name="R", stop=Stop(lap=25, fuel_in_l=8.0, fuel_out_l=60.0),
+                   pitted=True)
+    assert must_stop_again(covers, 5.0, laps_total=30) is False
+
+    def owed(by_rule, forced):
+        return max(by_rule, 1) if forced else by_rule
+
+    # He owes the regulations one; his tank covering the flag does not excuse
+    # it, because a mandatory stop is not a fuel question.
+    assert owed(1, must_stop_again(covers, 5.0, laps_total=30)) == 1
+    # He owes none by the rules, but the fuel forces one.
+    short = Rival(name="S", stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=50.0),
+                  pitted=True)
+    assert owed(0, must_stop_again(short, 5.0, laps_total=30)) == 1
+    # Cannot tell is not a yes.
+    bound = Rival(name="B", stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=30.0),
+                  pitted=True, exit_is_a_bound=True)
+    assert owed(0, must_stop_again(bound, 5.0, laps_total=30)) == 0
+
+
+def test_a_place_only_moves_on_evidence_it_could_be_marked_with():
+    """**The voice has nowhere to put a "?".**
+
+    The tablet draws this verdict with "?" and "our burn" beside it, so an
+    unconfirmed one is honestly shown. `news.picture` folds it into a spoken
+    PLACE, where those words cannot go - so it asks for `firm`: outside the
+    reading error, and on HIS burn rather than ours standing in for it.
+    """
+    from pitcrew.race.rival_calls import Rival, must_stop_again
+    from pitcrew.race.rivals import Stop
+
+    # A 2 L shortfall inside a +/-4 L reading error, on our burn.
+    thin = Rival(name="R", stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=3.0),
+                 pitted=True)
+    assert must_stop_again(thin, 1.0, laps_total=15) is True
+    assert must_stop_again(thin, 1.0, laps_total=15, firm=True) is None
+
+    # His own burn, well outside the error: firm enough to move a place.
+    his = Rival(name="H", stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=20.0),
+                pitted=True, burn_per_lap_l=7.0)
+    assert must_stop_again(his, 7.0, laps_total=30, firm=True) is True
+
+
+def test_the_spoken_hedge_describes_the_sum_that_was_done():
+    """Rule 12. "If they stop once." is the REGULATION assumption said out
+    loud, and it stayed word for word after the count began taking a car's
+    own fuel into account - so he heard "Effectively P1. If they stop once."
+    about a place computed with a rival stopping twice. The error only runs
+    one way: a car forced to stop again drops behind us, so the wrong hedge
+    always flatters."""
+    from pitcrew.race.news import picture_words
+
+    _, on_rules = picture_words(6, ("effective", 2), 1, on_fuel=False)
+    assert "If they stop once." in on_rules
+
+    _, on_fuel = picture_words(6, ("effective", 1), 1, on_fuel=True)
+    assert "If they stop once." not in on_fuel
+    assert "their own fuel" in on_fuel
