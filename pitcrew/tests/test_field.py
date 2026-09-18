@@ -169,7 +169,154 @@ def test_the_board_hands_its_gaps_over_only_while_the_tablet_reads():
     assert ctl._publish_tablet(Server(tablet=True)) is True
     server = Server(tablet=False)
     assert ctl._publish_tablet(server) is False
-    assert server.published == [("tablet", {"v": 1, "idle": True})]
+    (page, body), = server.published
+    assert page == "tablet" and body["idle"] is True
+    # The buttons read the app's state back even with no race to show.
+    assert body["controls"]["racing"] is False
+
+
+# ------------------------------------------------------------- the buttons
+
+def _press_server():
+    from pitcrew.ui.strip_server import StripServer
+
+    presses = []
+    server = StripServer(port=0, host="127.0.0.1")
+    server.press_key = "123456"
+    server.on_press = lambda action, value: presses.append((action, value))
+    assert server.start()
+    return server, server._httpd.server_address[1], presses
+
+
+def _post(port, body):
+    import json
+    import urllib.error
+    import urllib.request
+
+    data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/tablet/press", data=data, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as reply:
+            return reply.status
+    except urllib.error.HTTPError as refused:
+        return refused.code
+
+
+def test_a_press_is_acted_on_only_with_the_code_and_a_known_action():
+    server, port, presses = _press_server()
+    try:
+        assert _post(port, {"action": "pit", "value": True, "key": "999999"}) == 403
+        assert _post(port, {"action": "launch", "value": True, "key": "123456"}) == 400
+        assert _post(port, {"action": "fuel", "value": "max", "key": "123456"}) == 400
+        assert presses == []
+        assert _post(port, {"action": "fuel", "value": "save", "key": "123456"}) == 202
+        assert presses == [("fuel", "save")]
+    finally:
+        server.stop()
+
+
+def test_a_server_with_no_code_refuses_every_press():
+    server, port, presses = _press_server()
+    server.press_key = None
+    try:
+        assert _post(port, {"action": "george", "value": False, "key": ""}) == 403
+        assert presses == []
+    finally:
+        server.stop()
+
+
+def _coordinator():
+    """A 20-lap race armed on a one-stop plan and past the green - the way
+    `test_plan_targets` builds one."""
+    from pitcrew.race.coordinator import PlanContext, RaceCoordinator
+    from pitcrew.telemetry.session_state import EventKind, SessionEvent
+
+    plan = {"stops": 1, "stints": [
+        {"laps": 10, "compound": "RM", "start_lap": 1, "fuel_l": 50.0},
+        {"laps": 10, "compound": "RH", "start_lap": 11, "fuel_l": 50.0,
+         "tyres": True}]}
+    race = RaceCoordinator(plan, fuel_per_lap_l=5.0, fuel_capacity_l=100.0,
+                           mandatory_stops=0)
+    context = PlanContext(car="Huracan", track="Daytona", layout="Road",
+                          race_laps=20)
+    assert race.arm(context, context)
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    assert race.running
+    return race
+
+
+def test_a_held_column_moves_the_beep_and_nothing_moves_it_back():
+    """"Holds until I switch it back" - not the fuel, not the plan."""
+    race = _coordinator()
+    race.state.lap = 4
+    race.hold_fuel_column(True)
+    assert race.state.fuel_save_engaged is True
+    assert race.state.fuel_column_held is True
+    assert race.beep_drop_rpm(None) == C.FUEL_MODE_DROP_RPM
+    change = race.state.fuel_mode_change
+    assert change[1] is True and change[2] == C.FUEL_MODE_DRIVER
+    call = C._fuel_mode(race.state)
+    assert call.call == "Fuel-save beeps." and "Your call" in call.reason
+    # The crossing's fuel decision leaves his column alone.
+    race._decide_fuel_mode()
+    assert race.state.fuel_save_engaged is True
+    race.hold_fuel_column(False)
+    assert race.state.fuel_save_engaged is False and race.beep_drop_rpm(None) is None
+
+
+def test_declaring_the_stop_makes_this_lap_the_in_lap_and_can_be_taken_back():
+    race = _coordinator()
+    race.state.lap = 5                       # driving lap 6
+    assert race.state.laps_to_stop() == 5
+    assert race.declare_box_this_lap() is True
+    assert race.state.laps_to_stop() == 1    # this lap is the in-lap
+    assert race.state.box_declared_lap == 6
+    # The stint after it carries the compound the plan had for the next one.
+    assert race.state.next_compound == "RH"
+    assert race.cancel_declared_box() is True
+    assert race.state.laps_to_stop() == 5 and race.state.box_declared_lap is None
+
+
+def test_a_stop_cannot_be_declared_from_the_box():
+    race = _coordinator()
+    race.state.in_pit = True
+    assert race.declare_box_this_lap() is False
+
+
+def test_the_controller_routes_each_press_and_confirms_a_stop_out_loud():
+    """The confirmation is said with George OFF - his call."""
+    from pitcrew.controller import PitCrewController
+
+    class Voice:
+        def __init__(self):
+            self.said = []
+
+        def say(self, line):
+            self.said.append(line)
+
+    ctl = PitCrewController.__new__(PitCrewController)
+    ctl.race = _coordinator()
+    ctl.race.state.lap = 5
+    ctl.race.state.fuel_per_lap_l = 5.0
+    ctl.race.state.fuel_capacity_l = 100.0
+    ctl.voice = Voice()
+    ctl._engineer_speaks = True
+    ctl._fuel_mode_on_beep = None
+    ctl._follow_fuel_mode = lambda: None
+    ctl._on_tablet_press("george", False)
+    assert ctl._engineer_speaks is False
+    ctl._on_tablet_press("fuel", "save")
+    assert ctl.race.state.fuel_column_held is True
+    ctl._on_tablet_press("pit", True)
+    assert ctl.race.state.laps_to_stop() == 1
+    assert ctl.voice.said and ctl.voice.said[-1].startswith("Boxing this lap.")
+    ctl._on_tablet_press("pit", False)
+    assert ctl.voice.said[-1] == "Stop cancelled. Back on the plan."
+    controls = ctl._tablet_controls()
+    assert controls == {"george": False, "fuel": "save", "fuel_held": True,
+                        "pit": None, "racing": True}
 
 
 # ------------------------------------------------------------- the words

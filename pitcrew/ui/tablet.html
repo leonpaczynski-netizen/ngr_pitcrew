@@ -34,8 +34,42 @@
   body { padding: env(safe-area-inset-top) env(safe-area-inset-right)
                   env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
-  #app { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
-    padding: 1.6vh 2vw; row-gap: 1.2vh; }
+  /* The table, and the buttons down the edge nearest the wheel. */
+  #shell { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 19vw; }
+  #app { height: 100%; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+    padding: 1.6vh 1.4vw 1.6vh 2vw; row-gap: 1.2vh; }
+
+  /* ---- the buttons: big, far apart, and each shows what the APP has */
+  #buttons { display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 2vh;
+    padding: 1.6vh 1.6vw 1.6vh 0; }
+  .btn { position: relative; overflow: hidden; isolation: isolate; border: 3px solid var(--edge);
+    border-radius: 1.4vh; background: var(--panel); color: var(--ink); touch-action: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: var(--label); font-weight: 700; text-transform: uppercase; text-align: center;
+    padding: 1vh 0.6vw; -webkit-user-select: none; user-select: none; cursor: pointer; }
+  .btn .what { font-size: 3vh; letter-spacing: 0.1em; color: var(--dim); }
+  .btn .now { font-size: 6.4vh; line-height: 1.05; letter-spacing: 0.04em; }
+  .btn .hint { font-size: 2.4vh; color: var(--dim); min-height: 1.1em; }
+  .btn.on { border-color: var(--good); } .btn.on .now { color: var(--good); }
+  .btn.off { border-color: var(--over); } .btn.off .now { color: var(--over); }
+  .btn.save { border-color: var(--near); } .btn.save .now { color: var(--near); }
+  .btn.armed { background: var(--near); border-color: var(--near); }
+  .btn.armed .now, .btn.armed .what, .btn.armed .hint { color: var(--ground); }
+  .btn.dead { opacity: 0.45; }
+  .btn.pressed { transform: scale(0.97); }
+  /* The hold: a fill that rises while the finger stays down. */
+  .btn .fill { position: absolute; inset: 0; z-index: -1; background: rgba(242, 194, 48, 0.35);
+    transform-origin: bottom; transform: scaleY(0); }
+
+  #pair { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 3vh; background: rgba(12, 11, 9, 0.96); z-index: 5;
+    font-family: var(--label); font-weight: 700; text-align: center; }
+  #pair.on { display: flex; }
+  #pair .t { font-size: 5vh; } #pair .s { font-size: 3vh; color: var(--dim); }
+  #pair input { font-family: var(--number); font-size: 7vh; width: 12ch; text-align: center;
+    background: var(--panel); color: var(--ink); border: 3px solid var(--edge); border-radius: 1vh; }
+  #pair button { font-family: var(--label); font-weight: 700; font-size: 4vh; padding: 1vh 4vw;
+    background: var(--near); color: var(--ground); border: 0; border-radius: 1vh; }
 
   #head { display: flex; align-items: baseline; gap: 3vw; font-family: var(--label);
     font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -89,6 +123,7 @@
 </style>
 </head>
 <body>
+<div id="shell">
 <div id="app">
   <div id="head">
     <div class="big" id="lap"></div>
@@ -98,6 +133,14 @@
   <div id="table"></div>
   <div id="foot"></div>
 </div>
+<div id="buttons">
+  <div class="btn" id="b-george"><div class="what">George</div><div class="now">--</div><div class="hint">tap</div></div>
+  <div class="btn" id="b-fuel"><div class="what">Beep</div><div class="now">--</div><div class="hint">tap</div></div>
+  <div class="btn" id="b-pit"><div class="fill"></div><div class="what">Pit</div><div class="now">This lap</div><div class="hint">hold</div></div>
+</div>
+</div>
+<div id="pair"><div class="t">Buttons code</div><div class="s">shown in Pit Crew settings, beside the tablet address</div>
+  <input id="pair-code" inputmode="numeric" maxlength="12" autocomplete="off"><button id="pair-go">Use this code</button></div>
 <div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
 <script>
 (function () {
@@ -168,7 +211,7 @@
     var timer = setTimeout(function () { if (ctl) ctl.abort(); }, TIMEOUT_MS);
     fetch("/tablet/state", { cache: "no-store", signal: ctl ? ctl.signal : undefined })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (d) { lastOk = performance.now(); render(d); })
+      .then(function (d) { lastOk = performance.now(); render(d); drawButtons(d && d.controls); })
       .catch(function () { /* the watchdog says so */ })
       .then(function () { clearTimeout(timer); setTimeout(poll, POLL_MS); });
   }
@@ -182,6 +225,82 @@
     ask();
     document.addEventListener("visibilitychange", function () { if (!document.hidden) ask(); });
   }
+  // ---------------------------------------------------------------- buttons
+  // **A press asks for a setting, never a flip**, so a retry or a double tap
+  // cannot undo itself; and a button only ever shows what the app sent back.
+  var HOLD_MS = 500, controls = null;
+  function key() { try { return localStorage.getItem("pitcrew-tablet-key") || ""; } catch (e) { return ""; } }
+  function setKey(k) { try { localStorage.setItem("pitcrew-tablet-key", k); } catch (e) {} }
+  function pair(on) { $("pair").className = on ? "on" : ""; if (on) $("pair-code").focus(); }
+  $("pair-go").addEventListener("click", function () {
+    var k = $("pair-code").value.trim();
+    if (k) { setKey(k); pair(false); }
+  });
+
+  function press(action, value) {
+    if (!key()) { pair(true); return; }
+    fetch("/tablet/press", { method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: action, value: value, key: key() }) })
+      .then(function (r) { if (r.status === 403) pair(true); })
+      .catch(function () { /* the button does not change, which says so */ });
+  }
+
+  function drawButtons(c) {
+    controls = c || null;
+    var racing = !!(c && c.racing);
+    var g = $("b-george"), f = $("b-fuel"), p = $("b-pit");
+    g.classList.toggle("on", !!(c && c.george)); g.classList.toggle("off", !!(c && !c.george));
+    g.querySelector(".now").textContent = c ? (c.george ? "On" : "Off") : "--";
+    g.querySelector(".hint").textContent = c && !c.george ? "beep stays on" : "tap";
+    f.classList.toggle("save", !!(c && c.fuel === "save"));
+    f.classList.toggle("dead", !racing);
+    f.querySelector(".now").textContent = c && c.fuel ? (c.fuel === "save" ? "Save" : "Full") : "--";
+    f.querySelector(".hint").textContent = c && c.fuel_held ? "held - tap to swap" : "tap to hold";
+    p.classList.toggle("armed", !!(c && c.pit));
+    p.classList.toggle("dead", !racing);
+    p.querySelector(".now").textContent = c && c.pit ? "Boxing " + c.pit : "This lap";
+    p.querySelector(".hint").textContent = c && c.pit ? "hold to cancel" : "hold";
+  }
+
+  function tap(el, fn) {
+    el.addEventListener("pointerdown", function (e) { e.preventDefault(); el.classList.add("pressed"); });
+    el.addEventListener("pointerup", function () { el.classList.remove("pressed"); fn(); });
+    el.addEventListener("pointercancel", function () { el.classList.remove("pressed"); });
+    el.addEventListener("pointerleave", function () { el.classList.remove("pressed"); });
+  }
+  tap($("b-george"), function () { if (controls) press("george", !controls.george); });
+  tap($("b-fuel"), function () {
+    if (controls && controls.racing) press("fuel", controls.fuel === "save" ? "full" : "save");
+  });
+
+  // **The pit button needs a hold**, so a brush of the hand on the way to the
+  // wheel cannot declare a stop. George says it back either way.
+  (function () {
+    var el = $("b-pit"), fill = el.querySelector(".fill"), timer = null, anim = null;
+    function stop() {
+      clearTimeout(timer); timer = null;
+      if (anim) { anim.cancel(); anim = null; }
+      el.classList.remove("pressed");
+    }
+    el.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+      if (!controls || !controls.racing) return;
+      el.classList.add("pressed");
+      if (fill.animate) {
+        anim = fill.animate([{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }],
+                            { duration: HOLD_MS, easing: "linear", fill: "forwards" });
+      }
+      timer = setTimeout(function () {
+        timer = null;
+        press("pit", !controls.pit);
+        stop();
+      }, HOLD_MS);
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach(function (ev) { el.addEventListener(ev, stop); });
+  })();
+
+  if (!key()) pair(true);
   poll();
 })();
 </script>

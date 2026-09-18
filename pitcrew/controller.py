@@ -271,6 +271,9 @@ class TelemetryBridge(QObject):
     stream_seen = pyqtSignal(object)             # first packet's fixed facts
     parse_failed = pyqtSignal()
     ptt_answered = pyqtSignal(str, str)      # heard, said - off the hook thread
+    # A press on the tablet's buttons, off the strip server's request thread:
+    # `(action, value)`. Queued, so the race is only ever touched on Qt's.
+    tablet_pressed = pyqtSignal(str, object)
     # The practice debrief, built off the Qt thread because it decodes
     # every lap's telemetry - 2.5 s on the active event, 9.4 s on the
     # largest. Emitted queued so the speaking happens on the Qt thread.
@@ -1120,6 +1123,7 @@ class PitCrewController(QObject):
         self.bridge.stream_seen.connect(self._on_stream_seen)
         self.bridge.parse_failed.connect(self._on_parse_failed)
         self.bridge.ptt_answered.connect(self._show_ptt_answer)
+        self.bridge.tablet_pressed.connect(self._on_tablet_press)
         self.bridge.button_probed.connect(self._note_button_probe)
         self.bridge.session_event.connect(self._on_race_event)
         self.bridge.incident_seen.connect(self._on_incident_seen)
@@ -2260,7 +2264,8 @@ class PitCrewController(QObject):
         # on the settings screen, which is why `speech_backend` and the rest
         # never needed this.
         new = replace(new,
-                      driver_board_geometry=self.settings.driver_board_geometry)
+                      driver_board_geometry=self.settings.driver_board_geometry,
+                      tablet_key=self.settings.tablet_key)
         try:
             settings.save(self.store, new)
         except ValueError as exc:
@@ -6458,6 +6463,11 @@ class PitCrewController(QObject):
         from pitcrew.ui.strip_server import StripServer
 
         server = StripServer(port=self.settings.strip_port)
+        server.press_key = self._tablet_key()
+        # **Only an emit crosses the thread.** The handler runs on the
+        # server's request thread; the race, the voice and the widgets are
+        # touched on Qt's, through the queued signal.
+        server.on_press = self.bridge.tablet_pressed.emit
         if server.start():
             self.strip = server
             self._strip_idle()
@@ -6516,6 +6526,95 @@ class PitCrewController(QObject):
             self._strip_failures += 1
             return None
 
+    # -- the tablet's buttons (17 Sep 2026) -----------------------------------
+
+    def _tablet_key(self) -> str:
+        """The code a press must carry: made once, kept in the settings."""
+        if not self.settings.tablet_key:
+            import secrets
+
+            self.settings.tablet_key = f"{100000 + secrets.randbelow(900000)}"
+            try:
+                settings.save(self.store, self.settings)
+            except Exception as exc:                        # noqa: BLE001
+                log("ui").warning("the tablet code could not be kept: %s", exc)
+        return self.settings.tablet_key
+
+    def set_engineer_speaks(self, speaks: bool) -> None:
+        """George on or off, from anywhere, with the Race screen agreeing.
+
+        **Only the voice.** The shift beep is its own instrument and keeps
+        sounding (his words: "George off, shift beep stays on"), and every
+        call is still worked out, logged and put on the board.
+        """
+        speaks = bool(speaks)
+        self._engineer_speaks = speaks
+        screen = self.__dict__.get("race_screen")
+        picker = getattr(screen, "engineer_picker", None)
+        if picker is not None:
+            index = picker.findData(speaks)
+            if index >= 0:
+                picker.setCurrentIndex(index)
+        log("race").info("the engineer %s, from the tablet",
+                         "speaks" if speaks else "is silent")
+
+    def _on_tablet_press(self, action: str, value) -> None:
+        """Qt thread: one press, already keyed. Logged whether or not it acts
+        (rule 10) - a press that did nothing is the first thing to look for."""
+        race = self.race
+        log("race").info("tablet press: %s = %r", action, value)
+        if action == "george":
+            self.set_engineer_speaks(bool(value))
+            return
+        if race is None or not race.running:
+            log("race").info("tablet press %s ignored: no race running", action)
+            return
+        if action == "fuel":
+            race.hold_fuel_column(value == "save")
+            self._follow_fuel_mode()
+            return
+        if action == "pit":
+            if value:
+                if race.declare_box_this_lap():
+                    self._say_declared_box()
+            elif race.cancel_declared_box():
+                # **Said whatever George's setting**, like the declaration:
+                # a stop he took back has to be heard as taken back.
+                self.voice.say("Stop cancelled. Back on the plan.")
+
+    def _say_declared_box(self) -> None:
+        """"Boxing this lap, fuel to 62." - **spoken even with George off.**
+
+        His call (17 Sep 2026): off means no chatter, but a stop he declared
+        from a button is worth one sentence, because a mis-press found in the
+        lane costs the race. The fill is `fuel_target_l`, the one expression
+        the box call and the refuel watch use.
+        """
+        from pitcrew.race.calls import fuel_target_l
+
+        target = fuel_target_l(self.race.state)
+        capacity = self.race.state.fuel_capacity_l
+        if target is not None and capacity:
+            target = min(target, capacity)
+        said = ("Boxing this lap." if target is None or target <= 0
+                else f"Boxing this lap. Fuel to {target:.0f}.")
+        self.voice.say(said)
+        log("race").info("declared stop confirmed: %s", said)
+
+    def _tablet_controls(self) -> dict:
+        """What the buttons read back - the app's state, never the page's."""
+        race = self.race
+        state = race.state if race is not None else None
+        engaged = getattr(state, "fuel_save_engaged", None)
+        declared = getattr(state, "box_declared_lap", None)
+        return {
+            "george": bool(self.__dict__.get("_engineer_speaks", True)),
+            "fuel": None if engaged is None else ("save" if engaged else "full"),
+            "fuel_held": getattr(state, "fuel_column_held", None) is not None,
+            "pit": None if declared is None else f"L{declared}",
+            "racing": bool(race is not None and race.running),
+        }
+
     def _publish_tablet(self, strip) -> bool:
         """Hand the tablet the field; True while a tablet is reading it.
 
@@ -6543,8 +6642,9 @@ class PitCrewController(QObject):
         try:
             racing = race is not None and (race.running or bool(
                 getattr(race.state, "finished", False)))
-            strip.publish(tablet.compose(race.field_view() if racing else None),
-                          TABLET)
+            body = tablet.compose(race.field_view() if racing else None)
+            body["controls"] = self._tablet_controls()
+            strip.publish(body, TABLET)
             self._tablet_failures = 0
         except Exception as exc:                            # noqa: BLE001
             failures = self.__dict__.get("_tablet_failures", 0)

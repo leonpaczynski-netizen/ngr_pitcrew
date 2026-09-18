@@ -52,7 +52,7 @@ def prediction_words(prediction) -> tuple[str, str, str]:
                 f"reaches the flag{burn}", "reaches")
     if prediction.words == SHORT_SAVES:
         return (f"{_stops(prediction.total_stops)}{maybe}",
-                f"short - saving to the flag{burn}", "reaches")
+                f"short, saves it{burn}", "reaches")
     if prediction.words == NO_STOP_SEEN:
         return "NO STOP YET", "", "plain"
     return "CAN'T TELL", prediction.why or "", "plain"

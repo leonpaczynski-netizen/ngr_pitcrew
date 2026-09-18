@@ -5,9 +5,17 @@ four times a second by a phone on the same Wi-Fi - nothing here justifies a
 web framework, and a dependency the app does not already carry is one more
 thing to install on the rig.
 
-**It observes and advises, like the rest of the app** (CLAUDE.md §8): the
-page has no controls and there is no route that accepts anything. `GET /`
-is the page, `GET /strip/state` is the numbers, everything else is 404.
+**It observes and advises, like the rest of the app** (CLAUDE.md §8), and it
+never reaches GT7. `GET /` is the phone's page, `GET /tablet` the tablet's,
+`GET /<page>/state` their numbers.
+
+**One route accepts anything, and only for the app** (17 Sep 2026): the
+tablet's buttons POST to `/tablet/press` - George on or off, the beep's fuel
+column, "I'm pitting this lap". A press must carry `press_key` (the code in
+the settings, compared in constant time), names one of `PRESS_ACTIONS`, is
+capped in size, and is handed to `on_press` - which only emits a queued Qt
+signal. Everything else is 404, and a press the app is not listening for is
+503 rather than a silent success.
 
 **Staleness is decided here, where the clock is.** The phone cannot compare
 its clock with the PC's, so every answer carries `age_s` - how long since the
@@ -45,6 +53,10 @@ STALE_AFTER_S = 1.5
 # How recently a page must have polled to count as reading. The page polls
 # every 250 ms; two seconds of silence is a phone that has gone.
 LIVE_WITHIN_S = 2.0
+# What a press may ask for, and the largest body one may send.
+PRESS_ACTIONS = {"george": (True, False), "fuel": ("save", "full"),
+                 "pit": (True, False)}
+PRESS_MAX_BYTES = 512
 
 PAGE = Path(__file__).with_name("strip.html")
 # The pages served: the routes that draw each, its file, and where its numbers
@@ -121,6 +133,10 @@ class StripServer:
                               "client": None} for name in PAGES}
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        # The tablet's buttons: the code a press must carry, and what is
+        # called with `(action, value)` once it does. None refuses them all.
+        self.press_key: str | None = None
+        self.on_press = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -171,6 +187,15 @@ class StripServer:
                     self._send(200, "application/json", body)
                 else:
                     self._send(404, "text/plain; charset=utf-8", b"not here")
+
+            def do_POST(self):                          # noqa: N802
+                path = self.path.split("?", 1)[0]
+                if path != "/tablet/press":
+                    self._send(404, "text/plain; charset=utf-8", b"not here")
+                    return
+                code, answer = server._press(self.headers, self.rfile)
+                self._send(code, "application/json",
+                           json.dumps(answer).encode("utf-8"))
 
             def _send(self, code, kind, body):
                 self.send_response(code)
@@ -231,6 +256,40 @@ class StripServer:
     @property
     def last_client(self) -> str | None:
         return self.last_client_of(STRIP)
+
+    def _press(self, headers, stream) -> tuple[int, dict]:
+        """One press from the tablet: `(status, answer)`. Request thread.
+
+        Refused, and logged, for a wrong code, an unknown action or value, or
+        a body too big to be a press. **Accepted is not done**: the answer says
+        the press was handed over, and the page reads the result back off the
+        state it polls, so a press that changed nothing is visible as such.
+        """
+        import hmac
+
+        try:
+            length = int(headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 < length <= PRESS_MAX_BYTES:
+            return 400, {"ok": False, "why": "not a press"}
+        try:
+            press = json.loads(stream.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return 400, {"ok": False, "why": "not a press"}
+        if not isinstance(press, dict):
+            return 400, {"ok": False, "why": "not a press"}
+        key = self.press_key
+        if not key or not hmac.compare_digest(str(press.get("key", "")), key):
+            log("ui").warning("tablet press refused: wrong code")
+            return 403, {"ok": False, "why": "wrong code"}
+        action, value = press.get("action"), press.get("value")
+        if action not in PRESS_ACTIONS or value not in PRESS_ACTIONS[action]:
+            return 400, {"ok": False, "why": "unknown press"}
+        if self.on_press is None:
+            return 503, {"ok": False, "why": "the app is not taking presses"}
+        self.on_press(action, value)
+        return 202, {"ok": True}
 
     def _answer(self, page: str, client: str) -> bytes:
         now = self._clock()

@@ -831,9 +831,11 @@ class SettingsScreen(QWidget):
         self.strip_enabled.setChecked(settings.strip_enabled)
         from pitcrew.ui.strip_server import lan_address
         base = f"http://{lan_address() or 'this-pc'}:{settings.strip_port}"
+        code = (f" · buttons code {settings.tablet_key}" if settings.tablet_key
+                else " · buttons code made on next start")
         self.strip_address.setText(
             f"On the phone, open  {base}/\n"
-            f"On the tablet, open  {base}/tablet")
+            f"On the tablet, open  {base}/tablet{code}")
         self._sync_feed_source()
         self.game_version.setText(settings.game_version)
         for combo, chosen in ((self.audio_output, settings.audio_output_device),

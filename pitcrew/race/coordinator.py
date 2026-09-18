@@ -22,6 +22,7 @@ from pitcrew.race.calls import (
     BOX_IGNORED_LAPS,
     BOX_NOW,
     FUEL_MODE_DROP_RPM,
+    FUEL_MODE_DRIVER,
     FUEL_MODE_PLANNED,
     FUEL_REACHES,
     FUEL_SAVE,
@@ -568,7 +569,8 @@ class RaceCoordinator:
         # from the start of the stint** - the lights, the out-lap, before any
         # crossing has had a chance to decide. A stint with no word (a re-plan
         # adopted mid-race writes none) keeps what was being run.
-        if self.state.fuel_save_engaged is not None and "fuel_save" in stint:
+        if (self.state.fuel_save_engaged is not None and "fuel_save" in stint
+                and self.state.fuel_column_held is None):
             planned = stint.get("fuel_save") is True
             self.state.fuel_save_planned = planned
             if planned != self.state.fuel_save_engaged:
@@ -2610,6 +2612,9 @@ class RaceCoordinator:
         """Move the beep's column at a crossing, when the fuel says so."""
         if self.state.fuel_save_engaged is None:
             return
+        if self.state.fuel_column_held is not None:
+            # His column. The fuel may say otherwise; he has decided.
+            return
         save, full = self.mode_burns_l()
         engaged, why, litres = fuel_mode_wanted(
             self.state, save_burn_l=save, full_burn_l=full)
@@ -3136,6 +3141,71 @@ class RaceCoordinator:
         self._saving_answered = True
         return Call(SAVING_RESPONSE, self.state.lap, response.call(),
                     "", confidence=HIGH if response.measurable else LOW)
+
+    # ------------------------------------------------ the tablet's buttons
+
+    def hold_fuel_column(self, saving: bool) -> None:
+        """He chose the beep's column. Held until he chooses again.
+
+        **The three writes that move a column, together** - the field, the
+        burn population it is priced from, and the change George says - or
+        the burn lags a lap behind the beep. The fills and the re-planner read
+        `expect`'s burn for the column, so from here they are priced on his.
+        """
+        saving = bool(saving)
+        state = self.state
+        state.fuel_column_held = saving
+        if state.fuel_save_engaged != saving:
+            state.fuel_save_engaged = saving
+            self.expect.set_column(saving)
+            state.fuel_mode_change = (state.lap, saving, FUEL_MODE_DRIVER, None)
+        log("race").info("the driver holds the beep on its %s points, from "
+                         "lap %s", "fuel-saving" if saving else "full-revs",
+                         state.lap)
+
+    def declare_box_this_lap(self) -> bool:
+        """He is pitting this lap. False where there is no lap to box on.
+
+        **Through `adopt`, so every reader follows without knowing**: a stint
+        of one lap - this one - and the rest of the race after it. The board's
+        laps to the stop, the fill (sized for a stop NOW, `fuel_target_l`),
+        the rejoin and the re-planner all read the plan's shape. The run
+        after this stop is one stint to the flag until the fuel or the
+        re-planner says it needs another; the compound the plan had for the
+        next stint is carried by position.
+        """
+        state = self.state
+        if not self.running or state.in_pit or state.finished:
+            return False
+        if state.box_declared_lap == state.lap + 1:
+            return True
+        self._before_declared = ([dict(s) for s in self._stints],
+                                 state.stint_index)
+        remaining = state.laps_remaining()
+        if remaining is not None and remaining > 1:
+            self.adopt((1, remaining - 1))
+        else:
+            state.stint_ends_on_lap = state.lap + 1
+        state.box_declared_lap = state.lap + 1
+        log("race").info("the driver declared lap %s his in-lap (%s laps "
+                         "left)", state.lap + 1, remaining)
+        return True
+
+    def cancel_declared_box(self) -> bool:
+        """Take a declared stop back, on the lap it was declared for only."""
+        state = self.state
+        saved = getattr(self, "_before_declared", None)
+        if (state.box_declared_lap is None or saved is None or state.in_pit
+                or state.box_declared_lap != state.lap + 1):
+            return False
+        stints, index = saved
+        self._stints = stints
+        self._apply_stint(index)
+        state.box_declared_lap = None
+        self._before_declared = None
+        log("race").info("the driver took back the declared stop on lap %s",
+                         state.lap + 1)
+        return True
 
     def stops_planned(self) -> int:
         """Stops still in the plan from here, for the re-plan comparison."""

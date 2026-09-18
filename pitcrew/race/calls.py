@@ -100,6 +100,9 @@ FUEL_LONG = "fuel-long"
 FUEL_MODE = "fuel-mode"
 # Why the beep moved, as `RaceState.fuel_mode_change` carries it.
 FUEL_MODE_PLANNED = "planned"
+# **He pressed it** (the tablet, 17 Sep 2026). A column the driver chose is
+# held until he chooses again, and nothing the fuel or the plan says moves it.
+FUEL_MODE_DRIVER = "driver"
 FUEL_MODE_FULL_REACHES = "full-reaches"
 FUEL_MODE_FULL_SHORT = "full-short"
 # **The scalar drop a fuel-save beep engages at: the beep's own
@@ -1072,6 +1075,17 @@ class RaceState:
     fuel_save_engaged: bool | None = None
     # What the approved plan asked of the stint being run.
     fuel_save_planned: bool = False
+    # **The column the driver is holding**, True saving and False full revs,
+    # or None where he has not chosen. His choice outranks the plan and the
+    # fuel arithmetic alike (CLAUDE.md §4.1): once set, `_decide_fuel_mode`
+    # and a stint's declared column both leave the beep where he put it, and
+    # every fill and re-plan prices his column's burn. "Holds until I switch
+    # it back and all future plans are done with that in mind" (17 Sep 2026).
+    fuel_column_held: bool | None = None
+    # The in-lap he declared from the tablet ("I'm pitting this lap"), or
+    # None. Held so the tablet can show it and a second press can take it
+    # back on the same lap.
+    box_declared_lap: int | None = None
     # `(lap, engaged, why, litres)` of the last switch not yet said, or None.
     # Set by the coordinator, cleared by `record` when the call is made.
     fuel_mode_change: tuple | None = None
@@ -3344,6 +3358,12 @@ def _fuel_mode(state: RaceState) -> Call | None:
         return None
     frame = fuel_reference(state)
     tag = f"{FUEL_MODE}:{lap}:{'save' if engaged else 'full'}"
+    if why == FUEL_MODE_DRIVER:
+        return Call(FUEL_MODE, state.lap,
+                    "Fuel-save beeps." if engaged else "Full beeps.",
+                    "Your call - held until you change it.", tag=tag,
+                    short_shift_drop_rpm=(FUEL_MODE_DROP_RPM if engaged
+                                          else None))
     if not engaged and why == FUEL_MODE_PLANNED:
         return Call(FUEL_MODE, state.lap, "Full beeps.",
                     "As planned for this stint.", tag=tag,
@@ -4818,6 +4838,8 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     state.fuel_save_said = False
     # The stint's burn average is about one tank, fuel stop or tyre stop.
     state.stint_burns = []
+    # A declared stop is taken once it is taken.
+    state.box_declared_lap = None
     # The temp occasions speak freshly each stint either way; the history
     # only survives when the rubber does - a new set's baseline is its own,
     # and it starts cold, which is exactly what the cold check should see.

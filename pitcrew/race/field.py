@@ -106,7 +106,7 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
     burn_of = "his" if rival.burn_per_lap_l else "ours"
     if rival.exit_is_a_bound:
         return Prediction(stops_seen=stops_seen, words=CANNOT_TELL,
-                          why="his exit fuel is only a lower bound",
+                          why="exit fuel a lower bound",
                           burn_of=burn_of)
     if laps_total is None:
         return Prediction(stops_seen=stops_seen, words=CANNOT_TELL,
