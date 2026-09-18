@@ -770,6 +770,12 @@ def _call_states() -> list:
         _state(lap=6, laps_since_stop=6, wear_per_lap=0.15,
                tyre_change_unconfirmed=True),
     ]
+    # **The beep changing column, which the tablet's middle button does.**
+    # `_fuel_mode` only fires on a state carrying `fuel_mode_change`, and no
+    # state here ever set one, so every sentence in that family - including
+    # "Fuel-save beeps. Your call - held until you change it.", the answer to
+    # a button he presses mid-race - was live-synthesised.
+    states += _fuel_mode_states()
     states += [_state(lap=6, laps_total=16, fuel_l=onboard,
                       fuel_per_lap_l=1.0)
                for onboard in _fuel_short_onboard()]
@@ -783,6 +789,138 @@ def _call_states() -> list:
         states += [_state(lap=6, stint_ends_on_lap=8, stint_index=stint),
                    _state(lap=6, stint_ends_on_lap=9, stint_index=stint)]
     return states
+
+
+def _fuel_mode_states() -> list:
+    """One state per shape the beep-column call takes, both columns.
+
+    The `why` is not inferred from the state - it is carried on
+    `fuel_mode_change`, exactly as the coordinator sets it - so each branch of
+    `_fuel_mode` is reached directly. The two frames matter: the reason names
+    the flag or the stop (rule 13), and they are different clips.
+    """
+    from pitcrew.race.calls import (
+        FUEL_MODE_DRIVER,
+        FUEL_MODE_FULL_REACHES,
+        FUEL_MODE_FULL_SHORT,
+        FUEL_MODE_PLANNED,
+        TO_THE_FLAG,
+        TO_THE_STOP,
+    )
+
+    def _change(change, **fields):
+        state = _state(**fields)
+        state.fuel_mode_change = change
+        state.last_said_lap = 0
+        return state
+
+    # To the flag: no stop ahead. To the stop: one is, and the fuel is ample
+    # so the shortfall calls do not outrank the one being rendered.
+    flag = dict(lap=18, laps_total=20, fuel_l=40.0, fuel_per_lap_l=3.0,
+                fuel_capacity_l=100.0)
+    stop = dict(lap=6, laps_total=40, stint_ends_on_lap=14, fuel_l=60.0,
+                fuel_per_lap_l=3.0, fuel_capacity_l=100.0)
+    # The reference the litres are a gap TO, carried on the change as the
+    # coordinator carries it - the two are different clips (rule 13).
+    states = [
+        # His own press, either way - the tablet button's answer. Neither
+        # names a reference, so neither carries one.
+        _change((6, True, FUEL_MODE_DRIVER, None, None), lap=6),
+        _change((6, False, FUEL_MODE_DRIVER, None, None), lap=6),
+        # The plan moving it, either way.
+        _change((6, False, FUEL_MODE_PLANNED, None, None), lap=6),
+        _change((6, True, FUEL_MODE_PLANNED, None, None), lap=6),
+    ]
+    for fields, frame in ((flag, TO_THE_FLAG), (stop, TO_THE_STOP)):
+        states += [
+            # Full revs reach, with the spare litres and without.
+            _change((fields["lap"], False, FUEL_MODE_FULL_REACHES, 12.4,
+                     frame), **fields),
+            _change((fields["lap"], False, FUEL_MODE_FULL_REACHES, None,
+                     frame), **fields),
+            # And full revs falling short, which puts the beep back to saving.
+            _change((fields["lap"], True, FUEL_MODE_FULL_SHORT, 6.2, frame),
+                    **fields),
+        ]
+    return states
+
+
+def lever_lines() -> tuple[str, ...]:
+    """What the tablet's three buttons say back, from the code that says it.
+
+    **Built by calling the real builders in `race.calls`**, like every other
+    family here - the wording stays where it is written and an edit to it
+    fails the coverage test rather than quietly falling through to synthesis.
+
+    The pit button's confirmation is spoken *even with George off* (his call,
+    17 Sep 2026), so it is the one sentence in the app that a silenced
+    engineer still says. A pause in front of it is the worst place in the race
+    for one: he is deciding whether he is in the lane this lap.
+    """
+    from pitcrew.race.calls import (
+        BOX_CANCELLED,
+        BOX_TOO_LATE,
+        column_held_said,
+        declared_box_said,
+    )
+
+    lines = [BOX_CANCELLED, BOX_TOO_LATE]
+    for saving in (True, False):
+        for why in _no_target_whys():
+            lines.extend(segments_for(column_held_said(saving, why)) or ())
+    # The fill is the box call's own sentence, already rendered by
+    # `box_fuel_lines()`; what is new is the opener in front of it, so the
+    # decomposition is asked for one whole example of each.
+    for instruction in _box_instructions():
+        lines.extend(segments_for(declared_box_said(instruction)) or ())
+    return tuple(dict.fromkeys(lines))
+
+
+def _no_target_whys() -> list[str]:
+    """Every reason a held column can have no lap target, from `for_lap`."""
+    from pitcrew.strategy.targets import CompoundTarget, PlanTargets
+
+    whys: list[str] = []
+    for code in [c.code for c in ALL_COMPOUNDS]:
+        # No entry at all, and an entry with no time in one column.
+        tables = (
+            PlanTargets({}, fuel_weight=0.0, burn_full_l=None,
+                        burn_save_l=None),
+            PlanTargets({code: CompoundTarget(
+                lap_time_ms=None, save_lap_time_ms=None, wear_per_lap=None,
+                reference_load_l=None, lap_source=None, save_source=None)},
+                fuel_weight=0.0, burn_full_l=None, burn_save_l=None))
+        for table in tables:
+            for saving in (True, False):
+                target = table.for_lap(compound=code, saving=saving,
+                                       lap_on_set=1, fuel_at_start_l=None)
+                if target.why_no_lap:
+                    whys.append(target.why_no_lap)
+        # The compound not yet read off the HUD, and the coordinator's own
+        # fallback for a target that names no reason.
+    table = PlanTargets({}, fuel_weight=0.0, burn_full_l=None,
+                        burn_save_l=None)
+    unknown = table.for_lap(compound=None, saving=True, lap_on_set=1,
+                            fuel_at_start_l=None)
+    if unknown.why_no_lap:
+        whys.append(unknown.why_no_lap)
+    whys.append("no target for that column")
+    return list(dict.fromkeys(whys))
+
+
+def _box_instructions() -> list[str]:
+    """One box-now instruction of each shape, for the declared-stop opener."""
+    from pitcrew.race.calls import _fuel_instruction
+
+    shapes = [
+        _state(lap=6, stint_ends_on_lap=7),                   # on the plan
+        _state(lap=6, laps_total=20, stint_ends_on_lap=7,     # to a figure
+               fuel_per_lap_l=3.4, fuel_capacity_l=100.0),
+        _state(lap=6, laps_total=99, stint_ends_on_lap=7,     # to the brim
+               fuel_per_lap_l=9.0, fuel_capacity_l=100.0),
+    ]
+    said = [_fuel_instruction(state) for state in shapes]
+    return [line for line in dict.fromkeys(said) if line]
 
 
 def _compound_words() -> list[str]:
@@ -822,6 +960,14 @@ def spoken_openers() -> tuple[str, ...]:
         # ... and the run-in's hedged pair (Suzuka, 13 Sep 2026).
         "One or two to go.",
         "Too close to call on the clock.",
+        # race/calls.py - the beep's two columns, named. Openers rather than
+        # whole lines because each is followed by a different reason: the
+        # column is one clip and the reason another, not one clip per pair.
+        "Fuel-save beeps.",
+        "Full beeps.",
+        # race/calls.py - the tablet's pit button, spoken even with George
+        # off, so the fill behind it peels into the box call's own clips.
+        "Boxing this lap.",
         # race/calls.py - the answer to a save that is no longer needed.
         "Fuel reaches the flag now.",
         "On current burn.",
@@ -1292,6 +1438,7 @@ def clips() -> tuple[str, ...]:
         *race_call_lines(),
         *spoken_openers(),
         *volunteered_lines(),
+        *lever_lines(),
     ]
     return tuple(dict.fromkeys(everything))
 

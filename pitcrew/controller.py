@@ -6616,10 +6616,17 @@ class PitCrewController(QObject):
             self.bridge.set_short_shift(race.beep_drop_rpm(None))
             self._fuel_mode_on_beep = race.state.fuel_save_engaged
             if why and self._engineer_speaks:
-                # Said once: the plan has no figures for the column he chose,
-                # so the lap verdict goes quiet rather than lying.
-                self.voice.say(f"Fuel-save beeps. {why.capitalize()}, so no "
-                               f"lap target while you hold it.")
+                # **Said on every press that holds a column with no targets**,
+                # not once: `column_without_targets` answers a press that
+                # changed nothing too. That is deliberate - a button pressed
+                # again is a question asked again - but it is not "said once".
+                # The plan has no figures for the column he chose, so the lap
+                # verdict goes quiet rather than lying. The
+                # sentence is `calls.column_held_said` so the pack can render
+                # it - and so it names the column he actually pressed.
+                from pitcrew.race.calls import column_held_said
+
+                self.voice.say(column_held_said(saving, why))
             return
         if action == "pit":
             if value:
@@ -6628,14 +6635,17 @@ class PitCrewController(QObject):
             elif race.cancel_declared_box():
                 # **Said whatever George's setting**, like the declaration:
                 # a stop he took back has to be heard as taken back.
-                self.voice.say("Stop cancelled. Back on the plan.")
+                from pitcrew.race.calls import BOX_CANCELLED
+
+                self.voice.say(BOX_CANCELLED)
             else:
                 # **A press that changed nothing says so.** Past the lap it
                 # was declared for there is nothing to take back, and a
                 # button that answers a hold with silence is one he presses
                 # again at the worst moment.
-                self.voice.say("Too late to take that back. You are on the "
-                               "in-lap.")
+                from pitcrew.race.calls import BOX_TOO_LATE
+
+                self.voice.say(BOX_TOO_LATE)
 
     def _say_declared_box(self) -> None:
         """"Boxing this lap, fuel to 62." - **spoken even with George off.**
@@ -6645,7 +6655,7 @@ class PitCrewController(QObject):
         lane costs the race. The fill is `fuel_target_l`, the one expression
         the box call and the refuel watch use.
         """
-        from pitcrew.race.calls import _fuel_instruction
+        from pitcrew.race.calls import _fuel_instruction, declared_box_said
 
         # **The box call's own sentence, not a second copy of it.**
         # `fuel_target_l`'s docstring says why: a second copy is how the
@@ -6654,7 +6664,7 @@ class PitCrewController(QObject):
         # Still 15 laps short." into a confident "Fuel to 100", on the one
         # sentence he gets when he declares a stop with George switched off.
         instruction = _fuel_instruction(self.race.state)
-        said = f"Boxing this lap. {instruction}".strip()
+        said = declared_box_said(instruction)
         self.voice.say(said)
         log("race").info("declared stop confirmed: %s", said)
 

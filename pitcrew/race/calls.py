@@ -3298,8 +3298,17 @@ def _fuel(state: RaceState) -> Call | None:
 
 def fuel_mode_wanted(state: RaceState, *, save_burn_l: float | None,
                      full_burn_l: float | None
-                     ) -> tuple[bool | None, str | None, float | None]:
-    """`(fuel-save beep?, why it moved, litres behind the decision)`.
+                     ) -> tuple[bool | None, str | None, float | None,
+                                str | None]:
+    """`(fuel-save beep?, why it moved, litres behind it, what it is TO)`.
+
+    **The frame is returned, not looked up again when the call is spoken.**
+    The litres are a gap to the stop or a gap to the flag - figures ten laps
+    apart - and `_fuel_mode` may speak a lap after the decision, across the
+    one crossing where `fuel_frame` changes its answer (the box lap goes by,
+    or the stop is retired). Naming the reference at speak time labelled that
+    lap's number with this lap's word. Rule 13, and `fuel_frame` documents the
+    flip; the frame travels with the figure it belongs to.
 
     **The one decision about which column the beep plays**, made at a
     crossing by the coordinator and applied to the beep by the controller
@@ -3329,28 +3338,28 @@ def fuel_mode_wanted(state: RaceState, *, save_burn_l: float | None,
     """
     engaged = state.fuel_save_engaged
     if engaged is None:
-        return None, None, None
+        return None, None, None, None
     if state.in_pit or state.finished or state.fuel_l is None:
-        return engaged, None, None
+        return engaged, None, None, None
     target, frame = fuel_frame(state)
     if target is None or target <= 0:
-        return engaged, None, None
+        return engaged, None, None, None
     if frame == TO_THE_STOP and state.fuel_save_planned:
         if engaged:
-            return True, None, None
-        return True, FUEL_MODE_PLANNED, None
+            return True, None, None, frame
+        return True, FUEL_MODE_PLANNED, None, frame
     if not full_burn_l or full_burn_l <= 0:
-        return engaged, None, None
+        return engaged, None, None, frame
     margin_l, _why = fuel_margin_l(target, full_burn_l, sd_l=state.fuel_sd_l,
                                    timed=state.race_minutes is not None,
                                    lap_count_firm=state.laps_estimate_firm)
     need_full = target * full_burn_l + (margin_l or 0.0)
     spare = state.fuel_l - need_full
     if engaged and spare >= FUEL_MODE_HYSTERESIS_L:
-        return False, FUEL_MODE_FULL_REACHES, spare
+        return False, FUEL_MODE_FULL_REACHES, spare, frame
     if not engaged and spare < 0:
-        return True, FUEL_MODE_FULL_SHORT, -spare
-    return engaged, None, None
+        return True, FUEL_MODE_FULL_SHORT, -spare, frame
+    return engaged, None, None, frame
 
 
 def _fuel_mode(state: RaceState) -> Call | None:
@@ -3360,10 +3369,14 @@ def _fuel_mode(state: RaceState) -> Call | None:
     change = state.fuel_mode_change
     if change is None or state.in_pit or state.finished:
         return None
-    lap, engaged, why, litres = change
+    lap, engaged, why, litres, frame = change
     if state.lap - lap > 1:
         return None
-    frame = fuel_reference(state)
+    # **The frame the litres were measured against**, carried from the
+    # decision. A change filed without one - nothing in the app files one now
+    # - is named as it is found, which is the old behaviour and no worse.
+    if frame is None:
+        frame = fuel_reference(state)
     tag = f"{FUEL_MODE}:{lap}:{'save' if engaged else 'full'}"
     if why == FUEL_MODE_DRIVER:
         return Call(FUEL_MODE, state.lap,
@@ -3389,6 +3402,44 @@ def _fuel_mode(state: RaceState) -> Call | None:
         reason = "As planned for this stint."
     return Call(FUEL_MODE, state.lap, "Fuel-save beeps.", reason, tag=tag,
                 short_shift_drop_rpm=FUEL_MODE_DROP_RPM)
+
+
+# --------------------------------------------------------------------------
+# What the tablet's levers say.
+#
+# **Here rather than in the controller, so the pack can enumerate them.**
+# `phrase_manifest` builds its list by calling the code that speaks, never by
+# copying a string out of it - a line the manifest cannot reach is rendered
+# nowhere and is live-synthesised at racing speed, heard as a pause before the
+# engineer. The three button sentences were written inline in
+# `controller._on_tablet_press` and were the only speech in the app the
+# manifest had no way to obtain. Moving them costs nothing and makes them
+# renderable; leaving them inline made every press a live synthesis.
+
+BOX_CANCELLED = "Stop cancelled. Back on the plan."
+BOX_TOO_LATE = "Too late to take that back. You are on the in-lap."
+
+
+def column_held_said(saving: bool, why: str) -> str:
+    """He holds a column the plan has no lap time for, said once.
+
+    **The column named is the one he pressed.** It was "Fuel-save beeps."
+    whichever button he hit, so pressing Full answered with the name of the
+    column he had just left - rule 13, on the one sentence whose whole job is
+    to say which column he is now in.
+
+    **`capitalize()` is not how you capitalise a sentence** - it lowercases
+    everything after the first letter, and the reason carries a compound code:
+    "no RH target on the plan" came out as "No rh target", which Piper reads
+    as a word rather than two letters.
+    """
+    return (f"{'Fuel-save' if saving else 'Full'} beeps. "
+            f"{why[:1].upper()}{why[1:]}, so no lap target while you hold it.")
+
+
+def declared_box_said(instruction: str) -> str:
+    """"Boxing this lap. Fuel to 62." - the fill is the box call's own."""
+    return f"Boxing this lap. {instruction}".strip()
 
 
 def _past_half_stint(state: RaceState) -> bool:

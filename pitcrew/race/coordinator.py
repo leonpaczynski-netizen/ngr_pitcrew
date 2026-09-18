@@ -37,6 +37,7 @@ from pitcrew.race.calls import (
     RaceState,
     fuel_in_hand,
     fuel_mode_wanted,
+    fuel_reference,
     _crossing_the_line,
     clear_stint,
     next_call,
@@ -582,7 +583,8 @@ class RaceCoordinator:
                 self.state.fuel_save_engaged = planned
                 self.expect.set_column(planned)
                 self.state.fuel_mode_change = (
-                    self.state.lap, planned, FUEL_MODE_PLANNED, None)
+                    self.state.lap, planned, FUEL_MODE_PLANNED, None,
+                    fuel_reference(self.state))
                 log("race").info("stint %d: beep on its %s points, as the "
                                  "plan declares", index,
                                  "fuel-saving" if planned else "full-revs")
@@ -2647,7 +2649,7 @@ class RaceCoordinator:
             # His column. The fuel may say otherwise; he has decided.
             return
         save, full = self.mode_burns_l()
-        engaged, why, litres = fuel_mode_wanted(
+        engaged, why, litres, frame = fuel_mode_wanted(
             self.state, save_burn_l=save, full_burn_l=full)
         if why is None or engaged is None:
             return
@@ -2656,7 +2658,8 @@ class RaceCoordinator:
         # the new column's, and the old column's rate is 30% away from what
         # they will burn - see `ExpectationTracker.set_column`.
         self.expect.set_column(engaged)
-        self.state.fuel_mode_change = (self.state.lap, engaged, why, litres)
+        self.state.fuel_mode_change = (self.state.lap, engaged, why, litres,
+                                       frame)
         log("race").info(
             "lap %s: beep to its %s points (%s%s) - burns save %s, full %s "
             "L/lap, %.1f L aboard", self.state.lap,
@@ -3203,7 +3206,8 @@ class RaceCoordinator:
         if state.fuel_save_engaged != saving:
             state.fuel_save_engaged = saving
             self.expect.set_column(saving)
-            state.fuel_mode_change = (state.lap, saving, FUEL_MODE_DRIVER, None)
+            state.fuel_mode_change = (state.lap, saving, FUEL_MODE_DRIVER,
+                                      None, fuel_reference(state))
         log("race").info("the driver holds the beep on its %s points, from "
                          "lap %s", "fuel-saving" if saving else "full-revs",
                          state.lap)

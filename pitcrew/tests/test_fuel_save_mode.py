@@ -28,6 +28,7 @@ from pitcrew.race.calls import (
     STATUS,
     Call,
     fuel_mode_wanted,
+    TO_THE_FLAG,
     next_call,
 )
 from pitcrew.race.coordinator import RaceCoordinator
@@ -155,19 +156,19 @@ def last_stint(**over) -> RaceState:
 
 def test_surplus_to_the_flag_at_full_revs_releases_the_beep():
     # 10 laps x 5.4 at full revs = 54 L; 60 L aboard.
-    engaged, why, _litres = fuel_mode_wanted(
+    engaged, why, _litres, _frame = fuel_mode_wanted(
         last_stint(), save_burn_l=5.0, full_burn_l=5.4)
     assert engaged is False and why == FUEL_MODE_FULL_REACHES
 
 
 def test_not_enough_for_full_revs_holds_the_saving_beep():
-    engaged, why, _litres = fuel_mode_wanted(
+    engaged, why, _litres, _frame = fuel_mode_wanted(
         last_stint(fuel_l=55.0), save_burn_l=5.25, full_burn_l=6.75)
     assert engaged is True and why is None
 
 
 def test_running_full_and_falling_short_puts_the_saving_beep_back():
-    engaged, why, litres = fuel_mode_wanted(
+    engaged, why, litres, _frame = fuel_mode_wanted(
         last_stint(fuel_save_engaged=False, fuel_l=60.0),
         save_burn_l=5.25, full_burn_l=6.75)
     assert engaged is True and why == FUEL_MODE_FULL_SHORT
@@ -184,14 +185,14 @@ def test_it_does_not_flap_on_a_litre_either_side():
                               lap_count_firm=True)
     reaches_exactly = 10 * 6.0 + margin
     inside = reaches_exactly + FUEL_MODE_HYSTERESIS_L / 2
-    engaged, _why, _ = fuel_mode_wanted(last_stint(fuel_l=inside),
-                                        save_burn_l=5.0, full_burn_l=6.0)
+    engaged, _why, _, _ = fuel_mode_wanted(last_stint(fuel_l=inside),
+                                           save_burn_l=5.0, full_burn_l=6.0)
     assert engaged is True
-    engaged, _why, _ = fuel_mode_wanted(
+    engaged, _why, _, _ = fuel_mode_wanted(
         last_stint(fuel_l=inside, fuel_save_engaged=False),
         save_burn_l=5.0, full_burn_l=6.0)
     assert engaged is False
-    engaged, why, _ = fuel_mode_wanted(
+    engaged, why, _, _ = fuel_mode_wanted(
         last_stint(fuel_l=reaches_exactly + FUEL_MODE_HYSTERESIS_L + 0.01),
         save_burn_l=5.0, full_burn_l=6.0)
     assert engaged is False and why == FUEL_MODE_FULL_REACHES
@@ -205,21 +206,21 @@ def test_a_planned_saving_stint_to_a_stop_holds_the_saving_beep():
                       stint_index=0, stint_ends_on_lap=12,
                       further_stop_planned=False,
                       fuel_save_engaged=True, fuel_save_planned=True)
-    engaged, why, _ = fuel_mode_wanted(state, save_burn_l=5.25,
-                                       full_burn_l=6.75)
+    engaged, why, _, _ = fuel_mode_wanted(state, save_burn_l=5.25,
+                                          full_burn_l=6.75)
     assert engaged is True and why is None
 
 
 def test_an_unmanaged_race_is_left_exactly_as_it_was():
     state = last_stint(fuel_save_engaged=None)
     assert fuel_mode_wanted(state, save_burn_l=5.0,
-                            full_burn_l=5.4) == (None, None, None)
+                            full_burn_l=5.4) == (None, None, None, None)
 
 
 def test_with_no_full_burn_to_price_it_the_saving_beep_stays():
     """Never assume: the switch to full revs needs a full-revs burn."""
-    engaged, why, _ = fuel_mode_wanted(last_stint(), save_burn_l=5.0,
-                                       full_burn_l=None)
+    engaged, why, _, _ = fuel_mode_wanted(last_stint(), save_burn_l=5.0,
+                                          full_burn_l=None)
     assert engaged is True and why is None
 
 
@@ -324,7 +325,8 @@ def test_the_ceiling_is_the_flag():
 
 def test_the_mode_change_is_said_once_and_moves_the_beep():
     state = last_stint(fuel_save_engaged=False, fuel_save_planned=True)
-    state.fuel_mode_change = (19, False, FUEL_MODE_FULL_REACHES, 6.0)
+    state.fuel_mode_change = (19, False, FUEL_MODE_FULL_REACHES, 6.0,
+                              TO_THE_FLAG)
     call = next_call(state)
     assert call is not None and call.kind == FUEL_MODE
     assert call.short_shift_drop_rpm is None
@@ -336,7 +338,7 @@ def test_the_mode_change_is_said_once_and_moves_the_beep():
 
 def test_the_planned_saving_beep_is_named_as_planned():
     state = last_stint(lap=13, fuel_l=95.0)
-    state.fuel_mode_change = (13, True, FUEL_MODE_PLANNED, None)
+    state.fuel_mode_change = (13, True, FUEL_MODE_PLANNED, None, None)
     call = next_call(state)
     assert call is not None and call.kind == FUEL_MODE
     assert call.short_shift_drop_rpm == FUEL_MODE_DROP_RPM
@@ -385,3 +387,44 @@ def test_the_ceiling_takes_the_spare_lap_out_of_the_sardegna_fill():
     firm, loose = fuel_target_l(in_box(True)), fuel_target_l(in_box(False))
     assert 83.0 < firm < 85.5            # 15 x 5.519 = 82.8, plus ~1.6 L
     assert loose - firm > 3.5            # the whole lap he told us not to carry
+
+
+def test_the_reference_travels_with_the_litres_it_belongs_to():
+    """Rule 13: the shortfall is a gap to the stop or a gap to the flag.
+
+    `_fuel_mode` may speak a lap after the decision, and `fuel_frame` changes
+    its answer across exactly one crossing - the box lap going by. Naming the
+    reference at speak time labelled the stop's figure with the flag's word:
+    two numbers ten laps apart, said in the same four words, which is the race
+    this rule was written from.
+    """
+    from pitcrew.race.calls import TO_THE_STOP, _fuel_mode
+
+    # Decided on lap 11, when a stop was still to come. It is spoken on 12,
+    # by which time the stop has gone and the frame would read to-the-flag.
+    state = RaceState(lap=12, laps_total=30, fuel_l=40.0, fuel_per_lap_l=3.0,
+                      fuel_capacity_l=100.0, fuel_save_engaged=True)
+    state.fuel_mode_change = (11, True, FUEL_MODE_FULL_SHORT, 6.2, TO_THE_STOP)
+    call = _fuel_mode(state)
+    assert call is not None
+    assert "short to the stop." in call.spoken(), call.spoken()
+    assert "to the flag" not in call.spoken()
+
+    # And a change filed with no frame is still named, as it was before.
+    state.fuel_mode_change = (11, True, FUEL_MODE_FULL_SHORT, 6.2, None)
+    spoken = _fuel_mode(state).spoken()
+    assert "short to the" in spoken
+
+
+def test_every_writer_files_a_five_part_change():
+    """A four-part tuple from any writer is an unpack error at racing speed."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "race" / "coordinator.py").read_text(encoding="utf-8")
+    filed = re.findall(r"fuel_mode_change = \((.*?)\)\n", source, re.S)
+    assert filed, "no writer found - has the field been renamed?"
+    for tuple_text in filed:
+        parts = tuple_text.count(",") + 1
+        assert parts == 5, f"filed {parts} parts, not 5: {tuple_text!r}"

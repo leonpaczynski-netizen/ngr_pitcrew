@@ -371,8 +371,22 @@ def test_the_pack_stays_within_budget():
     split on its number. Splitting the tenths too ("Pace" | "two tenths" |
     "slow.") was weighed and refused: it saves about seven clips and puts two
     joins in a four-word line said every lap. 830 leaves 23.
+
+    **Raised to 880 on 18 Sep 2026, for the tablet's three levers.** The
+    ceiling stood at 830 with 807 used, and not one of the buttons' sentences
+    was declared: `_fuel_mode` needs a state carrying `fuel_mode_change` and
+    none existed, so the whole beep-column family was live-synthesised, and
+    the pit button's three sentences were inline in the controller where the
+    manifest could not reach them. `_fuel_mode_states` and `lever_lines` cost
+    40 between them - the column call in both columns and both frames (rule
+    13 makes "short to the flag" and "short to the stop" two clips), and the
+    held-column reason once per compound, which is where most of it goes.
+    Three new openers pay part of it back: "Fuel-save beeps.", "Full beeps."
+    and "Boxing this lap." peel, so the reason behind each is one clip rather
+    than one clip per pair, and the declared stop's fill is the box call's
+    own already-rendered figures. 880 leaves 33.
     """
-    assert len(manifest.clips()) < 830
+    assert len(manifest.clips()) < 880
 
 
 def test_the_same_line_always_names_the_same_file():

@@ -168,3 +168,88 @@ def test_the_rendered_pack_holds_every_declared_clip(folder):
               if line in set(manifest.clips())
               and not (folder / entry["file"]).is_file()]
     assert not absent, f"{len(absent)} clips named but not on disk: {absent[:3]}"
+
+
+def test_every_tablet_button_says_something_the_pack_can_play():
+    """The three levers speak, and speech that misses the pack is a pause.
+
+    **Measured 18 Sep 2026, the day after the buttons were built: not one of
+    their sentences was in the manifest.** `_fuel_mode` only fires on a state
+    carrying `fuel_mode_change` and no manifest state set one, so the whole
+    beep-column family was live-synthesised; the pit button's three sentences
+    were written inline in the controller, where the manifest - which builds
+    its list by calling the code that speaks - could not reach them at all.
+
+    The pit confirmation is the one that matters most: it is spoken even with
+    George switched off (his call, 17 Sep), so it is the only sentence a
+    silenced engineer still says, and it arrives while he is deciding whether
+    he is in the lane this lap.
+    """
+    from pitcrew.race.calls import (
+        BOX_CANCELLED,
+        BOX_TOO_LATE,
+        column_held_said,
+        declared_box_said,
+    )
+
+    declared = set(manifest.clips())
+
+    def playable(line):
+        segments = manifest.segments_for(line)
+        assert segments, f"{line!r} decomposes to nothing"
+        return [clip for clip in segments if clip not in declared]
+
+    for line in (BOX_CANCELLED, BOX_TOO_LATE):
+        assert not playable(line), f"{line!r} is not in the pack"
+
+    # The beep column, either way, and the reason naming a compound.
+    for saving in (True, False):
+        line = column_held_said(saving, "no RH target on the plan")
+        assert line.startswith("Fuel-save beeps." if saving else "Full beeps.")
+        assert not playable(line), f"{line!r} is not in the pack"
+
+    # And the declared stop, whose fill is the box call's own sentence.
+    for instruction in manifest._box_instructions():
+        line = declared_box_said(instruction)
+        assert not playable(line), f"{line!r} is not in the pack"
+
+
+def test_the_held_column_reason_keeps_the_compound_in_capitals():
+    """`capitalize()` lowercases the rest of the string, and the reason
+    carries a compound code - "No rh target on the plan" is read as a word."""
+    from pitcrew.race.calls import column_held_said
+
+    said = column_held_said(True, "no RH target on the plan")
+    assert "No RH target on the plan" in said
+
+
+def test_the_beep_column_call_is_declared_for_every_shape():
+    """Each branch of `_fuel_mode` reaches the pack, both frames.
+
+    Rule 13 lives in the reason: "short to the flag" and "short to the stop"
+    are figures ten laps apart, so they are two clips, not one with a suffix.
+    """
+    from pitcrew.race.calls import next_call
+
+    declared = set(manifest.clips())
+    spoken, missing = 0, []
+    for state in manifest._fuel_mode_states():
+        call = next_call(state)
+        if call is None or call.kind != "fuel-mode":
+            continue
+        spoken += 1
+        for clip in manifest.segments_for(call.spoken()) or ():
+            if clip not in declared:
+                missing.append((call.spoken(), clip))
+    # **Every state, not a floor.** `race_call_lines` silently skips a state
+    # whose call is outranked, so a floor lets two shapes stop producing
+    # clips with this test and the missing list both still green.
+    assert spoken == len(manifest._fuel_mode_states()), (
+        f"only {spoken} of {len(manifest._fuel_mode_states())} fuel-mode "
+        f"states still reach the call - one is being outranked")
+    assert not missing, missing[:4]
+    frames = {call.spoken() for call in
+              (next_call(s) for s in manifest._fuel_mode_states())
+              if call is not None and call.kind == "fuel-mode"}
+    assert any("to the flag." in line for line in frames)
+    assert any("to the stop." in line for line in frames)
