@@ -241,7 +241,7 @@ build — and two one-off scripts, which is what `draw_bathurst_map` and
 `extract_reference` are): `audition_voices`, `render_voice_pack`, `render_voice_ab`,
 `render_kokoro_audition`, `stt_bench`, `haptics_bench`, `rig_levels`,
 `rig_endpoint_rate`, `rig_knock_sequence`, `rig_knock_curve`, `rig_perception`,
-`wind_bench`, `wind_replay`, `wind_sweep`, `install_shortcut`,
+`wind_bench`, `wind_replay`, `wind_sweep`, `install_shortcut`, `make_icons`,
 `probe_extended_packet`, `gap_bank`, `board_bench`, `build_race_fixture`,
 `build_hud_alert_fixture`, `extract_race_comms_fixture`, `extract_board_identity_fixture`,
 `extract_reference`, `draw_bathurst_map`,

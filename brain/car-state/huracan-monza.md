@@ -52,7 +52,7 @@ Percent of the car's own slider range in brackets (`range_records`, verified, v1
 | natural frequency | 3.70 / 3.90 (35 % / 45 %) | **3.70 / 3.90** | — | already the softest this car has run. Never tested with the circuit held. Held |
 | negative camber | 2.0 / 1.2 | **2.0 / 1.2** | — | camber is a ride-height lever on this car (2.8 mm/deg) |
 | toe | 0.00 / +0.12 | **0.00 / +0.12** | — | the `toe_f` braking fix is holding |
-| diff initial / accel / braking | 6 / 18 / 35 | **6 / 18 / 35** | — | `05` says medium-low accel for kerb exits; **`lsd_a` down is REFUTED on this car** (less rotation, not more). Held |
+| diff initial / accel / braking | 6 / 18 / 35 | **6 / 18 / 35** | — | `05` says medium-low accel for kerb exits; **`lsd_a` down is REFUTED on this car** (less rotation, not more - CONTESTED on v1.71, `02` §10.5). Held |
 | downforce | 410 / 635 (60 % / 68 %) | **350 / 500 (0 % / 0 %)** | ⬇ **both to minimum** | Monza is the lowest-drag circuit (`05` §1.5); on this car the whole wing range is 3–6 % of aero load and moved **no** handling instrument (4 Sep); `02` §10.9 #7 — aero preload eats bump travel. Top speed is what it buys |
 | ECU output | 94 | **96** | ⬆ | regulation: 550 bhp limit → 548 `SCREEN` at Daytona |
 | power restrictor | 99 | **99** | — | |
