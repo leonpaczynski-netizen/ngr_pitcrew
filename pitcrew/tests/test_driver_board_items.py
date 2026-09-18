@@ -861,6 +861,16 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
             best_ms=(599_998, 599_998, 599_998),
             set_best=(False, False, False),
             cut="thirds of the lap - not GT7's", compound="RS")))
+        # **And the history page** (17 Sep 2026). A stack is as tall as its
+        # tallest page and as wide as its widest, and this guard has missed
+        # three times by not setting the state that opens one - the box page
+        # once, the phone page once, and the sectors once.
+        states.append(replace(states[0], show_history=True, history=tuple(
+            {"lap": 100 + n, "lap_ms": 599_999, "target_ms": 599_999,
+             "lap_delta_s": -99.999, "burn_l": 12.34, "burn_delta_l": 9.99,
+             "saving": bool(n % 2), "why": "the beep changed column",
+             "pit": False, "out": False, "compound": "RS"}
+            for n in range(40))))
         for state in states:
             view.update_state(state)
             app.processEvents()
