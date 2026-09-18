@@ -23,7 +23,10 @@ def test_every_declared_opener_still_exists_in_its_module():
     source = "".join(
         (root / name).read_text(encoding="utf-8")
         for name in ("race/calls.py", "race/colour.py",
-                     "race/brief.py", "engineer/intents.py"))
+                     "race/brief.py", "engineer/intents.py",
+                     # The coach speaks too, and none of it was declared
+                     # until 18 Sep 2026 - so none of it was guarded either.
+                     "race/qualifying.py"))
     # **Whitespace-insensitive**, because a long line is written in the source
     # as adjacent string literals across two lines and would never match
     # literally. Comparing with all whitespace removed finds it wherever the

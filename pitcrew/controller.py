@@ -8378,8 +8378,9 @@ class PitCrewController(QObject):
             "per-lap re-planning is off for this race and the approved plan "
             "stands - %s. The engineer will not adapt the stop count from "
             "here.", why)
-        told = ("Strategy re-planning is off. The approved plan stands - "
-                "I won't adapt the stops from here.")
+        from pitcrew.race.replan import REPLANNING_OFF
+
+        told = REPLANNING_OFF
         if self._engineer_speaks:
             self.voice.say(told)
         self.last_call = told

@@ -187,6 +187,24 @@ def brief(instruments: Instruments) -> list[str]:
     return lines
 
 
+# Why the gauge cannot be read, in the two cases that are not a one-off frame
+# fault. Here beside `lost_the_gauge` - its own sibling - so `phrase_manifest`
+# can reach them: they are the "I cannot see it" message, and it arrives
+# mid-race precisely to stop silence reading as "tyres are fine".
+GAUGE_NOT_IN_FRAME = "the gauge is not in the frame"
+GAUGE_UNREADABLE = "the frames are unreadable"
+
+
+def blind_note(note: str) -> str:
+    """"No tyre gauge - the frames are unreadable."
+
+    The two notes above render; a `Reading.reason` carries a frame size or an
+    exception and cannot, so it falls through to synthesis. That is the right
+    way round - the two the driver will actually meet are the covered ones.
+    """
+    return f"No tyre gauge - {note}"
+
+
 def lost_the_gauge() -> str:
     """One line, when the wear reader stands down mid-race.
 

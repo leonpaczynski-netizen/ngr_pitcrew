@@ -876,6 +876,86 @@ def lever_lines() -> tuple[str, ...]:
     return tuple(dict.fromkeys(lines))
 
 
+def replan_lines() -> tuple[str, ...]:
+    """The re-planner's INSTRUCTION half - "Recommend 2 stops from here."
+
+    **The highest-consequence sentence the app says, and it was live.** The
+    strategy engine changing its mind mid-race is job 4's own output, and
+    none of `Replan.call()` was declared: the driver got a pause and a
+    different voice in front of the stop count.
+
+    Only the instruction is rendered. `spoken_reason()` is the first clause of
+    an accumulated reason and is genuinely free-form, so it falls through -
+    but the words he must act on arrive from the pack, and the explanation
+    behind them can take the pause. §5.5: instruction first, reason second.
+
+    NOTED verdicts return the reason itself as the call, which is the same
+    free-form text, so they are not enumerated here either.
+    """
+    from pitcrew.race.replan import RECOMMENDED, REPLANNING_OFF, Replan
+
+    from pitcrew.race.brief import (
+        GAUGE_NOT_IN_FRAME,
+        GAUGE_UNREADABLE,
+        blind_note,
+    )
+
+    # **The "I cannot see it" message**, whose whole purpose is to stop
+    # silence being read as "tyres are fine". Its sibling `lost_the_gauge()`
+    # has been declared since the openers existed; this one never was.
+    lines = [REPLANNING_OFF,
+             blind_note(GAUGE_NOT_IN_FRAME), blind_note(GAUGE_UNREADABLE)]
+    for stops in (None, 0, *range(1, MAX_STOPS + 1)):
+        said = Replan(verdict=RECOMMENDED, reason="", stops=stops).call()
+        if said:
+            lines.extend(segments_for(said) or ())
+    return tuple(dict.fromkeys(lines))
+
+
+def quali_lines() -> tuple[str, ...]:
+    """The qualifying coach, which had not one line in the pack.
+
+    **`phrase_manifest` imported nothing from `race/qualifying.py`**, so every
+    sentence the coach says was live-synthesised - and the split calls fire at
+    `EARLY_FRACTION` and `MID_FRACTION` of a FLYING LAP. A pause before the
+    engineer speaks mid-flyer is a pause on the one lap of the weekend that
+    cannot be taken again.
+
+    The delta calls are obtained by calling `_delta_call` itself, over the
+    tenths it can say, both directions, both halves of the lap and both sides
+    of the "about" - which is earned by the integration noise, so it is not a
+    wording choice but a state. Above a second the line splits on its number
+    and costs prefixes only.
+
+    The lap time in a line call is not here: `spoken_lap_time` is a minute, a
+    second and a tenth, which is tens of thousands of clips, and it is said at
+    the line rather than mid-corner.
+    """
+    from pitcrew.race.qualifying import LEVEL_BAND_S, QualifyingCoach
+
+    # `_delta_call` reads one field and no packet, so the real method is
+    # called on a bare instance rather than a rig full of stubs.
+    coach = object.__new__(QualifyingCoach)
+    lines: list[str] = []
+    for noise in (None, 0.0):       # with the "about", and without it
+        coach._noise_s = noise
+        # A tenth either side of level, up to the abandon threshold; past
+        # that the coach stops speaking and goes back to the out lap.
+        steps = [LEVEL_BAND_S / 2] + [n / 10.0 for n in range(1, 31)]
+        for step in steps:
+            for delta in (step, -step):
+                for early in (True, False):
+                    said = coach._delta_call(delta, early=early)
+                    lines.extend(segments_for(said) or ())
+    # The temperature calls that carry ONE number. The pair that carries two
+    # (fronts and rears in one clause) is a declared gap, not an omission -
+    # `uncovered_reason` says so - and it is an out-lap call, not a flyer one.
+    for axle in ("Fronts", "Rears"):
+        lines += [f"{axle} coming -", f"{axle} still",
+                  "cold - your call."]
+    return tuple(dict.fromkeys(lines))
+
+
 def _no_target_whys() -> list[str]:
     """Every reason a held column can have no lap target, from `for_lap`."""
     from pitcrew.strategy.targets import CompoundTarget, PlanTargets
@@ -960,6 +1040,14 @@ def spoken_openers() -> tuple[str, ...]:
         # ... and the run-in's hedged pair (Suzuka, 13 Sep 2026).
         "One or two to go.",
         "Too close to call on the clock.",
+        # race/qualifying.py - the coach's whole lines. The splits fire on a
+        # flying lap, so a pause in front of one costs the lap.
+        "No reference lap from practice - temperatures and lap times only.",
+        "Tyres in window. Push when you cross the line.",
+        "Tyres still coming up.",
+        "Splits off until your next best - that lap's trace had a gap.",
+        "Tyres were ready - grip should hold for another run.",
+        "Purple.",
         # race/calls.py - the beep's two columns, named. Openers rather than
         # whole lines because each is followed by a different reason: the
         # column is one clip and the reason another, not one clip per pair.
@@ -1439,6 +1527,8 @@ def clips() -> tuple[str, ...]:
         *spoken_openers(),
         *volunteered_lines(),
         *lever_lines(),
+        *replan_lines(),
+        *quali_lines(),
     ]
     return tuple(dict.fromkeys(everything))
 

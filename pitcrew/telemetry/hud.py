@@ -69,6 +69,11 @@ import time
 from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
+from pitcrew.race.brief import (
+    GAUGE_NOT_IN_FRAME,
+    GAUGE_UNREADABLE,
+    blind_note,
+)
 
 # **`log` RETURNS a logger; it does not take a message.** Every diagnostic
 # in this module used to call `log(f"hud-wear: ...")`, which built a logger
@@ -2120,8 +2125,8 @@ class LiveWearSampler:
         # capture is fine and the gauge is simply not being looked at. The
         # message names the symptom and leaves the cause to the log, which has
         # the room to separate the VR case from the flat-screen one.
-        note = "the gauge is not in the frame" if stuck else (
-            reading.reason or "the frames are unreadable")
+        note = GAUGE_NOT_IN_FRAME if stuck else (
+            reading.reason or GAUGE_UNREADABLE)
         if self._said_blind == note:
             return
         self._said_blind = note
@@ -2129,7 +2134,7 @@ class LiveWearSampler:
             # **A Reading with no wear IS the "I cannot see it" message.**
             # `wear=None` rather than zeros, so nothing downstream can read a
             # refusal as a measurement.
-            self._status(Reading(None, f"No tyre gauge - {note}",
+            self._status(Reading(None, blind_note(note),
                                  peak=reading.peak))
 
     def _saw_nothing(self) -> None:

@@ -257,6 +257,13 @@ RESOLVED_SUPERSEDED = "superseded by a later recomputation"
 # there is no wear channel and no gauge reading is entered while racing.
 WEAR_IS_ASSUMED = "wear is the plan's assumption, not a reading"
 
+# **Said once, when per-lap re-planning gives up for the race.** Here rather
+# than inline in the controller so `phrase_manifest` can reach it: a sentence
+# the manifest cannot obtain is rendered nowhere and is synthesised live, and
+# this one arrives mid-race to tell him the engineer has stopped adapting.
+REPLANNING_OFF = ("Strategy re-planning is off. The approved plan stands - "
+                  "I won't adapt the stops from here.")
+
 
 @dataclass(frozen=True)
 class Replan:

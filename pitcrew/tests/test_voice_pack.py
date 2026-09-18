@@ -385,8 +385,35 @@ def test_the_pack_stays_within_budget():
     and "Boxing this lap." peel, so the reason behind each is one clip rather
     than one clip per pair, and the declared stop's fill is the box call's
     own already-rendered figures. 880 leaves 33.
+
+    **Raised to 990 on 18 Sep 2026, for three families a critic found in the
+    same sweep** - all of them speech the manifest had no way to reach, and
+    none of it declared, so none of it was rendered and all of it was
+    synthesised live. The ceiling stood at 880 with 847 used.
+
+    * `replan_lines` costs 4: `Replan.call()`, which is the strategy engine
+      changing its mind mid-race - "Recommend 2 stops from here." - plus the
+      once-a-race notice that re-planning has stopped. Only the instruction;
+      `spoken_reason()` is the first clause of an accumulated reason and is
+      free-form, so it takes the pause (§5.5 puts the instruction first for
+      exactly this reason).
+    * The gauge's blind note costs 2, and is the sibling of `lost_the_gauge()`
+      which has been declared since the openers existed. It is the "I cannot
+      see it" message, and its whole job is to stop silence reading as
+      "tyres are fine".
+    * `quali_lines` costs 101, and is where this raise goes. The coach had
+      NOT ONE line in the pack - `phrase_manifest` imported nothing from
+      `race/qualifying.py` - and its split calls fire at a fraction of a
+      FLYING LAP. 72 of the 101 are the tenths said whole: four shapes ("On
+      it. Up…", "Up…", "Down…", "Down… - tidy the last sector.") over nine
+      tenths and both sides of the "about", which the integration noise earns
+      rather than the wording choosing. Splitting them was refused on the
+      same ground as the pace line above: two joins in a four-word call said
+      mid-corner. Above a second they split on the number and cost prefixes.
+
+    990 leaves 36.
     """
-    assert len(manifest.clips()) < 880
+    assert len(manifest.clips()) < 990
 
 
 def test_the_same_line_always_names_the_same_file():

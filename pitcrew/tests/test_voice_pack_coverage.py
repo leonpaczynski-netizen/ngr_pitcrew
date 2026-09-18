@@ -253,3 +253,65 @@ def test_the_beep_column_call_is_declared_for_every_shape():
               if call is not None and call.kind == "fuel-mode"}
     assert any("to the flag." in line for line in frames)
     assert any("to the stop." in line for line in frames)
+
+
+def test_the_replanner_speaks_from_the_pack():
+    """The strategy engine changing its mind is job 4's own output.
+
+    Found by a critic on 18 Sep 2026: none of `Replan.call()` was declared, so
+    "Recommend 2 stops from here." - the sentence with the largest consequence
+    in the app - arrived after a pause, in a different voice.
+    """
+    from pitcrew.race.replan import RECOMMENDED, REPLANNING_OFF, Replan
+
+    declared = set(manifest.clips())
+    for stops in (None, 0, 1, 2, 3):
+        said = Replan(verdict=RECOMMENDED, reason="fuel", stops=stops).call()
+        assert said, f"{stops} stops says nothing"
+        missing = [clip for clip in manifest.segments_for(said) or ()
+                   if clip not in declared]
+        assert not missing, f"{said!r} misses {missing}"
+    assert not [clip for clip in manifest.segments_for(REPLANNING_OFF) or ()
+                if clip not in declared]
+
+
+def test_the_gauge_says_it_cannot_see_from_the_pack():
+    """Its sibling `lost_the_gauge()` has been declared for weeks; this one
+    never was, and it is the message that stops silence reading as fine."""
+    from pitcrew.race.brief import (
+        GAUGE_NOT_IN_FRAME,
+        GAUGE_UNREADABLE,
+        blind_note,
+    )
+
+    declared = set(manifest.clips())
+    for note in (GAUGE_NOT_IN_FRAME, GAUGE_UNREADABLE):
+        said = blind_note(note)
+        assert not [clip for clip in manifest.segments_for(said) or ()
+                    if clip not in declared], said
+
+
+def test_the_qualifying_split_calls_never_pause_the_flyer():
+    """They fire at a fraction of a flying lap - the one lap of the weekend
+    that cannot be taken again - and the coach had no line in the pack."""
+    from pitcrew.race.qualifying import QualifyingCoach
+
+    declared = set(manifest.clips())
+    coach = object.__new__(QualifyingCoach)
+    checked = 0
+    for noise in (None, 0.0):
+        coach._noise_s = noise
+        for tenths in range(1, 31):
+            for delta in (tenths / 10.0, -tenths / 10.0):
+                for early in (True, False):
+                    said = coach._delta_call(delta, early=early)
+                    missing = [clip for clip
+                               in manifest.segments_for(said) or ()
+                               if clip not in declared]
+                    assert not missing, f"{said!r} misses {missing}"
+                    checked += 1
+    assert checked == 240, checked
+    # And level, which is the most likely thing it says.
+    coach._noise_s = None
+    assert coach._delta_call(0.0, early=True) == "Level."
+    assert "Level." in declared
