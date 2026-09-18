@@ -212,6 +212,10 @@ class _Stub:
     """
 
     _driver_board_state = PitCrewController._driver_board_state
+    # The board's top line, which is the last call OR the reason he
+    # did not hear it (`Voice.health`). Bound off the real class like
+    # the rest; a stub with no `voice` takes the guarded branch.
+    _board_call_now = PitCrewController._board_call_now
     _board_temps = PitCrewController._board_temps
     _gap_view = PitCrewController._gap_view
     _fill_rate = PitCrewController._fill_rate
@@ -1415,3 +1419,56 @@ def test_the_box_lap_itself_is_due_not_late():
     assert C.fuel_in_hand_to_stop(state) == (0.2, None)
     state.lap = 11
     assert C.fuel_in_hand_to_stop(state) == (None, C.STOP_IS_LATE)
+
+
+def test_the_board_says_when_the_engineer_has_gone_silent():
+    """**`Voice.silent_calls` had no caller anywhere in the app.**
+
+    Its module docstring says why it exists - "the driver cannot see the log
+    and cannot see the screen either, so 'the engineer has said nothing for
+    three calls' has to be a number something can display" - and the only
+    thing that read it was a test. CLAUDE.md rule 11, on the one instrument
+    whose failure mode is silence, which is also what a quiet race sounds
+    like.
+
+    It takes the top line rather than sitting beside it: when the voice is
+    failing, the "last thing said" is exactly the thing he did NOT hear.
+    """
+    from pitcrew.race.calls import MARK_INSTRUCTION, MARK_UNCONFIRMED
+    from pitcrew.ui.driver_view import BoardCall
+
+    class Voice:
+        def __init__(self, note=None):
+            self._note = note
+
+        def health(self):
+            return self._note
+
+    stub = _Stub()
+    said = BoardCall(text="Box this lap.", mark=MARK_INSTRUCTION, lap=12)
+    stub._board_call = said
+
+    # Nothing wrong: the board shows what was said.
+    stub.voice = Voice(None)
+    assert stub._board_call_now() is said
+
+    # Silent: the board says so, and keeps the lap it was on.
+    stub.voice = Voice("The engineer has said nothing for 3 calls: no device")
+    shown = stub._board_call_now()
+    assert shown is not said
+    assert "said nothing for 3 calls" in shown.text
+    assert shown.mark == MARK_UNCONFIRMED and shown.lap == 12
+
+
+def test_a_health_check_that_raises_does_not_cost_him_the_board():
+    from pitcrew.race.calls import MARK_INSTRUCTION
+    from pitcrew.ui.driver_view import BoardCall
+
+    class Broken:
+        def health(self):
+            raise RuntimeError("the audio layer went away")
+
+    stub = _Stub()
+    stub._board_call = BoardCall(text="P4.", mark=MARK_INSTRUCTION, lap=3)
+    stub.voice = Broken()
+    assert stub._board_call_now().text == "P4."

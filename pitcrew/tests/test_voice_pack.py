@@ -488,7 +488,8 @@ def test_a_hit_does_not_reach_the_live_engine(pack, monkeypatch):
     spy = Spy()
     engine = VoicePackEngine(folder, clips, spy)
     played = []
-    monkeypatch.setattr(engine, "_play", lambda segments: played.append(segments))
+    monkeypatch.setattr(engine, "_play",
+                        lambda segments, heard=None: played.append(segments))
 
     engine.speak("Box this lap.")
     assert played == [("Box this lap.",)]
@@ -502,7 +503,7 @@ def test_playback_failure_still_reaches_the_driver(pack, monkeypatch):
     spy = Spy()
     engine = VoicePackEngine(folder, clips, spy)
 
-    def broken(_segments):
+    def broken(_segments, _heard=None):
         raise OSError("device gone")
 
     monkeypatch.setattr(engine, "_play", broken)
@@ -533,7 +534,8 @@ def test_a_pack_with_no_live_engine_raises_on_a_line_it_cannot_play(
     folder, clips = pack
     engine = VoicePackEngine(folder, clips, None)
     played = []
-    monkeypatch.setattr(engine, "_play", lambda segments: played.append(segments))
+    monkeypatch.setattr(engine, "_play",
+                        lambda segments, heard=None: played.append(segments))
 
     engine.speak("P4.")
     assert played == [("P4.",)] and engine.hits == 1
@@ -549,7 +551,7 @@ def test_a_pack_with_no_live_engine_raises_when_playback_fails(pack,
     folder, clips = pack
     engine = VoicePackEngine(folder, clips, None)
 
-    def broken(_segments):
+    def broken(_segments, _heard=None):
         raise OSError("device gone")
 
     monkeypatch.setattr(engine, "_play", broken)
@@ -565,7 +567,7 @@ def test_a_playback_failure_is_not_counted_as_a_miss(pack, monkeypatch):
     spy = Spy()
     engine = VoicePackEngine(folder, clips, spy)
 
-    def broken(_segments):
+    def broken(_segments, _heard=None):
         raise OSError("device gone")
 
     monkeypatch.setattr(engine, "_play", broken)
@@ -580,7 +582,8 @@ def test_a_playback_failure_does_not_write_the_miss_log(pack, monkeypatch,
     folder, clips = pack
     engine = VoicePackEngine(folder, clips, Spy())
     monkeypatch.setattr(engine, "_play",
-                        lambda _s: (_ for _ in ()).throw(OSError("gone")))
+                        lambda _s, _h=None: (_ for _ in ()).throw(
+                            OSError("gone")))
     with caplog.at_level("INFO", logger="pitcrew.voice"):
         engine.speak("Box this lap.")
     assert "not in the manifest" not in caplog.text
@@ -773,7 +776,7 @@ def test_a_cut_pack_line_is_a_hit_and_is_passed_up_not_resynthesised(
     spy = Spy()
     engine = VoicePackEngine(folder, clips, spy)
 
-    def cut(_segments):
+    def cut(_segments, _heard=None):
         raise voice_module.LineCut("a device rebuild closed the stream")
 
     monkeypatch.setattr(engine, "_play", cut)
@@ -941,3 +944,57 @@ def test_the_chain_does_not_speak_twice_when_the_first_engine_works():
     primary, spare = Works(), Works()
     _FallsBackTo(primary, spare).speak("P4.")
     assert primary.said == ["P4."] and spare.said == []
+
+
+def test_a_failure_part_way_through_says_only_what_he_has_not_heard(pack,
+                                                                    monkeypatch):
+    """**A line half said is not a line unsaid.**
+
+    The clips before the failure have already played out of the card, and
+    handing the whole line to the live engine says the first of them a second
+    time, in a different voice at a different level: "Box this lap." and then
+    the whole box call again two seconds later. That is the stammer
+    `audio_devices` replaced pre-emption to be rid of, arriving from the
+    pack's side instead. The `LineCut` branch refuses it in as many words;
+    this branch was doing it.
+    """
+    folder, clips = pack
+    spy = Spy()
+    engine = VoicePackEngine(folder, clips, spy)
+    # Both halves are in the two-clip fixture, so this takes the PLAYBACK
+    # path rather than the miss path - which is the branch under test.
+    line = "Box this lap. P4."
+    segments = manifest.segments_for(line)
+    assert segments == ("Box this lap.", "P4."), segments
+    assert all(name in clips for name in segments), clips
+
+    def half(_segments, heard=None):
+        # The first clip reaches the card; the card dies on the second.
+        if heard is not None:
+            heard.append(_segments[0])
+        raise OSError("device gone")
+
+    monkeypatch.setattr(engine, "_play", half)
+    engine.speak(line)
+    assert spy.spoken, "the rest of the line must still be said"
+    said = spy.spoken[-1]
+    assert said != line, "the whole line was re-spoken over what he heard"
+    assert segments[0] not in said, (segments[0], said)
+    for name in segments[1:]:
+        assert name in said, (name, said)
+
+
+def test_a_failure_before_anything_played_still_says_the_whole_line(pack,
+                                                                    monkeypatch):
+    """Nothing was heard, so nothing is being repeated - the line goes to the
+    live engine whole, which is the behaviour that was always right."""
+    folder, clips = pack
+    spy = Spy()
+    engine = VoicePackEngine(folder, clips, spy)
+
+    def dead(_segments, heard=None):
+        raise OSError("device gone")
+
+    monkeypatch.setattr(engine, "_play", dead)
+    engine.speak("Box this lap.")
+    assert spy.spoken[-1] == "Box this lap."

@@ -142,6 +142,10 @@ class _Practice:
 
 class _Stub:
     _driver_board_state = PitCrewController._driver_board_state
+    # The top line is the last call, or `Voice.health`'s reason he did
+    # not hear it. Bound off the real class; no `voice` here takes the
+    # guarded branch and the last call stands.
+    _board_call_now = PitCrewController._board_call_now
     _board_temps = PitCrewController._board_temps
     _split_rates = PitCrewController._split_rates
     _board_live_fields = PitCrewController._board_live_fields

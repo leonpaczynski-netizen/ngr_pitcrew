@@ -1035,6 +1035,8 @@ class PiperEngine:
                 "pitcrew/engineer/piper_models")
         from piper import PiperVoice  # noqa: F401 - probe it imports
         self._voice = None
+        # One load, however many threads ask at once - see `_load`.
+        self._load_lock = threading.Lock()
         self.tuning = dict(DEFAULT_TUNING)
         if tuning:
             self.tuning.update(tuning)
@@ -1062,9 +1064,22 @@ class PiperEngine:
             pass
 
     def _load(self):
-        if self._voice is None:
-            from piper import PiperVoice
-            self._voice = PiperVoice.load(self._path)
+        """The model, loaded once however many threads ask at once.
+
+        **Check-then-set across two threads is two loads.** `warm()` runs on
+        its own thread and the voice thread speaks on another, and with the
+        warm ordered after the first line was queued they arrived here
+        together: two `PiperVoice.load` calls of about 1.7 s each, two ONNX
+        sessions, one of them orphaned, at the moment the race starts.
+        """
+        if self._voice is not None:
+            return self._voice
+        with self._load_lock:
+            # Checked again inside: the thread that waited must not load a
+            # model the thread it waited for has already built.
+            if self._voice is None:
+                from piper import PiperVoice
+                self._voice = PiperVoice.load(self._path)
         return self._voice
 
     def _config(self):
@@ -1206,8 +1221,9 @@ class VoicePackEngine:
 
         segments = segments_for(text)
         if segments and all(name in self._clips for name in segments):
+            played: list[str] = []
             try:
-                self._play(segments)
+                self._play(segments, played)
                 self.hits += 1
                 return
             except LineCut:
@@ -1224,14 +1240,27 @@ class VoicePackEngine:
                 # Logged as the device fault it is and NOT counted as a miss:
                 # the miss log is the list of lines still to render, and a
                 # dead output device puts covered lines on it.
+                # **Only what he has NOT already heard.** The clips before
+                # the failure have played out of the card; handing the whole
+                # line to the live engine says the first of them a second
+                # time, in a different voice at a different level - "Box this
+                # lap." and then the whole box call again two seconds later.
+                # That is the stammer `audio_devices` replaced pre-emption to
+                # be rid of, re-entered from the pack's side. The `LineCut`
+                # branch above refuses to do it in as many words; this branch
+                # was doing it.
+                rest = list(segments[len(played):])
+                say = " ".join(rest) if played else text
                 log("voice").warning(
                     "voice pack playback failed for %r (%s: %s) - "
-                    "synthesising instead", text, type(exc).__name__, exc)
+                    "synthesising %s", text, type(exc).__name__, exc,
+                    "the rest of it" if played else "instead")
                 if self._fallback is None:
                     raise NotSpoken(
                         f"the pack could not play {text!r} and there is no "
                         f"live engine behind it") from exc
-                self._fallback.speak(text)
+                if say:
+                    self._fallback.speak(say)
                 return
 
         self.misses += 1
@@ -1245,7 +1274,12 @@ class VoicePackEngine:
                 f"behind it, so nothing was said")
         self._fallback.speak(text)
 
-    def _play(self, segments) -> None:
+    def _play(self, segments, played: list | None = None) -> None:
+        """Play `segments` in order, appending each one HEARD to `played`.
+
+        The caller needs that list because a failure part-way through is not
+        a failure to say the line - it is a line half said. See `speak`.
+        """
         device = audio_devices.output_device()
         with _play_lock(), audio_devices.mixing_on(device):
             stream = None
@@ -1261,6 +1295,8 @@ class VoicePackEngine:
                             SPOKEN_LINE, lambda: open_output(rate))
                     if _write_yielding(stream, samples, rate, line, mixer):
                         break
+                    if played is not None:
+                        played.append(name)
             finally:
                 if stream is not None:
                     stream.stop()

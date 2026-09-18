@@ -103,6 +103,10 @@
   /* ---- top: last lap left, the best (or the plan's lap) right */
   #top { display: grid; grid-template-columns: 1fr 1fr; column-gap: 3vw; }
   #top .val { font-size: 19vh; }
+  /* The sub holds no height when it is empty, so a race face - where neither
+     of these has one - is laid out exactly as it was. */
+  #top .sub { font-size: 3.6vh; min-height: 0; }
+  #best .sub { text-align: right; }
   #best { align-items: flex-end; text-align: right; }
   #best.good .cap { color: var(--good); }
 
@@ -191,8 +195,15 @@
 <body>
 <div id="app">
   <div id="top">
-    <div class="fig" id="last"><div class="cap"></div><div class="val"></div></div>
-    <div class="fig" id="best"><div class="cap"></div><div class="val"></div></div>
+    <!-- **The top pair carry a sub line too.** In the box these two are the
+         fill and the tyres, and `fuel_target_block` builds "8 aboard ·
+         measured at this pump" under the litres - which is the rate the
+         release countdown beside it was priced at, and the difference
+         between a figure measured at this pump and one typed on the event
+         page. There was nowhere to draw it, so it was dropped on the one
+         screen he is holding the trigger against. -->
+    <div class="fig" id="last"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
+    <div class="fig" id="best"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
   </div>
   <div id="band"><div class="cap"></div><div class="val"></div><div class="sub"></div></div>
   <div id="bottom">

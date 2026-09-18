@@ -5123,6 +5123,19 @@ class PitCrewController(QObject):
         # had raced PREVIOUSLY. Wrong is worse than absent here: he would act
         # on a title margin belonging to another championship.
         self._open_the_league(event)
+        # **Warmed BEFORE the first line is queued, not ninety lines later.**
+        # `warm()` was called further down the arming sequence, after the
+        # brief had already been handed to the voice thread - so the one line
+        # it exists to protect was the line that paid the cold load, and the
+        # warm then RACED the speaking thread for the same model. Measured:
+        # `PiperVoice.load` ran twice, on two threads, at the busiest moment
+        # of the night, one of them orphaned.
+        #
+        # **And warmed whatever George's setting**, because the pit button's
+        # confirmation speaks with him off (his call, 17 Sep) - so gating the
+        # warm on `speaks` made the one sentence a silenced engineer still
+        # says the only one guaranteed to be cold.
+        self.voice.warm()
         self._say_brief(event, plan, speaks=speaks)
 
         self.bridge.reset(race=True)
@@ -5219,7 +5232,9 @@ class PitCrewController(QObject):
                          f"({straights.laps} laps, [DERIVED])")
         self._engineer_speaks = speaks
         if speaks:
-            self.voice.warm()
+            # The voice is warmed before the brief now, not here - see
+            # `_say_brief`'s caller. What still belongs to `speaks` is the
+            # radio itself: the data line's timer and push-to-talk.
             # **No line waits for a straight.** The driver, 15 Sep 2026:
             # *"George can speak at anytime."* Volunteered radio was held
             # for a straight from 14 Sep, and replayed over Bathurst 28 of
@@ -6841,7 +6856,7 @@ class PitCrewController(QObject):
                 temps_c=self._board_temps(getattr(self.bridge, "last_packet", None)),
                 compound=fields.get("reference_compound"),
                 split_rates=self._split_rates(),
-                last_call=self._board_call,
+                last_call=self._board_call_now(),
                 **fields)
         state = self.race.state
         has_plan = bool(getattr(self.race, "_stints", None))
@@ -6881,7 +6896,7 @@ class PitCrewController(QObject):
                 fuel_to_flag_why=FROM_THE_GREEN,
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
-                last_call=self._board_call,
+                last_call=self._board_call_now(),
                 # On the grid the plan already asks something of lap 1, and
                 # the phone reads "no plan lap" without them.
                 **board_target_fields(state),
@@ -6919,7 +6934,7 @@ class PitCrewController(QObject):
                 # page's whole subject and it outlives the running race.
                 lap_number=state.lap_on_screen(),
                 history=tuple(getattr(state, "lap_history", ()) or ()),
-                last_call=self._board_call, **self._board_live_fields(),
+                last_call=self._board_call_now(), **self._board_live_fields(),
                 **board_target_fields(state))
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
@@ -6979,7 +6994,7 @@ class PitCrewController(QObject):
             has_plan=has_plan,
             position=getattr(state, "position", None),
             field_size=getattr(state, "field_size", None),
-            last_call=self._board_call,
+            last_call=self._board_call_now(),
             **self._board_live_fields(),
             **self._board_fuel(state, has_plan=has_plan),
             # **Both neighbours, on the running panel only.** In the box the
@@ -7099,6 +7114,36 @@ class PitCrewController(QObject):
         return {"fuel_to_stop": to_stop, "fuel_to_stop_why": stop_why,
                 "fuel_to_flag": to_flag, "fuel_to_flag_why": flag_why,
                 "fuel_to_flag_on": flag_on}
+
+    def _board_call_now(self):
+        """What the board's top line shows: the last call, or why he did not
+        hear it.
+
+        **`Voice.silent_calls` had no caller anywhere in the app.** Its own
+        module docstring says why it exists - *"the driver cannot see the log
+        and cannot see the screen either, so 'the engineer has said nothing
+        for three calls' has to be a number something can display"* - and
+        the only thing that ever read it was a test. That is CLAUDE.md rule
+        11 verbatim, on the one instrument whose failure is silence, which is
+        also what a quiet race sounds like.
+
+        It takes the top line rather than sitting beside it, because when the
+        voice is failing the "last thing said" is precisely the thing he did
+        NOT hear, and printing it as though he had is the lie this replaces.
+        """
+        health = None
+        try:
+            health = self.voice.health()
+        except Exception:                                   # noqa: BLE001
+            # A health check that raises must not cost him the board.
+            pass
+        if not health:
+            return self._board_call
+        from pitcrew.race.calls import MARK_UNCONFIRMED
+        from pitcrew.ui.driver_view import BoardCall
+
+        return BoardCall(text=health, mark=MARK_UNCONFIRMED,
+                         lap=getattr(self._board_call, "lap", None))
 
     def _note_board_call(self, text: str, mark: str, lap: int | None) -> None:
         """Hold the last thing said, for the board's top line.
