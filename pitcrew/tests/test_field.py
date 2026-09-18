@@ -755,3 +755,41 @@ def test_a_refusal_reaches_the_tablet_with_its_reason():
         assert presses == []
     finally:
         server.stop()
+
+
+def test_the_field_is_readable_without_the_buttons_code():
+    """**The code authorises a PRESS, never a READ.**
+
+    The page demanded it on load, so a new tablet - or any browser whose site
+    data had been cleared - put a keypad over the timing tower and every
+    figure behind it. Nothing on this page needs a code to be looked at: it
+    is the same read-only payload the phone gets. Measured 18 Sep 2026: all
+    four tablet scenes rendered as the pairing prompt and nothing else.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "ui"
+              / "tablet.html").read_text(encoding="utf-8")
+
+    # Nothing opens the prompt on load; `poll()` starts regardless.
+    assert "if (!key()) pair(true);" not in source, (
+        "the page is gating the race behind the buttons code again")
+    # It is opened from a press, which is the moment it is needed...
+    assert 'if (!key()) { pair(true); return; }' in source
+    # ...and from a refusal, which is the moment it is wrong.
+    assert 'pair(true, "that code was refused")' in source
+    # ...and it can be left, or it is a gate by another name.
+    assert 'id="pair-shut"' in source
+    assert '$("pair").addEventListener' in source
+
+
+def test_an_unpaired_button_says_so_rather_than_looking_live():
+    """A control that draws the app's state and answers a press with a keypad
+    is one he presses twice at the worst moment."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "ui"
+              / "tablet.html").read_text(encoding="utf-8")
+    assert 'var locked = !key();' in source
+    assert '"tap for the code"' in source
+    assert "#buttons.locked" in source

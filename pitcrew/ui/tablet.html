@@ -90,6 +90,11 @@
     background: var(--panel); color: var(--ink); border: 3px solid var(--edge); border-radius: 1vh; }
   #pair button { font-family: var(--label); font-weight: 700; font-size: 4vh; padding: 1vh 4vw;
     background: var(--near); color: var(--ground); border: 0; border-radius: 1vh; }
+  #pair button.quiet { background: transparent; color: var(--dim); font-size: 3vh;
+    border: 2px solid var(--edge); }
+  /* A locked button still reads the app's state; only its hint changes, and
+     its face dims so the row does not look armed. */
+  #buttons.locked .btn .now { opacity: 0.55; }
 
   #head { display: flex; align-items: baseline; gap: 3vw; font-family: var(--label);
     font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -148,6 +153,13 @@
      it. Space here rather than a rule - the table has no vertical rules, and
      one added for a single row would be the loudest thing on the screen. */
   .cell.col-fuel { padding-right: 1.8vw; }
+  /* **And its figure is a step smaller, because it is not one figure.**
+     Every other number column holds a single value; this one holds two and
+     an arrow ("10 → 99"), and at the shared size the widest of them ran past
+     its own column into the sentence beside it - `.cell` sets `min-width: 0`
+     and does not clip, so an overflow here lands on top of the one column
+     that says what to do about the car. Sized to what it actually holds. */
+  .cell.col-fuel .num { font-size: 3.9vh; }
 
   /* Our row: a plate, not a colour. */
   .us .cell { background: var(--panel); border-top-color: var(--ink); border-bottom: 1px solid var(--ink); }
@@ -197,7 +209,8 @@
 </div>
 </div>
 <div id="pair"><div class="t">Buttons code</div><div class="s" id="pair-why">shown in Pit Crew settings, beside the tablet address</div>
-  <input id="pair-code" inputmode="numeric" maxlength="12" autocomplete="off"><button id="pair-go">Use this code</button></div>
+  <input id="pair-code" inputmode="numeric" maxlength="12" autocomplete="off"><button id="pair-go">Use this code</button>
+  <button id="pair-shut" class="quiet">Not now - just show me the race</button></div>
 <div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
 <script>
 (function () {
@@ -344,7 +357,16 @@
   }
   $("pair-go").addEventListener("click", function () {
     var k = $("pair-code").value.trim();
-    if (k) { setKey(k); pair(false); }
+    if (k) { setKey(k); pair(false); drawButtons(controls); }
+  });
+  // **And it can be left.** A prompt with no way out, over a screen he needs
+  // to read at racing speed, is worse than no buttons at all. Tapping the
+  // backdrop closes it; the field is behind it and is what he came for.
+  $("pair").addEventListener("click", function (e) {
+    if (e.target === $("pair")) { pair(false); drawButtons(controls); }
+  });
+  $("pair-shut").addEventListener("click", function () {
+    pair(false); drawButtons(controls);
   });
 
   function press(action, value) {
@@ -363,6 +385,12 @@
     controls = c || null;
     var racing = !!(c && c.racing);
     var g = $("b-george"), f = $("b-fuel"), p = $("b-pit");
+    // **An unpaired button says so on its own face.** It still draws the
+    // app's state - that is a reading, and it is true - but a control that
+    // looks live and answers a press with a keypad is one he presses twice
+    // at the worst moment.
+    var locked = !key();
+    $("buttons").classList.toggle("locked", locked);
     g.classList.toggle("on", !!(c && c.george)); g.classList.toggle("off", !!(c && !c.george));
     g.querySelector(".now").textContent = c ? (c.george ? "On" : "Off") : "--";
     g.querySelector(".hint").textContent = c && !c.george ? "beep stays on" : "tap";
@@ -375,6 +403,11 @@
     p.querySelector(".now").textContent = c && c.pit ? "Boxing " + c.pit : "This lap";
     p.querySelector(".hint").textContent = !c || !c.pit ? "hold" :
       (c.pit_cancellable ? "hold to cancel" : "in this lap");
+    if (locked) {
+      [g, f, p].forEach(function (el) {
+        el.querySelector(".hint").textContent = "tap for the code";
+      });
+    }
   }
 
   function tap(el, fn) {
@@ -428,7 +461,14 @@
     ["pointerup", "pointercancel", "pointerleave"].forEach(function (ev) { el.addEventListener(ev, stop); });
   })();
 
-  if (!key()) pair(true);
+  // **The code is never asked for to READ the race.** It used to be
+  // demanded on load, so opening the page on a new tablet - or in any
+  // browser whose site data had been cleared - put a keypad over the timing
+  // tower and every figure behind it. Nothing on this page needs a code to
+  // be LOOKED at: the field, the stops and the predictions are the same
+  // read-only payload the phone gets. The code authorises a PRESS, and it
+  // is asked for at the moment one is made, which is also the only moment
+  // its purpose is obvious.
   poll();
 })();
 </script>
