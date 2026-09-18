@@ -6512,7 +6512,13 @@ class PitCrewController(QObject):
             # up only while the TABLET is reading, which is the page that shows
             # them.
             board = self._driver_board_state()
-            state = replace(board, strip_live=self._publish_tablet(strip))
+            tablet_live = self._publish_tablet(strip)
+            # **The monitor turns to history only with both other screens up**
+            # (17 Sep 2026): his car on the phone, the field on the tablet,
+            # and this screen the one he looks at least. Either of them gone
+            # and it is his live pit board again.
+            state = replace(board, strip_live=tablet_live,
+                            show_history=tablet_live and live)
             strip.publish(self._strip_composer.compose(state))
             self._strip_failures = 0
             return state
@@ -6906,7 +6912,8 @@ class PitCrewController(QObject):
         # **The lap the phone shows is the lap his HUD shows**, from the one
         # expression the box lap is already counted in - GT7's own
         # `laps_completed` drifts off it after a crossing lost in the lane.
-        base = replace(base, lap_number=state.lap_on_screen())
+        base = replace(base, lap_number=state.lap_on_screen(),
+                       history=tuple(getattr(state, "lap_history", ()) or ()))
         if not in_box:
             return base
 

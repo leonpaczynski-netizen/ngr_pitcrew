@@ -2514,6 +2514,7 @@ class RaceCoordinator:
 
         self.state.target_verdict = None
         if self.targets is None:
+            self._file_lap_history(lap, None, None, "the plan has no targets")
             return
         why = why_no_verdict(lap, rolling_start=self.expect.rolling_start,
                              incident=incident)
@@ -2523,6 +2524,7 @@ class RaceCoordinator:
         if why is not None:
             log("race").info("target: lap %s gets no verdict - %s",
                              lap.lap_num, why)
+            self._file_lap_history(lap, None, saving, why)
             return
         target = self.targets.for_lap(
             compound=self.state.tyre_compound, saving=saving,
@@ -2530,6 +2532,7 @@ class RaceCoordinator:
             fuel_at_start_l=getattr(lap, "fuel_start", None))
         verdict = judge(lap, target)
         self.state.target_verdict = verdict
+        self._file_lap_history(lap, verdict, saving, None)
         if verdict is not None and verdict.burn_delta_l is not None:
             # Filed under the column this lap was judged on, so the stint
             # average never pools the two beeps (`stint_burn`).
@@ -2542,6 +2545,31 @@ class RaceCoordinator:
             lap.lap_time_ms, target.lap_ms,
             target.lap_source or target.why_no_lap,
             None if verdict is None else verdict.burn_l, target.burn_l)
+
+    # How many laps of history the monitor keeps. A race is thirty-odd laps
+    # and the rack draws a dozen; the rest is the export's job, not a screen's.
+    HISTORY_LAPS = 40
+
+    def _file_lap_history(self, lap, verdict, saving, why) -> None:
+        """This lap, as it was judged, for the monitor to draw afterwards."""
+        history = self.state.lap_history
+        history.append({
+            "lap": int(getattr(lap, "lap_num", 0) or 0),
+            "lap_ms": getattr(lap, "lap_time_ms", None),
+            "target_ms": getattr(verdict, "target_ms", None),
+            "lap_delta_s": getattr(verdict, "lap_delta_s", None),
+            "burn_l": (getattr(verdict, "burn_l", None)
+                       if verdict is not None
+                       else getattr(lap, "fuel_used", None)),
+            "burn_delta_l": getattr(verdict, "burn_delta_l", None),
+            "saving": saving,
+            "why": why,
+            "pit": bool(getattr(lap, "is_pit_lap", False)),
+            "out": bool(getattr(lap, "is_out_lap", False)),
+            "compound": self.state.tyre_compound,
+        })
+        if len(history) > self.HISTORY_LAPS:
+            del history[:-self.HISTORY_LAPS]
 
     def _target_next_lap(self, lap) -> None:
         """What the plan asks of the lap now being driven, for the board.

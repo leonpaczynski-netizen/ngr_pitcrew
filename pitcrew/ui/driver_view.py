@@ -534,6 +534,15 @@ class DriverState:
     last_lap_ms: int | None = None
     lap_number: int | None = None
 
+    # ---- the monitor as history (17 Sep 2026). His three-screen split puts
+    # his car on the phone and the field on the tablet, and leaves this screen
+    # the one he looks at least: every lap of the race as it was judged.
+    # `RaceState.lap_history`, newest last. Drawn only while BOTH the phone
+    # and the tablet are reading - with either of them gone this board is his
+    # live pit board again, which is what it has always been.
+    history: tuple = ()
+    show_history: bool = False
+
     # ---- the three lights (row 5.21).
     # WET: the hygrometer over the last few HUD reads - "wet", "mixed", "dry",
     # or None where the HUD could not be read (never "dry" for want of a read).
@@ -1536,6 +1545,84 @@ def face_burn_block(state: "DriverState") -> Block | None:
     return Block(f"{delta:+.2f}", stint, tone)
 
 
+# How many laps the rack draws. A race is thirty-odd laps and this is read
+# between stints, not at speed; the rest of the race is the export's job.
+HISTORY_ROWS = 12
+
+
+@dataclass(frozen=True)
+class HistoryRow:
+    """One lap on the monitor's rack, already worded."""
+    lap: str
+    time: str
+    delta: str
+    burn: str
+    note: str
+    delta_tone: str = TONE_PLAIN
+    burn_tone: str = TONE_PLAIN
+
+
+def history_rows(history, rows: int = HISTORY_ROWS) -> tuple[HistoryRow, ...]:
+    """The last laps, newest last, as the rack draws them.
+
+    **A lap with no verdict keeps its row and says why** - a pit lap, an out
+    lap, an incident lap. Dropping them would leave a rack whose lap numbers
+    skip, and the gaps are where most of a race's time goes.
+    """
+    from pitcrew.race.targets import ON_TARGET_L, ON_TARGET_S
+
+    drawn = []
+    for lap in list(history or ())[-rows:]:
+        delta, burn_delta = lap.get("lap_delta_s"), lap.get("burn_delta_l")
+        saving = lap.get("saving")
+        note = lap.get("why") or ("save" if saving else
+                                  "full" if saving is False else "")
+        if lap.get("pit"):
+            note = "pit lap"
+        elif lap.get("out"):
+            note = "out lap"
+        used = lap.get("burn_l")
+        # **The litres AND what they were against.** Coloured alone, a 7.04
+        # in green beside a 5.37 in amber reads as a judgement on the figure
+        # rather than on its distance from the lap's own target.
+        burn = ("" if used is None else f"{used:.2f}" +
+                ("" if burn_delta is None else f"  {burn_delta:+.2f}"))
+        drawn.append(HistoryRow(
+            lap=str(lap.get("lap") or "--"),
+            time=format_lap_ms(lap.get("lap_ms")),
+            delta="" if delta is None else format_delta(delta),
+            burn=burn,
+            note=note,
+            delta_tone=(TONE_PLAIN if delta is None else
+                        TONE_URGENT if delta >= ON_TARGET_S else TONE_GOOD),
+            burn_tone=(TONE_PLAIN if burn_delta is None else
+                       TONE_URGENT if burn_delta >= ON_TARGET_L else TONE_GOOD),
+        ))
+    return tuple(drawn)
+
+
+def history_summary(history) -> str:
+    """One line under the rack: the laps that counted, the best, the burns.
+
+    **Per beep column, and each with its lap count** (rule 4): the two columns
+    are two burns 30% apart, and one average over both is the figure that put
+    six litres in the car at Sardegna.
+    """
+    laps = [lap for lap in list(history or ()) if lap.get("lap_ms")]
+    counted = [lap for lap in laps if lap.get("lap_delta_s") is not None]
+    parts = [f"{len(laps)} laps"]
+    if counted:
+        best = min(lap["lap_ms"] for lap in counted)
+        parts.append(f"best {format_lap_ms(best)}")
+    for saving, word in ((True, "save"), (False, "full")):
+        burns = [lap["burn_l"] for lap in laps
+                 if lap.get("saving") is saving and lap.get("burn_l")]
+        if burns:
+            parts.append(f"{word} {sum(burns) / len(burns):.2f} L/lap "
+                         f"over {len(burns)}")
+    return "  ·  ".join(parts)
+
+
 def target_note(state: "DriverState") -> str:
     """What the lap in progress is asked for, or why it is asked for nothing.
 
@@ -2448,6 +2535,73 @@ class _BoxPanel(QWidget):
             self.next_stat.show_value("--", "no plan")
 
 
+class _HistoryPanel(QWidget):
+    """The race so far, a lap a row - the monitor's page.
+
+    Built once and filled on each state: twelve rows of five labels is
+    nothing to re-text at 4 Hz, and rebuilding widgets under a driver's eye
+    is how a row comes to show one lap's time beside another's burn.
+    """
+
+    COLUMNS = ("LAP", "TIME", "VS PLAN", "BURN  VS PLAN", "")
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(8)
+        self.caption = QLabel("THE RACE SO FAR")
+        self.caption.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:26px;font-weight:600;"
+            f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
+        column.addWidget(self.caption)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(46)
+        grid.setVerticalSpacing(4)
+        for index, head in enumerate(self.COLUMNS):
+            label = QLabel(head)
+            label.setStyleSheet(
+                f"font-family:{LABEL_FACE};font-size:22px;font-weight:600;"
+                f"letter-spacing:5px;color:{INK_DIM};background:transparent;")
+            grid.addWidget(label, 0, index)
+        self.cells = []
+        for row in range(HISTORY_ROWS):
+            line = []
+            for index in range(len(self.COLUMNS)):
+                label = QLabel("")
+                label.setStyleSheet(self._css(INK, 34))
+                grid.addWidget(label, row + 1, index)
+                line.append(label)
+            self.cells.append(line)
+        column.addLayout(grid)
+        self.summary = QLabel("")
+        self.summary.setStyleSheet(self._css(INK_DIM, 26))
+        column.addWidget(self.summary)
+
+    @staticmethod
+    def _css(ink: str, size: int) -> str:
+        return (f"font-family:{NUMBER_FACE};font-size:{size}px;"
+                f"color:{ink};background:transparent;")
+
+    def show_state(self, state: "DriverState") -> None:
+        rows = history_rows(state.history)
+        for index, line in enumerate(self.cells):
+            row = rows[index] if index < len(rows) else None
+            values = (("", "", "", "", "") if row is None else
+                      (row.lap, row.time, row.delta, row.burn, row.note))
+            inks = (INK, INK,
+                    NEAR if (row and row.delta_tone == TONE_URGENT) else
+                    GOOD if (row and row.delta_tone == TONE_GOOD) else INK,
+                    NEAR if (row and row.burn_tone == TONE_URGENT) else
+                    GOOD if (row and row.burn_tone == TONE_GOOD) else INK,
+                    INK_DIM)
+            for label, value, ink in zip(line, values, inks):
+                label.setText(value)
+                label.setStyleSheet(self._css(ink, 26 if value is values[-1]
+                                              else 34))
+        self.summary.setText(history_summary(state.history))
+
+
 class DriverView(QWidget):
     """The whole instrument. `update_state` is the only thing to call."""
 
@@ -2695,9 +2849,20 @@ class DriverView(QWidget):
         self.box.setSizePolicy(QSizePolicy.Policy.Preferred,
                                QSizePolicy.Policy.Maximum)
 
+        # **The history page, and why it is a page rather than a screen.**
+        # With his car on the phone and the field on the tablet, this monitor
+        # is the one he looks at least - so it carries the race behind him.
+        # The moment either of those screens drops, this board is his live pit
+        # board again: a page in the same stack cannot be out of date, and
+        # cannot be missing when it is needed.
+        self.history = _HistoryPanel()
+        self.history.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                   QSizePolicy.Policy.Maximum)
+
         self.states = QStackedLayout()
         self.states.addWidget(self.running)
         self.states.addWidget(self.box)
+        self.states.addWidget(self.history)
         outer.addLayout(self.states)
 
         self.update_state(DriverState())
@@ -2716,9 +2881,14 @@ class DriverView(QWidget):
                         urgent=block.urgent, good=block.good)
 
     def update_state(self, state: DriverState) -> None:
-        self.states.setCurrentWidget(self.box if state.in_box else self.running)
+        # The box always wins: a stop is happening, whatever is on the phone.
+        page = (self.box if state.in_box else
+                self.history if state.show_history else self.running)
+        self.states.setCurrentWidget(page)
         if state.in_box:
             self.box.show_state(state)
+        elif state.show_history:
+            self.history.show_state(state)
         temps = state.temps_c or {}
         for corner, widget in self.tyres.items():
             kind, lopsided = classify(corner, temps, state.compound)

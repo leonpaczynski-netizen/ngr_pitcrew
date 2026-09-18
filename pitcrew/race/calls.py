@@ -1174,6 +1174,13 @@ class RaceState:
     # switched pools to about the practice figure and looks right while being
     # wrong. Emptied at every stop by `clear_stint` - a stint is a tank.
     stint_burns: list = field(default_factory=list)
+    # **Every lap of this race as it was judged**, newest last and bounded -
+    # `(lap, lap_ms, target_ms, lap_delta_s, burn_l, burn_delta_l, saving,
+    # why)`. The monitor draws it as history (17 Sep 2026); nothing live reads
+    # it. Written once at the crossing, from the verdict the heartbeat speaks,
+    # so the rack and the voice cannot describe one lap two ways (rule 12);
+    # `why` is why a lap got no verdict, which is a fact about the lap.
+    lap_history: list = field(default_factory=list)
 
     # --- tyre wear, MEASURED off the HUD gauge (telemetry/hud.py) ---
     # (lap, {corner: fraction worn}) per lap that carried a gauge reading.
