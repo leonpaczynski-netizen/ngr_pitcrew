@@ -485,15 +485,14 @@ def test_the_lap_in_progress_is_not_in_the_verdict():
     assert verdict is None                      # only four completed laps
 
 
-def test_the_pace_call_through_the_race_names_him_and_says_the_count():
-    co = a_race()
+def _closing_ahead(co, first_gap: float) -> None:
     for key in range(1, 9):
         co.state.lap = key
         # A lap apart: a second a lap is a car closing, not a jump.
         co._packets += int(120 * SAMPLE_HZ)
         for _ in range(3):
-            co.note_gap_read("ahead", 10.0 - 1.0 * key, subject="PUNISHED",
-                             name="PUNISHED")
+            co.note_gap_read("ahead", first_gap - 1.0 * key,
+                             subject="PUNISHED", name="PUNISHED")
         co.news.note_lap(key, key + 1, 120.0)
     co.state.lap = 9
     news = co.news
@@ -501,11 +500,30 @@ def test_the_pace_call_through_the_race_names_him_and_says_the_count():
         ("PUNISHED", news._segment[("ahead", "PUNISHED")]),
         news._band["ahead"], news._ref["ahead"])
     co.news._gap_lap = co.state.lap_now()
+
+
+def test_the_pace_call_through_the_race_names_him_and_says_the_count():
+    """Beyond `news.CATCH_WINDOW_S` there is no catch to project, and the
+    plain pace figure is the call."""
+    co = a_race()
+    _closing_ahead(co, 30.0)
     said = run(co, 1)
     assert [c.spoken() for c in said] == [
         "Catching PUNISHED, 1.0 seconds a lap. Over 5 laps."]
     assert said[0].kind == PACE and said[0].confidence == MEDIUM
     assert "95%" in said[0].why_spoken
+
+
+def test_inside_the_window_the_pace_call_says_when_he_gets_there():
+    """Sardegna Rd 9 (session 188, `test_catch_projection_s188`): the same
+    close two seconds up the road is a catch lap, through the coordinator."""
+    co = a_race()
+    _closing_ahead(co, 10.0)
+    said = run(co, 1)
+    assert [c.spoken() for c in said] == [
+        "Catching PUNISHED, 1.0 seconds a lap. On him around lap 12."]
+    assert said[0].kind == PACE and said[0].confidence == MEDIUM
+    assert said[0].derived.startswith("derived:")
 
 
 # ------------------------------------------------------------ championship

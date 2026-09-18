@@ -1281,8 +1281,8 @@ def race_news_lines() -> tuple[str, ...]:
     live-synthesised name is two voices in one sentence - they stay live, as
     the rival's stop does.
     """
-    from pitcrew.race.news import (gap_sentence, pace_reason, pace_sentence,
-                                   picture_words)
+    from pitcrew.race.news import (catch_reason, gap_sentence, pace_reason,
+                                   pace_sentence, picture_words)
 
     lines: list[str] = []
     for side in ("ahead", "behind"):
@@ -1291,6 +1291,11 @@ def race_news_lines() -> tuple[str, ...]:
         for rate in (0.9, -0.9):
             lines.append(pace_sentence(side, None, rate))
     lines.append(pace_reason(5))
+    # When a closing car gets there (17 Sep 2026): the lap split on its number,
+    # and the flag answer whole, each side.
+    for side in ("ahead", "behind"):
+        lines.append(catch_reason(side, 25, True))
+        lines.append(catch_reason(side, 25, False))
     for line, required in ((("still", 2), 1), (("effective", 8), 1),
                            (("effective", 8), 2), (("effective", 8), 3)):
         call, reason = picture_words(6, line, required)

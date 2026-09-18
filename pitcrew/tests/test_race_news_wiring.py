@@ -44,6 +44,30 @@ def test_a_volunteered_call_is_filed_with_why_it_was_said(raced):
         "the car ahead is new")
 
 
+def test_a_projected_catch_is_filed_with_its_model(raced):
+    """Rule 5: the catch lap is arithmetic on board-read gaps, and the ledger
+    the export is built from carries the model beside the sentence."""
+    from pitcrew.race.calls import LOW, PACE
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    call = Call(PACE, 20, "Rocky is catching, 0.9 seconds a lap.",
+                "On you around lap 25.", LOW,
+                why_spoken="catch projection: the range straddles the flag",
+                derived="derived: linear catch projection off the board's gap")
+    controller._on_position_changed(call)
+    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    filed = [r for r in revisions if r["plan"].get("kind") == PACE]
+    assert filed and filed[-1]["plan"]["derived"].startswith("derived:")
+    # And a call that projects nothing carries no such key.
+    gaps = Call(GAPS, 21, "Rocky behind, 3.0.", "", why_spoken="refresher")
+    controller._on_position_changed(gaps)
+    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    assert "derived" not in [r for r in revisions
+                             if r["plan"].get("kind") == GAPS][-1]["plan"]
+
+
 def test_a_stop_picture_standing_in_for_a_place_brings_the_league_line(raced):
     controller, _, _, _ = raced
     controller.start_race()

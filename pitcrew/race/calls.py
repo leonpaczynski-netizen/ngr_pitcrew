@@ -774,6 +774,11 @@ class Call:
     # call as `why_spoken`. Set by the volunteered race calls in
     # `race/news.py`; None on the calls that predate it.
     why_spoken: str | None = None
+    # **The model behind a figure the call projected rather than read**,
+    # beginning "derived:" - rule 5, for the export's `callsMade[].derived`.
+    # Never spoken. Set where a sentence carries a projection (the catch lap
+    # in `race/news.py`); None on a call whose figures are read, not derived.
+    derived: str | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Then the one word that marks a register.

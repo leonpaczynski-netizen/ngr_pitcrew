@@ -372,6 +372,10 @@ def test_the_pack_stays_within_budget():
     "slow.") was weighed and refused: it saves about seven clips and puts two
     joins in a four-word line said every lap. 830 leaves 23.
 
+    **17 Sep 2026, the catch lap** (Sardegna Rd 9, session 188): four clips -
+    "On you around lap" / "On him around lap" split on the number, and "Not on
+    you before the flag." / "Not on him before the flag." whole. 811 used.
+
     **Raised to 880 on 18 Sep 2026, for the tablet's three levers.** The
     ceiling stood at 830 with 807 used, and not one of the buttons' sentences
     was declared: `_fuel_mode` needs a state carrying `fuel_mode_change` and
@@ -411,7 +415,9 @@ def test_the_pack_stays_within_budget():
       same ground as the pace line above: two joins in a four-word call said
       mid-corner. Above a second they split on the number and cost prefixes.
 
-    990 leaves 36.
+    The catch lap's four clips came in with the merge of
+    `claude/catch-lap-call` (19 Sep 2026), which was written against
+    the 830 ceiling and never merged. 990 still holds them.
     """
     assert len(manifest.clips()) < 990
 

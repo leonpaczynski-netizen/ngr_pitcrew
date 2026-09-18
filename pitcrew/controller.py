@@ -7889,6 +7889,11 @@ class PitCrewController(QObject):
             if why:
                 payload["why_spoken"] = why
                 payload["informational"] = True
+            # **And the model behind a projected figure** - the catch lap -
+            # so the export can say it was derived (rule 5).
+            derived = getattr(call, "derived", None)
+            if derived:
+                payload["derived"] = derived
             revision_id = self.store.append_revision(
                 self.race_run_id, call.lap, call.call, payload,
                 accepted=False)
