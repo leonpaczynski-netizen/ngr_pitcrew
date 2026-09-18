@@ -1281,8 +1281,9 @@ def race_news_lines() -> tuple[str, ...]:
     live-synthesised name is two voices in one sentence - they stay live, as
     the rival's stop does.
     """
-    from pitcrew.race.news import (catch_reason, gap_sentence, pace_reason,
-                                   pace_sentence, picture_words)
+    from pitcrew.race.news import (catch_reason, catch_tyres_clause,
+                                   gap_sentence, pace_reason, pace_sentence,
+                                   picture_words)
 
     lines: list[str] = []
     for side in ("ahead", "behind"):
@@ -1296,9 +1297,18 @@ def race_news_lines() -> tuple[str, ...]:
     for side in ("ahead", "behind"):
         lines.append(catch_reason(side, 25, True))
         lines.append(catch_reason(side, 25, False))
+        # **And when his tyres go off** (19 Sep 2026) - the half of the
+        # catch call he asked for as critical. The lap splits on its number;
+        # "Keep fighting." is its own sentence, said only about a chaser.
+        lines.append(catch_tyres_clause(side, 28))
     for line, required in ((("still", 2), 1), (("effective", 8), 1),
                            (("effective", 8), 2), (("effective", 8), 3)):
         call, reason = picture_words(6, line, required)
+        lines.append(f"{call} {reason}")
+        # The hedge when a rival's own fuel moved the count - declared with
+        # the one it replaces, or it would be the only sentence in the stop
+        # picture played live.
+        call, reason = picture_words(6, line, required, on_fuel=True)
         lines.append(f"{call} {reason}")
     out: list[str] = []
     for line in lines:

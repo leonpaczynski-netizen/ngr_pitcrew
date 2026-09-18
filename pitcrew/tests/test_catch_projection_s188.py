@@ -355,3 +355,133 @@ def test_the_projection_reaches_the_export_labelled_derived(tmp_path):
                 / "EXPORT-CONTRACT.md").read_text(encoding="utf-8")
     assert "`derived` is present only on a call" in contract
 
+
+
+# --------------------------------------------- his tyres (19 Sep 2026)
+#
+# The driver, the day after: *"using our tyre model george should be able to
+# tell me how his tyres will be when he is catching me ... Rocky is catching
+# but based on his last stop his tyres will be off the cliff in the last lap
+# so keep fighting. This is critical information for george to pass to me."*
+#
+# Rocky stopped at the end of his lap 14 on medium - read off the race video
+# frame by frame, because the pit wall of the night refused every medium disc
+# on shape and never filed his stop (fixed in 6aa64aa). Our RM rate at this
+# circuit and multiplier is 0.068 worn a lap over 3 stints (race_knowledge 13).
+# He ran 15 laps on the set; on the final lap he fell from 0.6 s ahead in P3
+# to 17 s behind in P5.
+
+RM_RATE, RM_STINTS = 0.068, 3
+
+
+def _rocky_stopped():
+    from pitcrew.race.rival_calls import Rival
+    from pitcrew.race.rivals import Stop
+
+    return Rival(name="Rocky", pitted=True,
+                 stop=Stop(lap=14, fuel_in_l=19.0, fuel_out_l=89.0,
+                           compound="M"))
+
+
+def _tyres_of(rival, *, rate=RM_RATE):
+    from pitcrew.race.rival_tyres import rival_tyres
+
+    def of(name):
+        if str(name).lower() != "rocky":
+            return None
+        return rival_tyres(rival, now_key=22, our_compound="RH",
+                           wear_rate=lambda code: ((rate, RM_STINTS)
+                                                   if code == "RM"
+                                                   else (None, 0)))
+    return of
+
+
+def test_george_says_rockys_tyres_go_off_before_the_flag():
+    """**The call he asked for, on the race he asked it about.**"""
+    news = _news_with(rocky_behind(), "behind", "Rocky")
+    call = news.pace_call(_state(22), 0, tyres_of=_tyres_of(_rocky_stopped()))
+    assert call is not None
+    assert call.spoken() == (
+        "Rocky is catching, 0.9 seconds a lap. On you around lap 25. "
+        "On his last stop, his tyres go off around lap 28. Keep fighting.")
+    # Rule 5: modelled, and the audit says from what - both assumptions named.
+    assert "[DERIVED]" in call.derived
+    assert "[ASSUMED] his car wears the set as ours does" in call.derived
+    assert "ARRIVED on" in call.derived
+    # Rule 4: the rate travels with its stint count.
+    assert "3 stints" in call.derived
+
+
+def test_with_no_stop_on_file_the_catch_call_is_unchanged():
+    """What George said that night, because the wall had nothing to go on."""
+    news = _news_with(rocky_behind(), "behind", "Rocky")
+    call = news.pace_call(_state(22), 0, tyres_of=lambda name: None)
+    assert call.spoken() == ("Rocky is catching, 0.9 seconds a lap. "
+                             "On you around lap 25.")
+
+
+def test_a_set_that_lasts_past_the_flag_is_not_mentioned():
+    """A cliff after the flag changes nothing he does - so nothing is said.
+    At half our rate his set would last 26 laps from lap 14."""
+    news = _news_with(rocky_behind(), "behind", "Rocky")
+    call = news.pace_call(_state(22), 0,
+                          tyres_of=_tyres_of(_rocky_stopped(), rate=0.034))
+    assert "tyres" not in call.spoken()
+
+
+def test_a_cliff_already_behind_him_is_not_claimed():
+    """Past the cliff is a claim the model can no longer check against the
+    race - and "his tyres go off around lap 20" on lap 22 is a sentence
+    about the past dressed as a warning."""
+    from pitcrew.race.rival_calls import Rival
+    from pitcrew.race.rivals import Stop
+
+    old_set = Rival(name="Rocky", pitted=True,
+                    stop=Stop(lap=4, fuel_in_l=19.0, fuel_out_l=89.0,
+                              compound="M"))
+    news = _news_with(rocky_behind(), "behind", "Rocky")
+    call = news.pace_call(_state(22), 0, tyres_of=_tyres_of(old_set))
+    assert "tyres" not in call.spoken()
+
+
+def test_no_rate_for_his_compound_here_means_no_claim():
+    """`Knowledge.wear_per_lap` refuses a rate measured at another multiplier
+    (§5.2) and has nothing for a compound never run here. Either way the
+    projection has no rate, and George says nothing about his tyres."""
+    news = _news_with(rocky_behind(), "behind", "Rocky")
+    call = news.pace_call(_state(22), 0,
+                          tyres_of=_tyres_of(_rocky_stopped(), rate=None))
+    assert "tyres" not in call.spoken()
+
+
+def test_the_projection_puts_rocky_at_the_cliff_on_lap_28():
+    from pitcrew.race.rival_tyres import CLIFF_WORN, rival_tyres
+
+    got = rival_tyres(_rocky_stopped(), now_key=22, our_compound="RH",
+                      wear_rate=lambda code: (RM_RATE, RM_STINTS))
+    assert got.compound == "RM"             # "M" on the disc, R from the race
+    assert got.laps_on_set == 8
+    assert abs(got.worn_now - 0.544) < 0.01
+    assert CLIFF_WORN == 0.90               # the cliff, not our 0.85 limit
+    assert abs(got.cliff_key - (14 + 0.90 / RM_RATE)) < 1e-9
+    assert got.cliff_lap(screen_offset=1) == 28
+
+
+def test_a_compound_letter_takes_the_races_family_or_nothing():
+    from pitcrew.race.rival_tyres import full_code
+
+    assert full_code("M", "RH") == "RM"
+    assert full_code("S", "SM") == "SS"
+    assert full_code(None, "RH") is None            # nothing read
+    assert full_code("M", None) is None             # no family to give it
+    assert full_code("M", "IM") is None             # a wet race is not dry
+    assert full_code("IM", "RH") == "IM"            # a whole code stands
+
+
+def test_a_stop_filed_ahead_of_now_is_not_a_negative_set():
+    """Rule 9: a stop in another lap domain is refused, not clamped to zero
+    laps on the set."""
+    from pitcrew.race.rival_tyres import rival_tyres
+
+    assert rival_tyres(_rocky_stopped(), now_key=10, our_compound="RH",
+                       wear_rate=lambda code: (RM_RATE, RM_STINTS)) is None

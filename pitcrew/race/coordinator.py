@@ -1712,7 +1712,8 @@ class RaceCoordinator:
             (STOPS_PICTURE, lambda: self.news.picture_call(
                 state, now, required=required, required_source=source,
                 planned=planned)),
-            (PACE, lambda: self.news.pace_call(state, now, lane=state.lane)),
+            (PACE, lambda: self.news.pace_call(state, now, lane=state.lane,
+                                               tyres_of=self._rival_tyres)),
             (WATCHED, lambda: self.news.watched_call(state, now)),
             (GAPS, lambda: self.news.gaps_call(state, now)),
         )
@@ -1761,6 +1762,33 @@ class RaceCoordinator:
 
     acknowledged_delivery = False
     ACK_TIMEOUT_S = 45.0
+
+    def _rival_tyres(self, name):
+        """A named rival's set as our model sees it, or None. See
+        `race/rival_tyres.py` for everything it assumes.
+
+        **Our rate, through `Knowledge.wear_per_lap` with this race's
+        multiplier bound in** - so a rate fitted at x2 is refused for a race
+        at x8 here exactly as it is for our own car (§5.2), and the refusal
+        lives in one place rather than two.
+        """
+        if self.knowledge is None or not name:
+            return None
+        from pitcrew.race.rival_tyres import rival_tyres
+
+        # Matched without case, as `lane.visits_by` matches - the board and
+        # the stop are two reads of one name.
+        wanted = str(name).lower()
+        rival = next((r for n, r in dict(self.state.rivals or {}).items()
+                      if str(n).lower() == wanted), None)
+        if rival is None:
+            return None
+        multiplier = self.state.tyre_wear_mult
+        return rival_tyres(
+            rival, now_key=self.state.lap_now(),
+            our_compound=self.state.tyre_compound,
+            wear_rate=lambda code: self.knowledge.wear_per_lap(
+                code, multiplier=multiplier))
 
     @staticmethod
     def _heard_matters(call) -> bool:

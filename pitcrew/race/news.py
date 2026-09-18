@@ -316,6 +316,31 @@ def catch_reason(side: str, lap: int, before_flag: bool) -> str:
     return f"Not on {whom} before the flag."
 
 
+# The sentence in front of a rival's cliff lap - one clip, the lap after it
+# played from the number words the pack already holds.
+TYRES_GO_OFF = "On his last stop, his tyres go off around lap"
+KEEP_FIGHTING = "Keep fighting."
+
+
+def catch_tyres_clause(side: str, cliff_lap: int) -> str:
+    """When the chasing car's set goes off, as our model sees it.
+
+    The driver, 19 Sep 2026: *"Rocky is catching but based on his last stop
+    his tyres will be off the cliff in the last lap so keep fighting."*
+
+    **"On his last stop" is the provenance, said in his terms** (rule 5).
+    It names exactly what the figure rests on - the lap the wall saw him
+    stop - and "go off around" is a projection by its grammar, never a
+    reading. The full model and its two assumptions ride in `Call.derived`.
+
+    "Keep fighting." only for a car BEHIND: it is the instruction that
+    follows from a chaser whose tyres give out before the flag. A car ahead
+    going off is simply news - there is nothing to hold.
+    """
+    clause = f"{TYRES_GO_OFF} {cliff_lap}."
+    return f"{clause} {KEEP_FIGHTING}" if side == "behind" else clause
+
+
 def if_they_stop(required: int) -> str:
     """The assumption behind "effectively", said with it (rule 5)."""
     if required == 1:
@@ -1041,7 +1066,8 @@ class RaceNews:
                 self._gap_lap = lap_key
         return self._offer(call, book)
 
-    def pace_call(self, state, now: int, *, lane=None) -> Call | None:
+    def pace_call(self, state, now: int, *, lane=None,
+                  tyres_of=None) -> Call | None:
         """A pace difference to a neighbour that beat the noise. See
         `pace_verdict` for the test.
 
@@ -1085,8 +1111,19 @@ class RaceNews:
                 trend, side, now_key=now_key, flag_key=_flag_key(state),
                 dirty_keys=frozenset(dirty | his))
             if found is not None:
+                # **His set, as our model sees it** - see `rival_tyres`. Asked
+                # by NAME, because the rival record is filed by name and the
+                # catch subject is a board handle; an unnamed car has no stop
+                # on file to project from.
+                tyres = None
+                if tyres_of is not None and a_person(name) is not None:
+                    try:
+                        tyres = tyres_of(name)
+                    except Exception:               # noqa: BLE001
+                        tyres = None
                 call = self._catch_call(state, found, name, said_catch.get(side),
-                                        jumpy.get(subject), now_key)
+                                        jumpy.get(subject), now_key,
+                                        tyres=tyres)
                 if call is not None:
                     return call
                 continue
@@ -1131,7 +1168,7 @@ class RaceNews:
 
     def _catch_call(self, state, found: CatchProjection, name: str | None,
                     said: tuple | None, jumpy: str | None,
-                    now_key: int) -> Call | None:
+                    now_key: int, tyres=None) -> Call | None:
         """The projection as a line, when it is news.
 
         **News is a change the driver would drive differently for**, and
@@ -1173,13 +1210,24 @@ class RaceNews:
             confirmed = confidence == MEDIUM and said_confidence == LOW
             if not (flipped or moved or confirmed) or said_key == now_key:
                 return None
+        reason = catch_reason(side, lap, before)
+        derived = catch_model(found, screen_offset=screen_offset)
+        # **His tyres, when they go before the flag** - the half of this call
+        # he asked for as critical. Only a cliff still AHEAD of now and at or
+        # before the flag is news: one already passed is a claim the model
+        # can no longer check, and one after the flag changes nothing he does.
+        if (tyres is not None and now_key < tyres.cliff_key
+                and tyres.cliff_key <= found.flag_key):
+            reason = (f"{reason} "
+                      f"{catch_tyres_clause(side, tyres.cliff_lap(screen_offset))}")
+            derived = f"{derived}; {tyres.model()}"
         call = Call(
             PACE, state.lap, pace_sentence(side, name, found.rate),
-            catch_reason(side, lap, before), confidence,
+            reason, confidence,
             why_spoken=("catch projection: "
                         + ("; ".join(doubts) if doubts else
                            "range sure, board agrees, named car")),
-            derived=catch_model(found, screen_offset=screen_offset),
+            derived=derived,
             tag=f"{PACE}:{side}:{found.subject}:catch")
         entry = (found.subject, before, lap, confidence, now_key)
         pace_entry = (found.subject, True, round(found.rate, 1), now_key)
