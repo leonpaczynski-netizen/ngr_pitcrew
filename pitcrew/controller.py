@@ -8209,7 +8209,15 @@ class PitCrewController(QObject):
         # it would ask him to answer something nobody asked.
         self.ptt.pending_replan = spoken.call() if spoken.offered else None
         if self._engineer_speaks:
-            self.voice.say(text)
+            # **An offer is an instruction; a note is not.** With no kind at
+            # all this was EVENT, so the sentence that changes the shape of
+            # the race queued behind anything classed above it - and it is the
+            # one call he is asked to answer.
+            from pitcrew.race.calls import REPLAN_OFFER
+
+            self.voice.say(text,
+                           kind=REPLAN_OFFER if spoken.offered else None,
+                           keep=not spoken.offered)
         self.last_call = text
         self.ptt.last_call = text
         # **On the board too, marked for what it is.** A re-plan is the one
@@ -8388,7 +8396,11 @@ class PitCrewController(QObject):
 
         told = REPLANNING_OFF
         if self._engineer_speaks:
-            self.voice.say(told)
+            # Said once in a race, and it is the notice that the engineer has
+            # STOPPED adapting - the one thing a driver must not miss by it
+            # being dropped for a busier lap. `keep`, not a higher class: it
+            # is not an instruction and must not outrank one.
+            self.voice.say(told, keep=True)
         self.last_call = told
         self.ptt.last_call = told
         if self.race_screen is not None:

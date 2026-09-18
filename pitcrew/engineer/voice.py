@@ -381,7 +381,7 @@ def _kind_classes() -> dict[str, int]:
     instructions = (calls.BOX_NOW, calls.BOX_SOON, calls.STOPS_OFF,
                     calls.STOP_BACK, calls.UNDERCUT, calls.FUEL_SHORT,
                     calls.FUEL_SAVE, calls.FUEL_REACHES, calls.REJOIN,
-                    calls.STAY_OUT_FUEL,
+                    calls.STAY_OUT_FUEL, calls.REPLAN_OFFER,
                     refuel.TARGET, refuel.RELEASE, refuel.SHORT)
     # Said mid-lap, off a frame or the pit wall's worker - never at the
     # crossing. Everything else not listed is EVENT.
@@ -1393,6 +1393,53 @@ class Sapi5Engine:
             chosen)
 
 
+class _FallsBackTo:
+    """`primary`, with `spare` behind it for a failure at SPEAK time.
+
+    **The documented chain did not exist.** `_best_engine` describes
+    `pack -> Piper -> SAPI -> silent` and its loop built exactly ONE live
+    engine, breaking on the first that CONSTRUCTED - so SAPI was an
+    alternative to Piper at construction, never a fallback behind it. A Piper
+    model that loads and then cannot synthesise (a corrupt ONNX, an ORT init
+    failure on the race PC) was total silence for a whole race, counted into
+    `_failures` and displayed on a screen §2 says he cannot read.
+
+    A screen-reader voice saying the call is worse than Piper saying it and
+    better than nothing saying it, which is the whole of this class.
+    """
+
+    def __init__(self, primary, spare) -> None:
+        self._primary = primary
+        self._spare = spare
+        self.name = f"{getattr(primary, 'name', '?')}+"                    f"{getattr(spare, 'name', '?')}"
+
+    def speak(self, text: str) -> None:
+        try:
+            self._primary.speak(text)
+            return
+        except Exception as exc:                # noqa: BLE001
+            log("voice").error(
+                "%s could not speak %r (%s: %s) - falling back to %s",
+                getattr(self._primary, "name", "the voice"), text,
+                type(exc).__name__, exc, getattr(self._spare, "name", "SAPI"))
+        self._spare.speak(text)
+
+    def warm(self) -> None:
+        for engine in (self._primary, self._spare):
+            warm = getattr(engine, "warm", None)
+            if callable(warm):
+                try:
+                    warm()
+                except Exception as exc:        # noqa: BLE001
+                    log("voice").info("could not warm %s: %s: %s",
+                                      getattr(engine, "name", "?"),
+                                      type(exc).__name__, exc)
+
+    def tune(self, *args, **kwargs):
+        tune = getattr(self._primary, "tune", None)
+        return tune(*args, **kwargs) if callable(tune) else None
+
+
 def _best_engine():
     """The best speech engine this machine can actually run.
 
@@ -1413,14 +1460,20 @@ def _best_engine():
     without raising. Returning None instead means the app says "no speech
     engine on this machine", which is true and which the driver can act on.
     """
-    live = None
+    built = []
     for factory in (PiperEngine, Sapi5Engine):
         try:
-            live = factory()
-            break
+            built.append(factory())
         except Exception as exc:                # noqa: BLE001
             log("voice").info("%s unavailable: %s: %s", factory.__name__,
                               type(exc).__name__, exc)
+    # **Both, where both exist** - see `_FallsBackTo`. The loop used to break
+    # on the first that constructed, which made SAPI an alternative to Piper
+    # rather than the fallback behind it that this function's own docstring
+    # promises.
+    live = built[0] if built else None
+    if len(built) > 1:
+        live = _FallsBackTo(built[0], built[1])
 
     pack = load_voice_pack(live)
     if live is None:

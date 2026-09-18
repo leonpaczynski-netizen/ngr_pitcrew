@@ -234,6 +234,15 @@ RIVAL_BOXED = "rival-boxed"
 RIVAL_COMMITTED = "rival-committed"
 RIVAL_SHORT = "rival-short"
 STAY_OUT_FUEL = "stay-out-fuel"
+# **The strategy engine changing its mind, which is the biggest thing it
+# says.** It had no kind at all, so `class_of(None)` put "Recommend 2 stops
+# from here." in EVENT - queued behind, and evictable by, anything classed as
+# an instruction. An offered re-plan is also the one call the driver is asked
+# to ANSWER (`ptt.pending_replan`), so it cannot be the one that waits.
+#
+# Only the OFFER is an instruction. A re-plan that merely notes the burn
+# against the plan's expectation is a report, and stays where reports are.
+REPLAN_OFFER = "replan-offer"
 # **What is going on in the race around him, volunteered** (the driver, 14 Sep
 # 2026, after Bathurst Rd7: *"want more comms from him about what is going on
 # in the race"*; `docs/ENGINEER-TARGET-STATE_2026-08-29.md` D7 as amended).

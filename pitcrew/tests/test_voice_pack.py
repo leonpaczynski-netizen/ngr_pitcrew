@@ -882,4 +882,62 @@ def test_the_pack_sits_in_front_of_the_live_engine(tmp_path, monkeypatch):
 
     engine = voice_module._best_engine()
     assert isinstance(engine, VoicePackEngine)
-    assert engine._fallback is spy
+    # **The chain, not the first engine that constructed.** Where SAPI is also
+    # available Piper sits in front of it rather than instead of it - see
+    # `_FallsBackTo`. Either shape satisfies "the pack wraps the live engine";
+    # what must hold is that Piper is what speaks first.
+    under = engine._fallback
+    assert under is spy or getattr(under, "_primary", None) is spy, under
+
+
+@pytest.mark.engine_resolution
+def test_a_piper_that_loads_but_cannot_speak_falls_through_to_sapi():
+    """**The documented chain did not exist.**
+
+    `_best_engine` promises `pack -> Piper -> SAPI -> silent` and its loop
+    broke on the first engine that CONSTRUCTED - so SAPI was an alternative to
+    Piper, never a fallback behind it. A model that loads and then fails to
+    synthesise (corrupt ONNX, an ORT init failure on the race PC) was silence
+    for the whole race, counted into a number shown only on a screen the
+    driver cannot look at.
+    """
+    from pitcrew.engineer.voice import _FallsBackTo
+
+    class Broken:
+        name = "piper"
+
+        def speak(self, text):
+            raise RuntimeError("onnxruntime is not having it")
+
+    class Reader:
+        name = "sapi"
+
+        def __init__(self):
+            self.said = []
+
+        def speak(self, text):
+            self.said.append(text)
+
+    reader = Reader()
+    chain = _FallsBackTo(Broken(), reader)
+    chain.speak("Box this lap.")
+    assert reader.said == ["Box this lap."]
+    assert "piper" in chain.name and "sapi" in chain.name
+
+
+@pytest.mark.engine_resolution
+def test_the_chain_does_not_speak_twice_when_the_first_engine_works():
+    from pitcrew.engineer.voice import _FallsBackTo
+
+    class Works:
+        name = "piper"
+
+        def __init__(self):
+            self.said = []
+
+        def speak(self, text):
+            self.said.append(text)
+
+    primary, spare = Works(), Works()
+    _FallsBackTo(primary, spare).speak("P4.")
+    assert primary.said == ["P4."] and spare.said == []
