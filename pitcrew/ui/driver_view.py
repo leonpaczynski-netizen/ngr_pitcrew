@@ -2549,11 +2549,19 @@ class _BoxPanel(QWidget):
 
 
 class _HistoryPanel(QWidget):
-    """The race so far, a lap a row - the monitor's page.
+    """The race so far, a lap a row - and the four corners under it.
 
     Built once and filled on each state: twelve rows of five labels is
     nothing to re-text at 4 Hz, and rebuilding widgets under a driver's eye
     is how a row comes to show one lap's time beside another's burn.
+
+    **The tyre temperatures are here because they are on no other screen**
+    (his call, 18 Sep 2026). The phone carries his car and the tablet the
+    field; with both of them up this page replaces the live board, and the
+    four corners - the thing he asked for first, and the only reading GT7
+    does not show him - went with it. They are the running board's own
+    `_Tyre` widgets fed from the same expressions, not a second rendering:
+    two instances of one widget fed one state, as the lap panel already is.
     """
 
     COLUMNS = ("LAP", "TIME", "VS TARGET", "BURN  VS TARGET", "")
@@ -2591,6 +2599,24 @@ class _HistoryPanel(QWidget):
         self.summary.setStyleSheet(self._css(INK_DIM, 26))
         column.addWidget(self.summary)
 
+        # The corners, across rather than in a square: the rack above has the
+        # height, and four abreast keeps them at the size he reads them at.
+        column.addSpacing(10)
+        corners = QHBoxLayout()
+        corners.setSpacing(56)
+        self.tyres = {corner: _Tyre(corner) for corner in CORNERS}
+        corners.addStretch(1)
+        for corner in CORNERS:
+            corners.addWidget(self.tyres[corner])
+        corners.addStretch(1)
+        column.addLayout(corners)
+        self.tyre_caption = QLabel("TYRE SURFACE °C")
+        self.tyre_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tyre_caption.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:21px;font-weight:600;"
+            f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
+        column.addWidget(self.tyre_caption)
+
     @staticmethod
     def _css(ink: str, size: int) -> str:
         return (f"font-family:{NUMBER_FACE};font-size:{size}px;"
@@ -2617,6 +2643,18 @@ class _HistoryPanel(QWidget):
                 last = index == len(values) - 1
                 label.setStyleSheet(self._css(ink, 26 if last else 34))
         self.summary.setText(history_summary(state.history))
+        # **The same two expressions the running board uses** - `classify`
+        # for the ink and `pair_gap` for the figure under it - so one set of
+        # temperatures cannot be two claims on two pages (rules 12 and 13).
+        temps = state.temps_c or {}
+        for corner, widget in self.tyres.items():
+            kind, lopsided = classify(corner, temps, state.compound)
+            widget.show_value(temps.get(corner), kind, lopsided,
+                              pair_gap(corner, temps),
+                              (state.split_rates or {}).get(corner))
+        self.tyre_caption.setText(
+            f"TYRE SURFACE °C · {state.compound.upper()}" if state.compound
+            else "TYRE SURFACE °C · COMPOUND UNKNOWN, NO WEAR LINE")
 
 
 class DriverView(QWidget):

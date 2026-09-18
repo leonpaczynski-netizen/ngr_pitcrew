@@ -83,6 +83,32 @@ def test_the_monitor_turns_to_history_only_with_both_screens_up(app):
     view.close()
 
 
+def test_the_corners_are_on_the_history_page_because_they_are_on_no_other(app):
+    """His call, 18 Sep 2026. With the phone on his car and the tablet on the
+    field, this page replaces the live board - and the four temperatures, the
+    one reading GT7 does not show him, went with it."""
+    view = DriverView()
+    view.update_state(DriverState(
+        session_kind="race", show_history=True, history=(_lap(3),),
+        compound="RH", temps_c={"fl": 88.0, "fr": 91.0, "rl": 85.0,
+                                "rr": 87.0}))
+    assert view.states.currentWidget() is view.history
+    drawn = {corner: widget.value.text()
+             for corner, widget in view.history.tyres.items()}
+    assert drawn == {"fl": "88", "fr": "91", "rl": "85", "rr": "87"}
+    assert view.history.tyre_caption.text().endswith("RH")
+    # The same expression the running board uses, so one set of temperatures
+    # cannot be two claims: both pages ink 91 on an RH the same way.
+    assert (view.history.tyres["fr"].value.styleSheet()
+            == view.tyres["fr"].value.styleSheet())
+    # And with no compound the caption refuses the wear line, as it does above.
+    view.update_state(DriverState(session_kind="race", show_history=True,
+                                  history=(_lap(3),),
+                                  temps_c={"fl": 88.0}))
+    assert "NO WEAR LINE" in view.history.tyre_caption.text()
+    view.close()
+
+
 def test_the_flag_keeps_the_race_on_the_history_page():
     """At the flag the board builds its own state, and it carried no history:
     the monitor turned to twelve empty rows and "0 laps" at the one moment
