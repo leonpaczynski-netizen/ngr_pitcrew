@@ -890,3 +890,39 @@ def test_the_spoken_hedge_describes_the_sum_that_was_done():
     _, on_fuel = picture_words(6, ("effective", 1), 1, on_fuel=True)
     assert "If they stop once." not in on_fuel
     assert "their own fuel" in on_fuel
+
+
+def test_the_tablet_says_whether_a_car_can_push_not_only_whether_it_reaches():
+    """**"Reaches the flag" was one verdict for two opposite cars.**
+
+    Rocky at Sardegna Rd 9 (session 188): in on 19 L, out on 89, 15 laps to
+    run at 5.79 L/lap - 86.8 L needed, 2.2 L spare. He told the driver he was
+    managing fuel all stint, and he was: that fill allowed his rate and not a
+    litre more. A car with 24 L spare reaches the flag too, and can come after
+    you. "Can he push?" is the question the driver asked, so it is what the
+    row answers - and "fuel to push" is said only where the spare is bigger
+    than the reading error, so no new threshold is tuned for it.
+    """
+    from pitcrew.race.rival_calls import Rival
+    from pitcrew.race.rivals import Stop
+    from pitcrew.ui.tablet import prediction_words
+
+    rocky = Rival(name="Rocky", pitted=True, burn_per_lap_l=5.79, burn_stops=1,
+                  stop=Stop(lap=14, fuel_in_l=19.0, fuel_out_l=89.0))
+    got = predict(rocky, stops_seen=1, our_burn_l=5.2, laps_total=29)
+    assert got.words == REACHES_FLAG
+    assert abs(got.spare_l - 2.2) < 0.1
+    assert got.spare_readable is False          # 2.2 L inside an ~8 L error
+    assert prediction_words(got)[1].startswith("no fuel to push")
+
+    flush = Rival(name="Flush", pitted=True, burn_per_lap_l=5.0, burn_stops=2,
+                  stop=Stop(lap=14, fuel_in_l=19.0, fuel_out_l=99.0))
+    plenty = predict(flush, stops_seen=1, our_burn_l=5.2, laps_total=29)
+    assert plenty.spare_readable is True
+    assert prediction_words(plenty)[1].startswith("24 L to push")
+
+    # Sized to the column: nothing here may run past what it holds unclipped.
+    for car in (rocky, flush):
+        words = prediction_words(predict(car, stops_seen=1, our_burn_l=5.2,
+                                         laps_total=29))[1]
+        assert len(words) <= 38, (len(words), words)

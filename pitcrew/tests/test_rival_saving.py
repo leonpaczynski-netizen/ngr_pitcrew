@@ -67,9 +67,17 @@ def test_a_car_a_few_per_cent_light_is_short_and_that_is_the_call():
     """The case that used to be silent, and the one worth driving to."""
     call = said(a_rival(58.0))                     # 14 L light of 72
     assert call is not None and call.kind == RIVAL_SHORT
-    assert call.call == "Boxhead is short to the flag. Attack."
+    # **No place on either car, so no side, so no instruction** (19 Sep).
+    # This asserted "Attack." here - about a car whose side of us nothing
+    # knew - and the call said it to cars behind as readily as ahead.
+    assert call.call == "Boxhead is short to the flag."
     assert "14 litres light over 9 laps" in call.reason
     assert "he lifts or he stops again" in call.reason
+    # With the places known, the instruction is the side's own.
+    ahead = said(a_rival(58.0, position=3), our_position=4)
+    assert ahead.call == "Boxhead is short to the flag. Attack."
+    behind = said(a_rival(58.0, position=5), our_position=4)
+    assert behind.call == "Boxhead is short to the flag. Keep fighting."
 
 
 def test_the_call_never_claims_to_know_why_he_is_short():

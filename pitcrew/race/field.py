@@ -106,6 +106,14 @@ class Prediction:
     burn_stops: int | None = None
     # The shortfall is inside what two readings and a burn can resolve.
     unconfirmed: bool = False
+    # **Fuel beyond the flag, and whether we can read it.** "Reaches the
+    # flag" was one verdict for two very different cars: one with ten litres
+    # to spare, free to push, and one with two - Rocky at Sardegna Rd 9, who
+    # had to hold his rate for the whole stint and told the driver so. The
+    # difference is whether the spare is bigger than the reading error
+    # (`Shortfall.error_l`), so there is no new threshold here to tune.
+    spare_l: float | None = None
+    spare_readable: bool = False
     # **`stops_seen` is a floor, not a count** - the lane only sees the cars
     # GT7 draws, and `max(seen, 1)` raises it from the pit flag. So a total
     # built on it is a lower bound too, and says so rather than reading as a
@@ -172,10 +180,13 @@ def predict(rival: Rival | None, *, stops_seen: int, our_burn_l: float | None,
     # from one state (rule 13).
     verdict = must_stop_again(rival, our_burn_l, laps_total=laps_total)
     if verdict is False:
+        spare = -short.litres
         return Prediction(stops_seen=stops_seen, words=REACHES_FLAG,
                           total_stops=stops_seen, burn_of=burn_of,
                           burn_stops=evidence,
-                          unconfirmed=not short.certain)
+                          unconfirmed=not short.certain,
+                          spare_l=spare,
+                          spare_readable=spare > short.error_l)
     if verdict is None:
         # **`total_stops=None`, because the app does not know.**
         # `short_to_the_flag` says this same shortfall as "he lifts OR he

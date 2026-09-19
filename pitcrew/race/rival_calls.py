@@ -625,8 +625,22 @@ def short_to_the_flag(rival: Rival, burn_per_lap_l: float | None, *,
     who = rival.name or "He"
     brim = " He left on a full tank." if short.at_the_brim else ""
     whose = "" if rival.burn_per_lap_l else " on our burn"
+    # **The instruction follows which side of us he is on.** This said
+    # "Attack." whatever the side, and `_near_enough` admits a car up to three
+    # places BEHIND - so a chaser short of fuel was answered with the
+    # instruction for a car we are chasing. Behind, a car that must lift or
+    # stop is a car that fades before the flag, and that is "Keep fighting." -
+    # the same words, meaning the same thing, as the chasing car whose tyres
+    # go off (`news.catch_tyres_clause`, rule 13). And where either place is
+    # unknown the side is too, so no instruction is asserted at all: a wrong
+    # one is worse than none (rule 3).
+    if rival.position is not None and our_position is not None:
+        act = (" Attack." if rival.position < our_position
+               else " Keep fighting.")
+    else:
+        act = ""
     return Call(RIVAL_SHORT, lap,
-                f"{who} is short to the flag. Attack.",
+                f"{who} is short to the flag.{act}",
                 f"{short.litres:.0f} litres light over {short.laps_to_flag} "
                 f"laps{whose} - he lifts or he stops again.{brim}",
                 MEDIUM, severity=over_the_run,

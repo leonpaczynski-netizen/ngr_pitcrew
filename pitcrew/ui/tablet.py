@@ -60,8 +60,20 @@ def prediction_words(prediction) -> tuple[str, str, str]:
         return (f"{_stops(prediction.total_stops)}{maybe}",
                 f"in by L{prediction.reaches_lap}{burn}", "stops")
     if prediction.words == REACHES_FLAG:
+        # **Whether he can push, not only whether he gets there.** A car with
+        # the fuel to go harder and a car holding his rate to the last litre
+        # both "reach the flag", and they are opposite answers to "can he come
+        # after me?". The spare is said as fuel to push only where it is
+        # bigger than the reading error - otherwise it is "just enough", which
+        # is the honest word for a margin we cannot resolve.
+        # Sized to the column: the longest of these with its burn suffix is
+        # 38 characters, which is what the opinion column holds unclipped.
+        if prediction.spare_readable and prediction.spare_l is not None:
+            reach = f"{prediction.spare_l:.0f} L to push"
+        else:
+            reach = "no fuel to push"
         return (f"{_stops(prediction.total_stops)}{maybe}",
-                f"reaches the flag{burn}", "reaches")
+                f"{reach}{burn}", "reaches")
     if prediction.words == SHORT_SAVES:
         # The voice's own hedge, not a stop count: "he lifts or he stops
         # again" is what the app can stand behind, and `total_stops` is None

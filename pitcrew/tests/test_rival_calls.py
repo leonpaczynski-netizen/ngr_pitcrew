@@ -319,3 +319,42 @@ def test_the_closing_call_is_a_fact_and_the_rejoin_a_decision():
     him is the engineer's."""
     assert register_of(CLOSING) == FACT
     assert register_of(REJOIN) == DECISION
+
+
+def test_a_short_chaser_is_not_answered_with_attack():
+    """**"Attack." was said whatever side the car was on.**
+
+    `_near_enough` admits a car up to three places BEHIND, so a chaser short
+    of fuel got the instruction for a car we are chasing. Behind, a car that
+    must lift or stop fades before the flag: "Keep fighting." - the same words
+    the tyre call uses for a chaser whose set goes off, meaning the same thing
+    (rule 13).
+    """
+    from pitcrew.race.rival_calls import short_to_the_flag
+    from pitcrew.race.rivals import Stop
+
+    def short_car(position):
+        return Rival(name="Rocky", position=position, pitted=True,
+                     stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=85.0))
+
+    ahead = short_to_the_flag(short_car(3), 5.0, lap=12, laps_total=30,
+                              our_position=4)
+    behind = short_to_the_flag(short_car(5), 5.0, lap=12, laps_total=30,
+                               our_position=4)
+    assert ahead is not None and behind is not None
+    assert ahead.call.endswith("Attack.")
+    assert behind.call.endswith("Keep fighting.")
+    assert "Attack" not in behind.spoken()
+
+
+def test_a_short_car_on_an_unknown_side_gets_no_instruction():
+    """Where either place is unknown, so is the side - and a wrong
+    instruction is worse than none (rule 3)."""
+    from pitcrew.race.rival_calls import short_to_the_flag
+    from pitcrew.race.rivals import Stop
+
+    car = Rival(name="Rocky", position=None, pitted=True,
+                stop=Stop(lap=10, fuel_in_l=8.0, fuel_out_l=85.0))
+    call = short_to_the_flag(car, 5.0, lap=12, laps_total=30, our_position=4)
+    assert call is not None
+    assert call.call == "Rocky is short to the flag."
