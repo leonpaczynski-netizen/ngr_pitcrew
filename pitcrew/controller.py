@@ -942,6 +942,63 @@ class TelemetryBridge(QObject):
         return True
 
 
+# How long the first fill waits for the launch's calendar read before it
+# reads the calendar itself. The read takes 18-80 ms; it was begun ~300 ms
+# earlier, so this is a bound, not an expected wait.
+CALENDAR_WAIT_S = 0.5
+
+
+def read_calendar(me, stored) -> list:
+    """The league calendar for driver `me` against the app's `stored`
+    events: `hub.calendar.upcoming` over a Hub opened and closed here. Its
+    own SQLite connection, so it may run on any thread."""
+    from pitcrew.hub.calendar import upcoming
+    from pitcrew.hub.read import Hub
+
+    hub = Hub()
+    try:
+        if not hub.available:
+            return []
+        return upcoming(hub, me=me, stored_events=stored)
+    finally:
+        hub.close()
+
+
+def start_calendar_read(store):
+    """Read the league calendar on its own thread, from the launch.
+
+    **Why** (round 4, 20 Sep 2026): the first fill, which runs before the
+    window's first frame, spent 30-80 ms of its 35-85 in this one read - an
+    external SQLite file with a 3.7 MB write-ahead log, opened cold. Begun
+    beside the window build, it is done before the fill asks. The fill takes
+    it only against the same driver name and stored events it was read with
+    (`_take_calendar_read`), and reads it again itself otherwise.
+
+    The modules are imported here, on the caller's thread, so the worker
+    imports nothing. Returns `(outcome, thread)`; `outcome` gains `key` and
+    `proposals`, or nothing if the read raised (logged).
+    """
+    import pitcrew.hub.calendar  # noqa: F401 - imported before the thread
+    import pitcrew.hub.read  # noqa: F401
+
+    outcome: dict = {}
+
+    def read() -> None:
+        try:
+            me = store.driver_name()
+            stored = store.list_events()
+            proposals = read_calendar(me, stored)
+            outcome["key"] = (me, stored)
+            outcome["proposals"] = proposals
+        except Exception:                           # noqa: BLE001
+            log("pitcrew").exception(
+                "the launch's calendar read failed - the first fill reads it")
+
+    thread = threading.Thread(target=read, name="calendar-read", daemon=True)
+    thread.start()
+    return outcome, thread
+
+
 class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
@@ -965,7 +1022,7 @@ class PitCrewController(QObject):
                  car_screen=None, settings_screen=None,
                  port: int | None = None, voice=None, warm=None,
                  voice_engine=None, defer_strip: bool = False,
-                 screen_builder=None,
+                 screen_builder=None, calendar=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
@@ -1268,6 +1325,9 @@ class PitCrewController(QObject):
         # See `hub_proposals`: a calendar memo that exists only inside
         # `_first_paint_work`.
         self._hub_memo: dict | None = None
+        # The launch's calendar read, begun beside the window build
+        # (`start_calendar_read`). Taken once, by the first fill.
+        self._calendar_read = calendar
         self.refresh_catalogs()
         # **Scheduled, not called.** See `_first_paint_work`: this is ~130 ms
         # of widget filling that the window does not need in order to appear.
@@ -1296,7 +1356,8 @@ class PitCrewController(QObject):
         self._first_paint_done = True
         # One calendar read for the three questions below - see
         # `hub_proposals`. Scoped to this call and dropped in the `finally`.
-        self._hub_memo = {}
+        # Seeded from the launch's own read when it finished in time.
+        self._hub_memo = self._take_calendar_read()
         with timed_step("the first fill"):
             try:
                 # Before the load, not after: this decides which event the
@@ -1647,22 +1708,12 @@ class PitCrewController(QObject):
         `finally`.
         """
         try:
-            from pitcrew.hub.calendar import upcoming
-            from pitcrew.hub.read import Hub
-
             me = self.store.driver_name()
             stored = self.store.list_events()
             memo = self._hub_memo
             if memo is not None and memo.get("key") == (me, stored):
                 return list(memo["proposals"])
-            hub = Hub()
-            try:
-                if not hub.available:
-                    proposals = []
-                else:
-                    proposals = upcoming(hub, me=me, stored_events=stored)
-            finally:
-                hub.close()
+            proposals = read_calendar(me, stored)
             if memo is not None:
                 memo["key"] = (me, stored)
                 memo["proposals"] = list(proposals)
@@ -1670,6 +1721,29 @@ class PitCrewController(QObject):
         except Exception:
             log("pitcrew").exception("the league calendar could not be read")
             return []
+
+    def _take_calendar_read(self) -> dict:
+        """The first fill's memo, seeded from the launch's calendar read.
+
+        **Only ever a seed, never an answer on its own.** It carries the key
+        it was read against - the driver's hub name and the stored events -
+        and `hub_proposals` uses it only while those are unchanged, exactly
+        as it uses its own memo. A read not finished within
+        `CALENDAR_WAIT_S`, or one that failed, is dropped and the calendar is
+        read here as it always was: the wait is bounded, and the answer never
+        depends on the thread.
+        """
+        read, self._calendar_read = self._calendar_read, None
+        if read is None:
+            return {}
+        outcome, thread = read
+        thread.join(CALENDAR_WAIT_S)
+        if thread.is_alive() or "proposals" not in outcome:
+            log("pitcrew").info(
+                "the launch's calendar read was not ready - reading it now")
+            return {}
+        return {"key": outcome["key"],
+                "proposals": list(outcome["proposals"])}
 
     def _proposal(self, round_id):
         """One proposal by its hub round id, or `None`."""

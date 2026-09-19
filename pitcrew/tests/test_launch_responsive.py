@@ -453,3 +453,24 @@ def test_the_log_run_starts_at_the_first_line_naming_the_pid(tmp_path):
     lines = ab._log_run(str(tmp_path), 42)
     assert lines[0].endswith("pid: 42") and "launching" in lines[0]
     assert len(lines) == 4
+
+
+def test_the_log_run_is_the_last_launch_with_that_pid(tmp_path):
+    """Windows reuses pids: an older launch with the same one must not pull
+    its lines - its speech-ready stamp above all - into this launch's."""
+    ab = _launch_ab()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "pitcrew.log").write_text(
+        "".join(line + chr(10) for line in (
+            "a Pit Crew launching - pid: 42",
+            "b   pid: 42",
+            "c speech warm-up finished (old)",
+            "d Pit Crew launching - pid: 7",
+            "e Pit Crew launching - pid: 42",
+            "f   pid: 42",
+            "g startup: first paint  800 ms since process start",
+        )),
+        encoding="utf-8")
+    lines = ab._log_run(str(tmp_path), 42)
+    assert lines[0].startswith("e ") and len(lines) == 3

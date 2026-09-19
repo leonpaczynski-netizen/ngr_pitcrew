@@ -177,12 +177,17 @@ def _log_run(root: str, pid: int) -> list[str]:
         lines = handle.read().splitlines()
     # The first line naming this pid: the early launch line where there is
     # one (`pitcrew.boot`), else the banner.
-    # The LAST such line: Windows reuses pids, and the first match in a long
-    # log can be an older launch's, which pulled that launch's lines in too.
-    for index in range(len(lines) - 1, -1, -1):
-        if lines[index].rstrip().endswith(f"pid: {pid}"):
-            return lines[index:]
-    return []
+    # **The last launch with this pid, from its first line.** Windows reuses
+    # pids, and the first match in a long log can be an older launch's,
+    # which pulled that launch's lines in too. A launch names its pid twice
+    # (the early "launching" line, then the banner), so the last early line
+    # is taken where there is one, else the last banner line.
+    named = [index for index, line in enumerate(lines)
+             if line.rstrip().endswith(f"pid: {pid}")]
+    if not named:
+        return []
+    early = [index for index in named if "launching" in lines[index]]
+    return lines[(early or named)[-1]:]
 
 
 def _stamp_ms(line: str, created_epoch: float):

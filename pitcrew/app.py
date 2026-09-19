@@ -36,7 +36,8 @@ from PyQt6.QtWidgets import (
 
 from pitcrew import diagnostics, settings
 from pitcrew.engineer import ptt, voice
-from pitcrew.controller import DEFAULT_PORT, PitCrewController
+from pitcrew.controller import (DEFAULT_PORT, PitCrewController,
+                                start_calendar_read)
 from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
 from pitcrew.ui import font_warm, theme
@@ -839,7 +840,7 @@ class _FirstPaint(QObject):
 
 class PitCrewWindow(QMainWindow):
     def __init__(self, store: Store, *, port: int = DEFAULT_PORT,
-                 warm=None, voice_engine=None) -> None:
+                 warm=None, voice_engine=None, calendar=None) -> None:
         super().__init__()
         # The launch's speech warm-up, held back until `release_speech`.
         self._warm = warm
@@ -930,7 +931,8 @@ class PitCrewWindow(QMainWindow):
                 store, self.event_screen, None, None, None,
                 car_screen=None, settings_screen=None,
                 port=port, warm=warm, voice_engine=voice_engine,
-                defer_strip=True, screen_builder=self._make_screen)
+                defer_strip=True, screen_builder=self._make_screen,
+                calendar=calendar)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
@@ -1273,11 +1275,16 @@ def main() -> int:
         # about to be refused must not first load a quarter of a gigabyte.
         warm = ptt.start_warm_up(settings.load(store).speech_backend,
                                  start=False)
+        # The league calendar, read beside the window build rather than in
+        # the first fill in front of the first frame - see
+        # `controller.start_calendar_read`.
+        calendar = start_calendar_read(store)
         with diagnostics.timed_step("the prefetch"):
             prefetch_while_fonts_load()
         with diagnostics.timed_step("the window build"):
             window = PitCrewWindow(store, warm=warm,
-                                   voice_engine=voice_engine)
+                                   voice_engine=voice_engine,
+                                   calendar=calendar)
         diagnostics.mark("window built")
         with diagnostics.timed_step("the window's show()"):
             window.show()
