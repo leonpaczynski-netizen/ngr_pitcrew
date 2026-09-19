@@ -1429,13 +1429,18 @@ class PitCrewController(QObject):
     # them), so none can be armed against a screen that is not there.
 
     def _lazy_screen(self, attr: str, attach):
-        screen = getattr(self, attr, None)
-        builder = getattr(self, "_screen_builder", None)
+        # Read from the instance dict: on a QObject whose `__init__` never ran
+        # (tests build stubs that way) a missing attribute raises
+        # RuntimeError, not AttributeError, so `getattr(..., None)` would not
+        # fall back.
+        own = vars(self)
+        screen = own.get(attr)
+        builder = own.get("_screen_builder")
         if screen is None and builder is not None:
             made = builder(attr.lstrip("_"))
-            if getattr(self, attr, None) is None:
+            if vars(self).get(attr) is None:
                 attach(made)
-            screen = getattr(self, attr)
+            screen = vars(self).get(attr)
         return screen
 
     @property
