@@ -177,8 +177,10 @@ def _log_run(root: str, pid: int) -> list[str]:
         lines = handle.read().splitlines()
     # The first line naming this pid: the early launch line where there is
     # one (`pitcrew.boot`), else the banner.
-    for index, line in enumerate(lines):
-        if line.rstrip().endswith(f"pid: {pid}"):
+    # The LAST such line: Windows reuses pids, and the first match in a long
+    # log can be an older launch's, which pulled that launch's lines in too.
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].rstrip().endswith(f"pid: {pid}"):
             return lines[index:]
     return []
 
@@ -280,7 +282,7 @@ def launch_outside(root: str, hold_s: float = HOLD_S) -> dict:
     # process was created]}. Only checkouts that log fast steps have these.
     steps = {}
     for line in lines:
-        found = re.search(r"launch step: (.+?)\s+([\d.]+) ms", line)
+        found = re.search(r"(?<!slow )launch step: (.+?)\s+([\d.]+) ms$", line)
         if found:
             steps[found.group(1).strip()] = [
                 float(found.group(2)), _stamp_ms(line, created_epoch)]
