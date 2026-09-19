@@ -55,7 +55,7 @@ from pitcrew.bench import Bench
 from pitcrew.telemetry.hud_session import HudSession
 from pitcrew.rig.wind_curve import WindCurve
 from pitcrew.engineer import audio_devices, endpoint_meter
-from pitcrew.engineer.voice import Voice, engine_from
+from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import (
     _rows_to_laps,
     build_event_export,
@@ -955,6 +955,9 @@ class PitCrewController(QObject):
     # The same answer about a HUD alert: (the alerts that handed it over, the
     # call, whether it was heard). See `_on_hud_alert_heard`.
     hud_alert_heard = pyqtSignal(object, object, bool)
+    # The launch's speech engine has been chosen - emitted on the voice
+    # thread when it arrives after the window was built. See `Voice(arriving=)`.
+    voice_engine_landed = pyqtSignal()
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
@@ -994,10 +997,19 @@ class PitCrewController(QObject):
         self._port_override = port
         self.port = port if port is not None else self.settings.udp_port
         # `voice_engine` is the launch's `voice.start_engine_build`, begun
-        # beside the screens; `engine_from` collects it (None -> AUTO, which
-        # is exactly what `Voice()` always did).
-        self.voice = (voice if voice is not None
-                      else Voice(engine_from(voice_engine)))
+        # beside the screens. **Not joined here** (19 Sep 2026): this is the
+        # Qt thread building the window, and the join had no limit. If the
+        # build is done, `Voice` takes it as `engine_from` always did; if not,
+        # the voice thread collects it and lines queue until it lands. None
+        # (every test, replay and bench) is exactly what `Voice()` always did.
+        self.voice_engine_landed.connect(self._on_voice_engine_landed)
+        if voice is not None:
+            self.voice = voice
+        elif voice_engine is not None:
+            self.voice = Voice(arriving=voice_engine,
+                               on_landed=self.voice_engine_landed.emit)
+        else:
+            self.voice = Voice()
         self.race: RaceCoordinator | None = None
         self.race_run_id: int | None = None
         self._race_inputs = None
@@ -1396,6 +1408,14 @@ class PitCrewController(QObject):
         for name, slot in slots:
             getattr(screen, name).connect(slot)
         return screen
+
+    def _on_voice_engine_landed(self) -> None:
+        """The speech engine arrived after the window: Settings said
+        "loading", so it is told what actually loaded."""
+        screen = self.settings_screen
+        if screen is not None:
+            screen.show_capabilities(speech=self.voice.engine_name,
+                                     hook=self.ptt.has_listener)
 
     def _wire_car_screen(self, screen) -> None:
         """Connect the Car screen's two signals, once per screen."""

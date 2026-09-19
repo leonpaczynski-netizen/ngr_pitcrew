@@ -29,6 +29,7 @@ import hashlib
 import itertools
 import re
 import threading
+import time
 import wave
 from functools import lru_cache
 from pathlib import Path
@@ -668,6 +669,11 @@ class _LineQueue:
 # asking for silence get SAPI5 instead.
 AUTO = object()
 
+# How long the Settings self-test (`say_now`) waits for an engine still being
+# chosen at launch. Only that button waits at all; nothing on the Qt thread's
+# launch path does.
+ENGINE_WAIT_S = 5.0
+
 
 class LineCut(RuntimeError):
     """A device-list rebuild closed the stream while the line was playing.
@@ -697,9 +703,44 @@ class Voice:
     so a machine with no speech synthesis at all still runs the app.
     """
 
-    def __init__(self, engine=AUTO, *, enabled: bool = True) -> None:
-        self._engine = _best_engine() if engine is AUTO else engine
-        self.enabled = enabled and can_speak(self._engine)
+    def __init__(self, engine=AUTO, *, enabled: bool = True,
+                 arriving=None, on_landed=None) -> None:
+        # **An engine still being chosen is not waited for** (19 Sep 2026).
+        # `arriving` is the launch's `start_engine_build()`. The controller
+        # used to `join` it on the Qt thread, with no limit, while building
+        # the window: usually free, but 1.4 s once under load, and the last
+        # join left on the path to the first frame. Now, if the build has
+        # already finished it is taken exactly as before; if it has not, the
+        # voice thread collects it (see `_land`) and every line said in the
+        # meantime waits in the queue, judged for staleness like any other
+        # line when it is taken. `tune` and `warm` are held and applied when
+        # it lands. `on_landed()` is called, on the voice thread, once it has.
+        self._engine_lock = threading.Lock()
+        self._landed = threading.Event()
+        self._on_landed = on_landed
+        self._arriving = None
+        self._pending_tune: dict = {}
+        self._warm_wanted = False
+        self._wanted = enabled
+        if arriving is not None and engine is AUTO:
+            if arriving[1].is_alive():
+                self._arriving = arriving
+            else:
+                engine = engine_from(arriving)      # ended: no wait at all
+        if self._arriving is not None:
+            self._engine = None
+            # Tentative: lines queue until `_land` decides. If nothing can
+            # speak, `_land` turns this off and answers every queued line
+            # "not heard", exactly as a voice built without an engine does.
+            self.enabled = enabled
+            self._arriving_since = time.perf_counter()
+            log("voice").info(
+                "the speech engine is still being chosen - the window does "
+                "not wait for it; lines queue until it lands")
+        else:
+            self._engine = _best_engine() if engine is AUTO else engine
+            self.enabled = enabled and can_speak(self._engine)
+            self._landed.set()
         # Consecutive calls that reached the engine and made no sound. The
         # driver is in a headset with no screen, so this is the only way the
         # app can tell him it has gone quiet - see `health()`.
@@ -711,7 +752,10 @@ class Voice:
         self._playing: _Line | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        if self.enabled:
+        # An arriving engine always gets the thread: it is what lands it, and
+        # a voice turned off still has to report what it would have spoken
+        # through (`engine_name`) rather than "loading" for ever.
+        if self.enabled or self._arriving is not None:
             self._thread = threading.Thread(
                 target=self._run, name="PitCrewVoice", daemon=True)
             self._thread.start()
@@ -722,9 +766,76 @@ class Voice:
         Forwarded rather than held here: `Voice` owns the queue and the
         thread, and knows nothing about how any particular engine makes sound.
         """
-        tune = getattr(self._engine, "tune", None)
-        if tune is not None:
-            tune(**params)
+        with self._engine_lock:
+            if not self._landed.is_set():
+                # Applied by `_land`, in the order they were asked for.
+                self._pending_tune.update(params)
+                return
+            tune = getattr(self._engine, "tune", None)
+            if tune is not None:
+                tune(**params)
+
+    @property
+    def landed(self) -> bool:
+        """Whether the engine is decided - always, unless it is arriving."""
+        return self._landed.is_set()
+
+    def wait_landed(self, timeout: float | None = None) -> bool:
+        return self._landed.wait(timeout)
+
+    def _land(self) -> bool:
+        """Collect an arriving engine, on the voice thread. True if it speaks.
+
+        The join is here, where nothing waits on it: the Qt thread never
+        does. A build that raised is chosen again here, on this thread - the
+        same fall-through to `_best_engine()` that `engine_from` gives.
+        """
+        outcome, thread = self._arriving
+        thread.join()
+        if "engine" in outcome:
+            engine = outcome["engine"]
+        else:
+            try:
+                engine = _best_engine()
+            except Exception as exc:              # noqa: BLE001 - reported
+                log("voice").error("no speech engine: %s: %s",
+                                   type(exc).__name__, exc, exc_info=True)
+                engine = None
+        with self._engine_lock:
+            self._engine = engine
+            self.enabled = self._wanted and can_speak(engine)
+            self._arriving = None
+            tune, self._pending_tune = self._pending_tune, {}
+            if tune:
+                apply = getattr(engine, "tune", None)
+                if apply is not None:
+                    try:
+                        apply(**tune)
+                    except Exception:             # noqa: BLE001 - reported
+                        log("voice").error("tuning the engine failed",
+                                           exc_info=True)
+            warm, self._warm_wanted = self._warm_wanted, False
+            enabled = self.enabled
+            self._landed.set()
+        log("voice").info(
+            "speech engine landed %.0f ms after the controller was built - "
+            "%s; %d line(s) were waiting for it",
+            (time.perf_counter() - self._arriving_since) * 1000.0,
+            self.engine_name, self._queue.qsize())
+        if warm and enabled:
+            self.warm()
+        if not enabled:
+            # The lines already queued are answered now, the way `say`
+            # answers them when the voice is off.
+            for left in self._queue.snapshot():
+                if self._queue.remove(left):
+                    _finish(left, False, "the voice is off")
+        if self._on_landed is not None:
+            try:
+                self._on_landed()
+            except Exception:                     # noqa: BLE001 - reported
+                log("voice").error("on_landed raised", exc_info=True)
+        return enabled
 
     def warm(self) -> None:
         """Pay any model-loading cost now, off the caller's thread.
@@ -734,8 +845,13 @@ class Voice:
         that merely holds one pays a second and a half for a model it will
         never speak through.
         """
-        warm = getattr(self._engine, "warm", None)
-        timed = getattr(self._engine, "duration_s", None)
+        with self._engine_lock:
+            if not self._landed.is_set():
+                # Done by `_land` the moment the engine is here.
+                self._warm_wanted = True
+                return
+            warm = getattr(self._engine, "warm", None)
+            timed = getattr(self._engine, "duration_s", None)
         if warm is None and timed is None:
             return
 
@@ -757,6 +873,8 @@ class Voice:
 
     @property
     def engine_name(self) -> str:
+        if not self._landed.is_set():
+            return "loading"
         if self._engine is None:
             return "none"
         return getattr(self._engine, "name", type(self._engine).__name__)
@@ -855,13 +973,21 @@ class Voice:
         if not text:
             return
         self.spoken.append(text)
-        if not self.enabled:
+        # Decided and offered under the engine lock, so a line cannot slip
+        # into the queue after `_land` has found no engine and emptied it.
+        # Callbacks run outside it: an `on_done` may say something itself.
+        with self._engine_lock:
+            enabled = self.enabled
+            if enabled:
+                line = self._queue.line(text, kind, on_done=on_done,
+                                        keep=keep)
+                dropped_lines = list(self._queue.offer(line))
+        if not enabled:
             if on_done is not None:
                 _finish(self._queue.line(text, kind, on_done=on_done), False,
                         "the voice is off")
             return
-        line = self._queue.line(text, kind, on_done=on_done, keep=keep)
-        for dropped, why in self._queue.offer(line):
+        for dropped, why in dropped_lines:
             log("voice").info("not saying %r (%s, %s): %s", dropped.text,
                               dropped.kind or "no kind",
                               CLASS_NAMES[dropped.cls], why)
@@ -923,6 +1049,10 @@ class Voice:
         under it, or no output device at all. The one control whose whole
         purpose is proving the voice works could not fail.
         """
+        # Pressed long after launch, so this is a formality - but it is
+        # bounded, and it says so rather than "no engine".
+        if not self._landed.wait(ENGINE_WAIT_S):
+            return False, "the speech engine is still loading"
         if self._engine is None:
             return False, "no speech engine loaded on this machine"
         try:
@@ -938,6 +1068,8 @@ class Voice:
         self._queue.put(None)
 
     def _run(self) -> None:
+        if self._arriving is not None and not self._land():
+            return
         while not self._stop.is_set():
             line = self._next_line()
             if line is None:
