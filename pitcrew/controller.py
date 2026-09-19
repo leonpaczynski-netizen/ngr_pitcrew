@@ -955,9 +955,10 @@ class PitCrewController(QObject):
     # The same answer about a HUD alert: (the alerts that handed it over, the
     # call, whether it was heard). See `_on_hud_alert_heard`.
     hud_alert_heard = pyqtSignal(object, object, bool)
-    # The launch's speech engine has been chosen - emitted on the voice
-    # thread when it arrives after the window was built. See `Voice(arriving=)`.
-    voice_engine_landed = pyqtSignal()
+    # The launch's speech engine has been chosen, or is past its limit and
+    # reported not loaded - emitted on the voice thread when either happens
+    # after the window was built. See `Voice(arriving=)`.
+    voice_engine_changed = pyqtSignal()
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
@@ -1002,12 +1003,13 @@ class PitCrewController(QObject):
         # build is done, `Voice` takes it as `engine_from` always did; if not,
         # the voice thread collects it and lines queue until it lands. None
         # (every test, replay and bench) is exactly what `Voice()` always did.
-        self.voice_engine_landed.connect(self._on_voice_engine_landed)
+        self.voice_engine_changed.connect(self._on_voice_engine_changed)
         if voice is not None:
             self.voice = voice
         elif voice_engine is not None:
             self.voice = Voice(arriving=voice_engine,
-                               on_landed=self.voice_engine_landed.emit)
+                               on_landed=self.voice_engine_changed.emit,
+                               on_overdue=self.voice_engine_changed.emit)
         else:
             self.voice = Voice()
         self.race: RaceCoordinator | None = None
@@ -1409,9 +1411,10 @@ class PitCrewController(QObject):
             getattr(screen, name).connect(slot)
         return screen
 
-    def _on_voice_engine_landed(self) -> None:
-        """The speech engine arrived after the window: Settings said
-        "loading", so it is told what actually loaded."""
+    def _on_voice_engine_changed(self) -> None:
+        """The speech engine arrived after the window, or is past its limit:
+        Settings said "loading", so it is told what actually loaded - or that
+        nothing has. The RACE board reads `voice.health()` every refresh."""
         screen = self.settings_screen
         if screen is not None:
             screen.show_capabilities(speech=self.voice.engine_name,

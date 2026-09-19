@@ -280,3 +280,157 @@ def test_the_controller_does_not_join_the_engine_build(qt_app, store,
         if controller is not None:
             controller.settings_screen = None
             controller.shutdown()
+
+
+# ------------------------------------------- a build that never lands (round 4)
+#
+# Critic, round 4: moving the join off the Qt thread left it with no bound and
+# no signal. A build that never returned - PortAudio hanging inside the
+# sounddevice import is the known way - left George mute with `health()` None,
+# `engine_name` "loading" for ever, nothing logged, and every queued line held
+# unanswered. Before, the same hang froze the window, which the driver would
+# have seen. Each test below fails against e2adeba.
+
+def _errors(caplog, text):
+    import logging
+    return [r.getMessage() for r in caplog.records
+            if r.levelno >= logging.WARNING and text in r.getMessage()]
+
+
+def test_a_build_that_never_returns_is_reported_within_the_limit(
+        monkeypatch, caplog):
+    monkeypatch.setattr(voice, "ENGINE_LAND_LIMIT_S", 0.3, raising=False)
+    never = threading.Event()                     # never set by the build
+    outcome: dict = {}
+    thread = threading.Thread(target=never.wait, name="voice-engine",
+                              daemon=True)
+    thread.start()
+    heard: list[tuple[str, bool]] = []
+    with caplog.at_level("INFO"):
+        started = time.monotonic()
+        spoken = Voice(arriving=(outcome, thread))
+        try:
+            for name in ("a", "b", "c"):
+                spoken.say(f"Line {name}.",
+                           on_done=lambda ok, n=name: heard.append((n, ok)))
+            assert spoken.health() is None       # inside the limit: loading
+            until(lambda: spoken.health() is not None, timeout=5)
+            took = time.monotonic() - started
+            assert took < 2.0, f"reported after {took:.1f}s"
+            assert spoken.health() == voice.NOT_LOADED
+            assert spoken.engine_name == "not loaded"
+            # Every waiting line answered - not heard, not held for ever.
+            until(lambda: len(heard) == 3)
+            assert sorted(heard) == [("a", False), ("b", False),
+                                     ("c", False)]
+            assert _errors(caplog, "has not loaded")
+            # A line said while it is so is answered at once.
+            spoken.say("Box this lap.", on_done=lambda ok: heard.append(
+                ("d", ok)))
+            assert heard[-1] == ("d", False)
+            # It is true now, not a record of the past: a new session does
+            # not wipe it off the board.
+            spoken.new_session()
+            assert spoken.health() == voice.NOT_LOADED
+            ok, why = voice.Voice.say_now.__get__(spoken)("x") if False else \
+                (None, None)
+        finally:
+            never.set()
+            spoken.stop()
+
+
+def test_a_late_landing_clears_the_fault_and_speaks_the_next_line(
+        monkeypatch, caplog):
+    monkeypatch.setattr(voice, "ENGINE_LAND_LIMIT_S", 0.2, raising=False)
+    engine = Engine()
+    build, release = held_build(engine)
+    spoken = Voice(arriving=build)
+    heard: list[bool] = []
+    with caplog.at_level("INFO"):
+        try:
+            until(lambda: spoken.health() is not None, timeout=5)
+            assert spoken.landed is False
+            release.set()
+            assert spoken.wait_landed(10)
+            assert spoken.health() is None
+            assert spoken.engine_name == "fake"
+            spoken.say("Radio check.", on_done=heard.append)
+            until(lambda: heard == [True])
+            assert engine.said == ["Radio check."]
+            assert _errors(caplog, "landed late")
+        finally:
+            release.set()
+            spoken.stop()
+
+
+def test_say_now_says_not_loaded_once_past_the_limit(monkeypatch):
+    monkeypatch.setattr(voice, "ENGINE_LAND_LIMIT_S", 0.05, raising=False)
+    monkeypatch.setattr(voice, "ENGINE_WAIT_S", 0.3)
+    build, release = held_build(Engine())
+    spoken = Voice(arriving=build)
+    try:
+        until(lambda: spoken.health() is not None, timeout=5)
+        ok, why = spoken.say_now("Radio check.")
+        assert ok is False and "has not loaded" in why
+    finally:
+        release.set()
+        spoken.stop()
+
+
+def test_stop_ends_a_voice_still_waiting_past_the_limit(monkeypatch):
+    """Closing the app while the build hangs must not hang the voice thread."""
+    monkeypatch.setattr(voice, "ENGINE_LAND_LIMIT_S", 0.05, raising=False)
+    build, release = held_build(Engine())
+    spoken = Voice(arriving=build)
+    try:
+        until(lambda: spoken.health() is not None, timeout=5)
+        spoken.stop()
+        spoken._thread.join(2)
+        assert not spoken._thread.is_alive()
+    finally:
+        release.set()
+
+
+def test_the_board_and_settings_show_an_engine_that_has_not_loaded(
+        qt_app, store, monkeypatch):
+    """The two places the driver can see it: Settings' speech note, and the
+    RACE board's top line, which reads `health()` on every refresh."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.ui.event_screen import EventScreen
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    monkeypatch.setattr(voice, "ENGINE_LAND_LIMIT_S", 0.2, raising=False)
+    engine = Engine()
+    build, release = held_build(engine)
+    controller = None
+    try:
+        controller = PitCrewController(store, EventScreen(), PracticeScreen(),
+                                       voice_engine=build)
+        shown: list[str] = []
+
+        class Settings:
+            def show_capabilities(self, *, speech, hook):
+                shown.append(speech)
+
+        controller.settings_screen = Settings()
+        deadline = time.monotonic() + 5
+        while not shown and time.monotonic() < deadline:
+            qt_app.processEvents()
+            time.sleep(0.005)
+        assert shown == ["not loaded"]
+        call = controller._board_call_now()
+        assert call is not None and call.note == voice.NOT_LOADED
+
+        release.set()
+        assert controller.voice.wait_landed(10)
+        deadline = time.monotonic() + 5
+        while len(shown) < 2 and time.monotonic() < deadline:
+            qt_app.processEvents()
+            time.sleep(0.005)
+        assert shown == ["not loaded", "fake"]
+        assert controller._board_call_now() is None
+    finally:
+        release.set()
+        if controller is not None:
+            controller.settings_screen = None
+            controller.shutdown()

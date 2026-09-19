@@ -674,6 +674,20 @@ AUTO = object()
 # launch path does.
 ENGINE_WAIT_S = 5.0
 
+# How long the voice thread waits for an arriving engine before it says so.
+# Measured (19 Sep 2026): the build lands 0.3-1.5 s after the controller on a
+# quiet machine and inside 4.5 s with the CPU saturated, so 10 s is only ever
+# a build that is stuck - PortAudio hanging in the sounddevice import is the
+# known way. Past it George is reported as not loaded: an ERROR in the log,
+# `health()` on the RACE board's top line and on Settings, and every waiting
+# line answered "not heard" so its owner re-offers it instead of believing
+# it was said. The wait itself goes on, and a late landing clears all of it.
+ENGINE_LAND_LIMIT_S = 10.0
+
+# What `health()` says while that is so. Driver words: he cannot act on a
+# thread name, and he can act on "the engineer is not there".
+NOT_LOADED = "Engineer voice has not loaded"
+
 
 class LineCut(RuntimeError):
     """A device-list rebuild closed the stream while the line was playing.
@@ -704,7 +718,8 @@ class Voice:
     """
 
     def __init__(self, engine=AUTO, *, enabled: bool = True,
-                 arriving=None, on_landed=None) -> None:
+                 arriving=None, on_landed=None,
+                 on_overdue=None) -> None:
         # **An engine still being chosen is not waited for** (19 Sep 2026).
         # `arriving` is the launch's `start_engine_build()`. The controller
         # used to `join` it on the Qt thread, with no limit, while building
@@ -715,9 +730,22 @@ class Voice:
         # meantime waits in the queue, judged for staleness like any other
         # line when it is taken. `tune` and `warm` are held and applied when
         # it lands. `on_landed()` is called, on the voice thread, once it has.
+        #
+        # **The wait is bounded in what it tells the driver, not in whether
+        # it lands** (critic, round 4). Unbounded and silent, a build that
+        # never returned left George mute with `health()` None - an app that
+        # looked well and a race with no engineer, which is also what a quiet
+        # race sounds like. After `ENGINE_LAND_LIMIT_S` the voice reports
+        # itself not loaded (see `_report_not_loaded`); `on_overdue()` is
+        # called then, on the voice thread.
         self._engine_lock = threading.Lock()
         self._landed = threading.Event()
         self._on_landed = on_landed
+        self._on_overdue = on_overdue
+        # Set while an arriving engine is past its limit. Not reset by
+        # `new_session`: it is not a record of something that went wrong
+        # earlier, it is true now, and only the landing makes it false.
+        self._overdue = False
         self._arriving = None
         self._pending_tune: dict = {}
         self._warm_wanted = False
@@ -791,7 +819,13 @@ class Voice:
         same fall-through to `_best_engine()` that `engine_from` gives.
         """
         outcome, thread = self._arriving
-        thread.join()
+        thread.join(max(0.0, ENGINE_LAND_LIMIT_S - self._arriving_s()))
+        if thread.is_alive():
+            self._report_not_loaded()
+            while thread.is_alive():
+                if self._stop.is_set():
+                    return False
+                thread.join(0.25)
         if "engine" in outcome:
             engine = outcome["engine"]
         else:
@@ -816,11 +850,17 @@ class Voice:
                                            exc_info=True)
             warm, self._warm_wanted = self._warm_wanted, False
             enabled = self.enabled
+            late, self._overdue = self._overdue, False
             self._landed.set()
+        if late:
+            log("voice").warning(
+                "the speech engine landed late, %.1f s after the controller "
+                "was built - %s; the not-loaded fault is cleared",
+                self._arriving_s(), self.engine_name)
         log("voice").info(
             "speech engine landed %.0f ms after the controller was built - "
             "%s; %d line(s) were waiting for it",
-            (time.perf_counter() - self._arriving_since) * 1000.0,
+            self._arriving_s() * 1000.0,
             self.engine_name, self._queue.qsize())
         if warm and enabled:
             self.warm()
@@ -836,6 +876,35 @@ class Voice:
             except Exception:                     # noqa: BLE001 - reported
                 log("voice").error("on_landed raised", exc_info=True)
         return enabled
+
+    def _arriving_s(self) -> float:
+        return time.perf_counter() - self._arriving_since
+
+    def _report_not_loaded(self) -> None:
+        """The arriving engine is past `ENGINE_LAND_LIMIT_S`: say so, loudly.
+
+        On the voice thread, which is the one waiting. Under the engine lock
+        the voice stops accepting lines (`say` answers them "not heard" from
+        here on); then every line already waiting is answered the same way,
+        because a line held for an engine that may never come is a fact its
+        owner believes is on its way to the driver.
+        """
+        with self._engine_lock:
+            self._overdue = True
+        waiting = self._queue.snapshot()
+        log("voice").error(
+            "the speech engine has not loaded %.1f s after the controller was "
+            "built - George is silent until it does; %d waiting line(s) "
+            "answered not heard. Still waiting for it.",
+            self._arriving_s(), len(waiting))
+        for left in waiting:
+            if self._queue.remove(left):
+                _finish(left, False, "the speech engine has not loaded")
+        if self._on_overdue is not None:
+            try:
+                self._on_overdue()
+            except Exception:                     # noqa: BLE001 - reported
+                log("voice").error("on_overdue raised", exc_info=True)
 
     def warm(self) -> None:
         """Pay any model-loading cost now, off the caller's thread.
@@ -874,7 +943,7 @@ class Voice:
     @property
     def engine_name(self) -> str:
         if not self._landed.is_set():
-            return "loading"
+            return "not loaded" if self._overdue else "loading"
         if self._engine is None:
             return "none"
         return getattr(self._engine, "name", type(self._engine).__name__)
@@ -890,7 +959,12 @@ class Voice:
         Phrased as the driver would experience it - a count of calls he did
         not hear - rather than as the exception, which is in the log for
         afterwards. None means the last call played, not that every call did.
+
+        An engine past its landing limit is reported first: nothing has been
+        said at all, so there is no count to give.
         """
+        if self._overdue:
+            return NOT_LOADED
         if not self._failures:
             return None
         calls = "call" if self._failures == 1 else "calls"
@@ -977,7 +1051,9 @@ class Voice:
         # into the queue after `_land` has found no engine and emptied it.
         # Callbacks run outside it: an `on_done` may say something itself.
         with self._engine_lock:
-            enabled = self.enabled
+            enabled = self.enabled and not self._overdue
+            why = ("the speech engine has not loaded" if self._overdue
+                   else "the voice is off")
             if enabled:
                 line = self._queue.line(text, kind, on_done=on_done,
                                         keep=keep)
@@ -985,7 +1061,7 @@ class Voice:
         if not enabled:
             if on_done is not None:
                 _finish(self._queue.line(text, kind, on_done=on_done), False,
-                        "the voice is off")
+                        why)
             return
         for dropped, why in dropped_lines:
             log("voice").info("not saying %r (%s, %s): %s", dropped.text,
@@ -1052,6 +1128,8 @@ class Voice:
         # Pressed long after launch, so this is a formality - but it is
         # bounded, and it says so rather than "no engine".
         if not self._landed.wait(ENGINE_WAIT_S):
+            if self._overdue:
+                return False, "the speech engine has not loaded"
             return False, "the speech engine is still loading"
         if self._engine is None:
             return False, "no speech engine loaded on this machine"
