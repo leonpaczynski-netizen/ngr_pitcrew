@@ -54,7 +54,7 @@ class Bench:
 
     def __init__(self, *, settings, settings_screen, bridge, voice, rig,
                  listener=None, practice=None, confirm_audio=None,
-                 parse_errors=None) -> None:
+                 parse_errors=None, rig_only=None) -> None:
         self._settings = settings if callable(settings) else (lambda: settings)
         # **A reader, because a listener is per session.** Held as an object,
         # every one of these checks would report on the port the app opened
@@ -80,6 +80,19 @@ class Bench:
         self.voice = voice
         self.rig = rig
         self.practice = practice
+        # **Whether the controller is in rig-only (Free Run) mode.** The
+        # health line gates one branch on this: `recorder.lost_packets` does
+        # not update while the recorder is idle, so a stale count from a prior
+        # practice run must not trigger a warning mid-Free-Run.
+        self._rig_only = rig_only if callable(rig_only) else (lambda: False)
+        # **The target for health status messages.** In a practice or race
+        # session this is `practice.set_status`; during rig-only mode the
+        # controller swaps it to its own `_emit_rig_only_status` so the Event
+        # screen receives the messages instead. The controller restores it in
+        # `stop_rig_only` before any session can open over the top.
+        self._status_target = (practice.set_status
+                               if practice is not None
+                               else (lambda *a, **kw: None))
         # **A reader returning the checker, not the checker.** Tests rebind
         # `controller._confirm_audio` after construction to ask a different
         # question - a stubbed tone, or a build agent with no audio hardware -
@@ -91,6 +104,18 @@ class Bench:
             confirm_audio if callable(confirm_audio) else (lambda: None))
         self._button_probe = None
         self._health_ticks = 0
+
+    def restore_status_target(self) -> None:
+        """Restore the health-message route to the practice screen.
+
+        Called by `stop_rig_only` so that the next practice session receives
+        bench messages again. Safe when `practice` is ``None`` — the
+        anonymous sink from ``__init__`` is restored instead, matching the
+        guard that ``__init__`` itself uses.
+        """
+        self._status_target = (self.practice.set_status
+                               if self.practice is not None
+                               else (lambda *a, **kw: None))
 
     @property
     def settings(self):
@@ -430,6 +455,12 @@ class Bench:
         source filter eating every packet all look identical from the rack -
         no laps appear. Zeros are the one failure mode that survives all the
         way into a setup recommendation, so each gets its own sentence.
+
+        **Status is written via `_status_target`,** not directly to the
+        practice screen. In a normal session `_status_target` IS
+        `practice.set_status`; during rig-only mode the controller points it
+        at `_emit_rig_only_status` instead, so the Event screen gets the same
+        messages without this method knowing which screen is showing them.
         """
         self._health_ticks = getattr(self, "_health_ticks", 0) + 1
         if self._health_ticks % 10 == 0:
@@ -444,7 +475,7 @@ class Bench:
         upstream = ("the console" if direct else "SimHub")
 
         if self.listener().bind_error:
-            self.practice.set_status(
+            self._status_target(
                 f"Port {port} could not be opened: "
                 f"{self.listener().bind_error}. Nothing will arrive until that "
                 f"is fixed - change the port on the Settings screen, or close "
@@ -453,14 +484,14 @@ class Bench:
             # Only reachable in direct mode, and it is a different failure
             # from silence: the console was never asked, so of course it is
             # not streaming. Without this the driver was told to check GT7.
-            self.practice.set_status(
+            self._status_target(
                 f"Could not reach the console at {self.listener().heartbeat_to}: "
                 f"{self.listener().send_error}. GT7 streams only to an address "
                 f"that has asked it to, so nothing will arrive until this is "
                 f"fixed - check the address on the Settings screen and that "
                 f"the PS5 is awake.", warn=True)
         elif self.listener().foreign_dropped and not self.listener().total_received:
-            self.practice.set_status(
+            self._status_target(
                 f"{self.listener().foreign_dropped} packets arrived on "
                 f"{port} and every one was refused: they are not from "
                 f"{self.listener().source_ip}. Clear the source address on the "
@@ -472,27 +503,31 @@ class Bench:
                        f"answered. Is GT7 running and out of the menus?")
             else:
                 why = "Is GT7 running and SimHub relaying?"
-            self.practice.set_status(f"No telemetry on {port}. {why}",
-                                     warn=True)
+            self._status_target(f"No telemetry on {port}. {why}", warn=True)
         elif self.listener().total_received and not self.listener().decoded:
             # Bytes are arriving and none of them are telemetry. Distinct
             # from silence, and it means something else is on this port.
-            self.practice.set_status(
+            self._status_target(
                 f"{self.listener().total_received} packets arrived on {port} "
                 f"and none decoded. Something other than GT7 is talking on "
                 f"this port.", warn=True)
         elif self.parse_errors():
-            self.practice.set_status(
+            self._status_target(
                 f"{self.parse_errors()} packets failed to decode. Check "
                 f"{upstream}.", warn=True)
-        elif self.bridge.recorder.lost_packets > _LOST_PACKET_BUDGET:
+        elif (not self._rig_only()
+              and self.bridge.recorder.lost_packets > _LOST_PACKET_BUDGET):
+            # **Gated on not rig-only.** `recorder.lost_packets` does not
+            # update while no session is recording, so a count from the last
+            # practice run would warn falsely here throughout a Free Run.
+            #
             # Lap distance is INTEGRATED, so a gap is paid for by every metre
             # after it, and corner windows are keyed on lap distance. A lap
             # that lost packets still looks clean on the rack, which is the
             # reason to say so here rather than let it through quietly.
             lost = self.bridge.recorder.lost_packets
             gaps = self.bridge.recorder.stream_gaps
-            self.practice.set_status(
+            self._status_target(
                 f"The feed has dropped {lost} packets in {gaps} "
                 f"break{'' if gaps == 1 else 's'}. Lap distance is integrated "
                 f"from the packet clock, so corner positions drift by roughly "
@@ -503,7 +538,7 @@ class Bench:
             # packet-id deltas into METRES at an assumed flat 60 Hz, so a
             # degraded rate silently skews lap distance and every corner
             # window derived from it.
-            self.practice.set_status(
+            self._status_target(
                 f"Telemetry is arriving at {self.listener().packet_rate:.0f} Hz, "
                 f"not 60. Lap distance is derived from the packet clock, so "
                 f"corner positions will be off until this is fixed.",

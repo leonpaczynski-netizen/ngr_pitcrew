@@ -913,6 +913,19 @@ class TelemetryBridge(QObject):
         # six numbers and `set_intensities` is one array write; the rendering
         # happens on PortAudio's thread. Nothing here waits on a sound card,
         # which is what the shift beep used to do to this loop.
+        self._drive_rig(packet)
+        return True
+
+    def _drive_rig(self, packet) -> None:
+        """Drive the transducer and wind outputs for one decoded packet.
+
+        **Shared by `on_packet` and `on_packet_rig_only`.** Extracted so that
+        rig-only (Free Run) mode can run the hardware path without touching the
+        capture, recorder, session state, shift beep or any other channel that
+        belongs to a recording session. The guard rule is unchanged: an output
+        must never cost a recorded lap, which is why this stays last in every
+        call path that includes one.
+        """
         if self.haptics is not None:
             try:
                 self.haptics.set_intensities(self.effects.update(packet))
@@ -939,6 +952,26 @@ class TelemetryBridge(QObject):
                     "been stopped for this session: %s: %s",
                     type(exc).__name__, exc, exc_info=True)
                 self.wind = None
+
+    def on_packet_rig_only(self, data: bytes) -> bool:
+        """Minimal packet callback for rig-only (Free Run) mode.
+
+        **Nothing here touches the session, the recorder, the state machine,
+        the shift beep, or any signal that belongs to a recording path.** It
+        only drives the rig outputs, so the transducer and wind fan respond to
+        the car while the driver verifies the hardware before going out.
+
+        `last_packet` is updated so the health poll and any Qt-thread reader
+        that needs a live value (HUD calibration, gauge report) still has one.
+        `parse_failed` is emitted on a decode failure — the listener counts it,
+        which is what the health line reads to detect a bad feed.
+        """
+        packet = parse_packet(data)
+        if packet is None:
+            self.parse_failed.emit()
+            return False
+        self.last_packet = packet
+        self._drive_rig(packet)
         return True
 
 
@@ -955,6 +988,14 @@ class PitCrewController(QObject):
     # The same answer about a HUD alert: (the alerts that handed it over, the
     # call, whether it was heard). See `_on_hud_alert_heard`.
     hud_alert_heard = pyqtSignal(object, object, bool)
+    # **Free Run (rig-only) mode entered or exited.** True when the rig starts
+    # with no recording session; False when it stops. The Event screen connects
+    # to this to show/hide the active state and enable/disable the button.
+    rig_only_changed = pyqtSignal(bool)
+    # **A health or refusal message for the Event screen during Free Run.**
+    # (message: str, warn: bool) — the same shape as `practice.set_status` so
+    # the Event screen can use the same display path as the practice screen.
+    rig_only_status = pyqtSignal(str, bool)
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
@@ -1090,11 +1131,18 @@ class PitCrewController(QObject):
             voice=self.voice, rig=self.rig,
             listener=lambda: self.listener, practice=self.practice,
             confirm_audio=lambda: self._confirm_audio,
-            parse_errors=lambda: self._parse_errors)
+            parse_errors=lambda: self._parse_errors,
+            rig_only=lambda: self._rig_only_mode)
         self.listener: UDPListener | None = None
         self.session_id: int | None = None
         self._parse_errors = 0
         self._store_errors = 0
+        # **Whether the rig is running without a recording session.** Set by
+        # `start_rig_only()` and cleared by `stop_rig_only()`. Guards every
+        # session-open path so a Free Run cannot share a listener with a lap
+        # that is being recorded. See §4 rule 11 - NEVER leave this True across
+        # a session boundary.
+        self._rig_only_mode: bool = False
         # **The calls filed and not yet judged, and the session they belong
         # to.** Built here rather than reached through `self.__dict__` at
         # three call sites: an attribute that only exists once a race has
@@ -1141,6 +1189,12 @@ class PitCrewController(QObject):
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
         self.event_screen.switched.connect(self.switch_event)
+        # Free Run wiring: the event screen shows the button and the health
+        # line. `wire_rig_only` is guarded by `hasattr` inside the screen, so
+        # a screen that does not carry the method (a minimal test double) is
+        # silently skipped.
+        if hasattr(self.event_screen, "wire_rig_only"):
+            self.event_screen.wire_rig_only(self)
         self.practice.recording_toggled.connect(self._on_recording_toggled)
         self.practice.lap_changed.connect(self._on_lap_changed)
         self.practice.export_requested.connect(self._on_export)
@@ -1290,7 +1344,15 @@ class PitCrewController(QObject):
         """
         screen = self.settings_screen
         if screen is not None and hasattr(screen, "set_session_open"):
-            screen.set_session_open(self.session_kind is not None)
+            # **Free Run counts as an open session for the Settings screen.**
+            # While the rig is running the screen must not re-enumerate audio
+            # devices, which would tear PortAudio down and drop the ButtKicker.
+            screen.set_session_open(
+                self.session_kind is not None or self._rig_only_mode)
+        # Free Run button reflects the new session state: enabled only when
+        # no session is open and no race is armed.
+        if hasattr(self.event_screen, "refresh_free_run_state"):
+            self.event_screen.refresh_free_run_state()
 
     def attach_settings_screen(self, screen) -> None:
         """Wire the Settings screen, whenever it turns up.
@@ -2809,8 +2871,149 @@ class PitCrewController(QObject):
     def shutdown_wind(self) -> None:
         self.rig.shutdown_wind()
 
+    # -------------------------------------------- shared listener constructor
 
+    def _make_listener(self, callback) -> "UDPListener":
+        """Build a UDP listener bound to the current address settings.
 
+        **A single constructor so practice, race and rig-only all bind the
+        same way.** Three copies at three call sites would drift the next time
+        a setting is added - see `direct`, `feed_port` and `heartbeat_target`
+        for why the address is not a constant.
+        """
+        return UDPListener(
+            "0.0.0.0", self.feed_port, callback,
+            source_ip=self.settings.udp_source_ip,
+            heartbeat_to=self.heartbeat_target)
+
+    # --------------------------------------- rig-only (Free Run) mode
+
+    def _rig_only_refusal_reason(self) -> str | None:
+        """Return why Free Run cannot start right now, or ``None`` if it can.
+
+        **Single source of truth** for `can_start_rig_only` and
+        `start_rig_only`. Keeping both consistent from one place means the
+        button and the code always agree on whether the preconditions are met.
+        """
+        if self._rig_only_mode:
+            return "Free Run is already active."
+        if self.listener is not None:
+            return ("The listener is already running. Stop the current "
+                    "session first.")
+        if self.session_id is not None:
+            return ("A session is already open. Stop it before starting "
+                    "Free Run.")
+        if (self.race is not None
+                and (getattr(self.race, "armed", False)
+                     or getattr(self.race, "running", False))):
+            return "A race is armed. Stop it before starting Free Run."
+        return None
+
+    @property
+    def can_start_rig_only(self) -> bool:
+        """Whether the driver can start a Free Run right now.
+
+        The UI uses this to enable or disable the button. All conditions
+        checked by `_rig_only_refusal_reason` must be clear.
+        """
+        return self._rig_only_refusal_reason() is None
+
+    def _emit_rig_only_status(self, message: str, warn: bool = False) -> None:
+        """Route a bench health message to the Event screen during Free Run.
+
+        Assigned to `bench._status_target` by `start_rig_only` and restored
+        by `stop_rig_only`. Emitting a signal rather than calling a widget
+        method keeps the bench ignorant of which screen is showing its output.
+        """
+        self.rig_only_status.emit(message, warn)
+
+    def start_rig_only(self) -> None:
+        """Start the rig outputs without opening a recording session.
+
+        **Free Run: the transducer and wind fan respond to the telemetry
+        stream while the driver verifies the hardware, without any laps being
+        recorded or any session row being written.** No HUD sampler, no George,
+        no strategy, no pit wall — only the stream and the rig.
+
+        Refuses with a logged reason and a signal if the preconditions are not
+        met; the Event screen connects to `rig_only_status` to show it.
+        """
+        reason = self._rig_only_refusal_reason()
+        if reason is not None:
+            log("session").warning("start_rig_only refused: %s", reason)
+            self.rig_only_status.emit(reason, True)
+            return
+
+        # **Rule 11: reset rig state from any prior session before starting.**
+        # Velocity and suspension carried across a boundary are a collision
+        # that never happened; a wind curve remembering a race's `racing` flag
+        # would apply the wrong static-wind floor here. The splits history is
+        # cleared for the same reason: a rig-only run is not a session and its
+        # accumulated state must not reach the next one.
+        # **Do NOT call `bridge.reset()`.** That rebuilds the SessionState and
+        # discards the recorder, which is the practice-session path - nothing
+        # here belongs to a session.
+        self.bridge.effects.reset()
+        self.bridge.wind_curve.reset()
+        self.bridge.racing = False
+        self._splits.new_session()
+
+        self._rig_only_mode = True
+        # Route bench health messages to the Event screen for this run.
+        self.bench._status_target = self._emit_rig_only_status
+        # **Tell the Settings screen that a session is "open".** Without this,
+        # it would see `session_kind is None` and re-enumerate audio devices on
+        # the next open, tearing PortAudio down and dropping the ButtKicker.
+        self._tell_settings_about_the_session()
+
+        self.listener = self._make_listener(self.bridge.on_packet_rig_only)
+        self.listener.start()
+        self._parse_errors = 0
+        self._health.start()
+        haptics_ok = self.start_haptics()
+        wind_ok = self.start_wind()
+
+        self.rig_only_changed.emit(True)
+
+        # **Fail loudly when an enabled device would not start.** A disabled
+        # device returns False silently; an enabled device that returns False
+        # is a hardware fault the driver needs to know about while he can still
+        # act on it — not a post-run surprise in the log.
+        if self.settings.haptics_enabled and not haptics_ok:
+            self._emit_rig_only_status(
+                "ButtKicker would not open. Check the audio device and try "
+                "again.", True)
+        if self.settings.wind_enabled and not wind_ok:
+            self._emit_rig_only_status(
+                "Wind fan would not start. Check the connection and try "
+                "again.", True)
+
+        log("session").info(
+            "rig-only mode started, listening on %s", self.feed_port)
+
+    def stop_rig_only(self) -> None:
+        """Stop the rig-only run and return the app to its idle state.
+
+        **Idempotent.** Called by the driver's Stop button and by `shutdown`;
+        safe to call when rig-only mode is not active.
+        """
+        if not self._rig_only_mode:
+            return
+        self.stop_haptics()
+        self.stop_wind()
+        if self.listener is not None:
+            self.listener.stop()
+            self.listener = None
+        self._health.stop()
+        self._rig_only_mode = False
+        # Restore the health route to the practice screen for the next session.
+        # `restore_status_target` handles the case where bench.practice is None.
+        self.bench.restore_status_target()
+        # Tell the Settings screen the "session" has ended so device enumeration
+        # is allowed again.
+        self._tell_settings_about_the_session()
+        self.rig_only_changed.emit(False)
+        log("session").info("rig-only mode stopped")
 
     @staticmethod
     def _feed_description(values) -> str:
@@ -2957,6 +3160,16 @@ class PitCrewController(QObject):
 
 
     def start_practice(self) -> None:
+        # **A rig-only run holds the listener.** Starting practice over it
+        # would bind a second socket (SO_REUSEADDR), leave the rig-only socket
+        # feeding the bridge, and record nothing - the same orphan failure the
+        # session guard below exists to prevent. Stop Free Run first.
+        if self._rig_only_mode:
+            self.practice.set_status(
+                "Free Run is active. Stop it before starting a practice "
+                "session.", warn=True)
+            self.practice.set_recording(False)
+            return
         # Starting one session over another left the first with no `ended_at`
         # and its listener running: SO_REUSEADDR lets the second UDP bind
         # succeed, and on Windows the *first* socket keeps the datagrams, so
@@ -2991,10 +3204,7 @@ class PitCrewController(QObject):
         self._new_hud_session()
 
         self.voice.warm()
-        self.listener = UDPListener(
-            "0.0.0.0", self.feed_port, self.bridge.on_packet,
-            source_ip=self.settings.udp_source_ip,
-            heartbeat_to=self.heartbeat_target)
+        self.listener = self._make_listener(self.bridge.on_packet)
         self.listener.start()
         self._parse_errors = 0
         self._store_errors = 0
@@ -4953,17 +5163,6 @@ class PitCrewController(QObject):
             self.voice.warm()
         except Exception:                                   # noqa: BLE001
             log("race").warning("the voice could not be warmed for this race")
-        self._pit_loss_recorded = False
-        # **A board showing a race that is over comes down before anything
-        # can refuse** (critic pass 3 on row 1.8). Only `stop_race` and
-        # `shutdown` closed it, so a re-arm refused before `self.race` was
-        # replaced - no event, the OBS pre-flight, a refused plan - left the
-        # last race's FLAG, position and last call on the new grid under "Not
-        # armed". Arming reopens it (`_open_driver_board`).
-        if self.race is not None and getattr(self.race.state, "finished",
-                                             False):
-            self.bridge.board_live = None
-            self._close_driver_board()
         if self.race_screen is None:
             return False
 
@@ -4975,6 +5174,27 @@ class PitCrewController(QObject):
             self.race_screen.set_status(why, warn=True)
             log("race").warning("start race refused: %s", why)
             return False
+
+        # **A rig-only run holds the listener and the health timer.** Arming a
+        # race over it would leave both sessions sharing state; stop Free Run
+        # before the grid. **This guard is before any state-mutating preamble**
+        # so a refused start changes nothing that matters — the board does not
+        # close and the loss flag is not reset. (`voice.warm()` above has
+        # already run; loading the voice early is harmless.)
+        if self._rig_only_mode:
+            return refuse("Free Run is active. Stop it before arming the race.")
+
+        self._pit_loss_recorded = False
+        # **A board showing a race that is over comes down before anything
+        # can refuse** (critic pass 3 on row 1.8). Only `stop_race` and
+        # `shutdown` closed it, so a re-arm refused before `self.race` was
+        # replaced - no event, the OBS pre-flight, a refused plan - left the
+        # last race's FLAG, position and last call on the new grid under "Not
+        # armed". Arming reopens it (`_open_driver_board`).
+        if self.race is not None and getattr(self.race.state, "finished",
+                                             False):
+            self.bridge.board_live = None
+            self._close_driver_board()
 
         event = self.active_event()
         if event is None:
@@ -5243,10 +5463,7 @@ class PitCrewController(QObject):
         self._start_video()
         self._new_hud_session()
 
-        self.listener = UDPListener(
-            "0.0.0.0", self.feed_port, self.bridge.on_packet,
-            source_ip=self.settings.udp_source_ip,
-            heartbeat_to=self.heartbeat_target)
+        self.listener = self._make_listener(self.bridge.on_packet)
         self.listener.start()
         self._health.start()
         self.start_haptics()
@@ -8576,6 +8793,14 @@ class PitCrewController(QObject):
         # one thing that notices the previous run died could itself be skipped
         # by a run that dies. Idempotent, so a normal exit does nothing here.
         self._first_paint_work()
+        # **Free Run holds a listener and the health timer; stop it before the
+        # session check, so a rig-only exit writes nothing to the store.** The
+        # session guard below (`session_id is not None`) is False in rig-only
+        # mode, so without this the listener would be left running until the
+        # generic `if self.listener is not None: listener.stop()` twelve lines
+        # down — which works, but would leave `_rig_only_mode = True` past the
+        # flag it was meant to guard.
+        self.stop_rig_only()
         # Close the session before anything else. Shutting the window while
         # recording used to leave `ended_at` null, which is exactly what a
         # crash leaves - so a clean exit was indistinguishable from a lost one.

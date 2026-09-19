@@ -196,6 +196,13 @@ class EventScreen(QWidget):
         # something the driver can change, and matching on it meant renaming
         # an event orphaned every session recorded under the old name.
         self._event_id: int | None = None
+        # Free Run state, mirrored from `rig_only_changed` so `refresh_free_run_state`
+        # can compute the correct enabled state without accessing controller
+        # internals. Stays False until `wire_rig_only` is called.
+        self._rig_only_active: bool = False
+        # Set by `wire_rig_only`. None when the controller has not been
+        # attached yet (tests that build the screen standalone).
+        self._rig_only_controller = None
         self._events: list[dict] = []
         # Hub rounds with no event row yet, offered under the stored ones.
         self._upcoming: list = []
@@ -277,6 +284,8 @@ class EventScreen(QWidget):
             "What is being raced, and what is in the car.",
             colour=theme.STENCIL_DIM))
         row.addLayout(column, 1)
+        row.addWidget(self._free_run_block(), 0,
+                      Qt.AlignmentFlag.AlignBottom)
         row.addWidget(self._picker_block(), 0,
                       Qt.AlignmentFlag.AlignBottom)
         return row
@@ -313,6 +322,89 @@ class EventScreen(QWidget):
 
         self.set_events([], None)
         return holder
+
+    def _free_run_block(self) -> QWidget:
+        """Free Run controls: rig outputs without recording a session.
+
+        Beside the event picker in the header. Large and obvious per the brief —
+        the driver is on a wheel. The status label below the button carries
+        health warnings and the active confirmation; it is empty when idle.
+        """
+        holder = QWidget()
+        box = QVBoxLayout(holder)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(4)
+
+        self.free_run_button = MarkButton("Free Run")
+        self.free_run_button.setToolTip(
+            "Run the rig (wind fan and ButtKicker) from the live telemetry "
+            "stream without opening a recording session. No George, no shift "
+            "beep, no data recorded. No event needed.")
+        self.free_run_button.clicked.connect(self._on_free_run_clicked)
+        box.addWidget(self.free_run_button)
+
+        self.rig_only_note = BodyLabel("", size=11, colour=theme.STENCIL_DIM)
+        box.addWidget(self.rig_only_note)
+
+        return holder
+
+    # --------------------------------------------------- Free Run wiring
+
+    def wire_rig_only(self, controller) -> None:
+        """Connect Free Run signals from the controller to this screen.
+
+        Called once from ``PitCrewController.__init__`` after the existing
+        event-screen signal wiring. Idempotent on the button state, but the
+        caller must ensure it runs only once — a doubled ``connect`` fires
+        every handler twice with no exception to show for it.
+        """
+        self._rig_only_controller = controller
+        controller.rig_only_changed.connect(self._on_rig_only_changed)
+        controller.rig_only_status.connect(self._on_rig_only_status)
+        self.refresh_free_run_state()
+
+    def _on_free_run_clicked(self) -> None:
+        c = self._rig_only_controller
+        if c is None:
+            return
+        if self._rig_only_active:
+            c.stop_rig_only()
+        else:
+            c.start_rig_only()
+
+    def _on_rig_only_changed(self, active: bool) -> None:
+        """Free Run started (``True``) or stopped (``False``)."""
+        self._rig_only_active = active
+        if active:
+            self.free_run_button.setText("Stop Free Run")
+            self.free_run_button.set_primary(True)
+            self.rig_only_note.setText(
+                "Free Run active — rig running, no data recorded.")
+            self.rig_only_note.set_ink(theme.STENCIL_DIM)
+        else:
+            self.free_run_button.setText("Free Run")
+            self.free_run_button.set_primary(False)
+            self.rig_only_note.setText("")
+        self.refresh_free_run_state()
+
+    def _on_rig_only_status(self, message: str, warn: bool) -> None:
+        """Health warning or refusal, routed here from the bench during Free Run."""
+        self.rig_only_note.setText(message)
+        self.rig_only_note.set_ink(theme.WARNING if warn else theme.STENCIL_DIM)
+
+    def refresh_free_run_state(self) -> None:
+        """Refresh the Free Run button's enabled state.
+
+        Called by the controller when session state changes: session open or
+        close, race arm or disarm, and rig-only toggle. ``can_start_rig_only``
+        reads current controller state, so this is safe to call at any time.
+        """
+        c = self._rig_only_controller
+        if c is None:
+            return
+        # Enabled to *start* (can_start_rig_only) OR to *stop* (_rig_only_active).
+        enabled = self._rig_only_active or c.can_start_rig_only
+        self.free_run_button.setEnabled(enabled)
 
     # ------------------------------------------------------------- switching
 

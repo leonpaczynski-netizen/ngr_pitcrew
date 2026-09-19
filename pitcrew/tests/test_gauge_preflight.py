@@ -363,7 +363,10 @@ def _stub_controller(answer: bool):
     # half-built QObject an attribute nobody set raises RuntimeError rather
     # than AttributeError - so `start_race`'s first line, which now asks
     # whether the race on the board is over, fell over on the stub alone.
+    # Same rule for `_rig_only_mode`: added with the Free Run feature, and
+    # read at the top of both `start_practice` and `start_race`.
     app.race = None
+    app._rig_only_mode = False
     app.hud = _session(source=_Source(why="no program projector open"))
     app.confirm_without_gauge = lambda what, check: answer
     app.practice = _Screen()
