@@ -1006,6 +1006,24 @@ class PitCrewWindow(QMainWindow):
         """
         _FirstPaint(self, then)
 
+    def after_launch_paint(self) -> None:
+        """The launch's first frame is up: start the speech load, then warm
+        the deferred screens.
+
+        **The speech load first, measured 19 Sep 2026** - 6 interleaved
+        launch pairs, timed from outside the process, against starting it at
+        the end of `warm_screens`: speech ready 146-233 ms sooner on a quiet
+        machine (median 358 over all six, every pair the same sign), and the
+        window settled no later (-13, -9, +14 ms on the quiet pairs; the
+        longest stall 59-62 -> 66-72 ms, still under 100). It was not so
+        while each moonshine session spun ONNX Runtime's fourteen-thread pool
+        (see `ptt.MOONSHINE_SINGLE_THREAD`): then the loads beside the screens
+        roughly doubled them. The loads run on their one warm-up thread, as
+        always; nothing here waits for them.
+        """
+        self.release_speech()
+        self.warm_screens()
+
     def finish_launch(self) -> None:
         """What the launch held back until the window was up: the phone
         strip's server, then the speech load. Both idempotent; called at
@@ -1021,12 +1039,11 @@ class PitCrewWindow(QMainWindow):
     def release_speech(self) -> None:
         """Start the speech warm-up the launch built but held back. Once.
 
-        **Why it waits for the screens** (19 Sep 2026): run beside them, the
-        two ONNX loads and their imports roughly doubled the screens' cost -
-        Car 290 -> 410 ms, and one calendar read 40 -> 1,260 ms - so every
-        freeze after the window appeared got longer. Held until the chain
-        above ends, the screens run on a quiet machine and the loads follow
-        immediately, off this thread.
+        **Why it waits for the first frame** (19 Sep 2026): started before
+        the window was up, the two ONNX loads and their imports competed with
+        building it - Car 290 -> 410 ms, one calendar read 40 -> 1,260 ms.
+        Started on the first frame (`after_launch_paint`), the window is
+        already drawn and the deferred screens that follow are small.
 
         **It cannot be left unreleased.** Called from both ends of
         `warm_screens`, from a timer in `main` as a backstop, and - failing
@@ -1140,8 +1157,8 @@ def main() -> int:
         # to build. The controller used to join them before the window could
         # exist; now `PushToTalk` installs them at the first press after they
         # land (`PushToTalk._take_arrival`), and `release_speech` starts the
-        # load once the deferred screens are warm, so the two do not slow
-        # each other down. Measured 19 Sep 2026: first paint 3.4 s -> 1.15 s.
+        # load on the first frame (`after_launch_paint`). Measured 19 Sep
+        # 2026: first paint 3.4 s -> 0.8 s.
         #
         # After the sole-instance claim, deliberately: a second copy that is
         # about to be refused must not first load a quarter of a gigabyte.
@@ -1164,7 +1181,7 @@ def main() -> int:
         # first paint, so a Car screen warmed "in the background" was 350 ms
         # of blank window in front of the driver. `after_first_paint` holds
         # the chain until the window has actually drawn.
-        window.after_first_paint(window.warm_screens)
+        window.after_first_paint(window.after_launch_paint)
         # The backstop for `finish_launch` - the strip, then the speech load.
         # The chain above calls it within half a second; this is for a chain
         # that somehow never ran.

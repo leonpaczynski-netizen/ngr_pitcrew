@@ -424,6 +424,49 @@ def test_after_first_paint_runs_once_even_with_no_paint(qt_app, store,
         window.controller.shutdown()
 
 
+def test_the_first_frame_starts_the_speech_load_before_any_late_screen(
+        qt_app, store, monkeypatch):
+    """Speech first, then the screens - and every screen still built."""
+    from pitcrew.app import PitCrewWindow
+
+    warm, release = held_warm_up(Recogniser(), Matcher())
+    window = PitCrewWindow(store, warm=warm)
+    started_before: list[bool] = []
+    factory = window.LATE_SCREENS[1][1]
+
+    def spy(**kwargs):
+        started_before.append(warm[1].ident is not None)
+        return factory(**kwargs)
+
+    monkeypatch.setitem(window.LATE_SCREENS, 1,
+                        (window.LATE_SCREENS[1][0], spy,
+                         window.LATE_SCREENS[1][2]))
+    try:
+        window.after_launch_paint()
+        _pump(qt_app)
+        assert started_before == [True]
+        assert window.car_screen is not None
+        assert window.reference_screen is not None
+        assert window.settings_screen is not None
+    finally:
+        release.set()
+        window.controller.shutdown()
+
+
+def test_the_launch_hangs_the_speech_load_on_the_first_frame():
+    """`main` is not run by the suite (it opens the real database), so the
+    wiring is pinned by its text: the first-paint hook is the one that
+    starts speech, and the backstop still finishes the launch."""
+    import inspect
+
+    import pitcrew.app as app_module
+
+    source = inspect.getsource(app_module.main)
+    assert "window.after_first_paint(window.after_launch_paint)" in source
+    assert ("QTimer.singleShot(SPEECH_BACKSTOP_MS, window.finish_launch)"
+            in source)
+
+
 def test_the_car_screen_is_not_on_the_path_to_the_window(qt_app, store):
     from pitcrew.app import PitCrewWindow
 
