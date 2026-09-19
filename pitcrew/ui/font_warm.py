@@ -19,7 +19,8 @@ and both shared by every thread once paid:**
 GIL for the whole of every Qt call it makes, so a Python thread that asks
 Qt to measure text blocks the Qt thread's Python for as long as the call
 takes - measured: a launch 560 ms slower with one. Here no Python runs on
-the worker at all, and nothing on the Qt thread touches a font:
+the worker until its work is done (one log line as it ends), and nothing on
+the Qt thread touches a font:
 
 * the text goes into a `QTextDocument` whose page size is null, which is
   the one state in which Qt does not lay a document out - so neither the
@@ -53,6 +54,17 @@ from PyQt6.QtGui import QFont, QTextCursor, QTextDocument
 # QThread that is still running - Qt aborts the process if one is destroyed
 # mid-run - and so `stop_all` can end them on the way out.
 _LIVE: list["FontWarmUp"] = []
+
+# **Above the Qt thread's own priority, on purpose** (19 Sep 2026). While
+# this loads it holds Qt's font-database lock, and a Qt thread that needs a
+# font waits on that lock. On a saturated machine a normal-priority worker
+# is descheduled while holding it. Measured with 14 busy processes on this
+# 14-core machine, 12 interleaved pairs: at normal priority the warm-up took
+# 0.74-3.27 s (median 1.1 s; 3.8 s in an earlier run, with the Event screen
+# waiting 3.1 s on it); raised, 0.52-0.73 s in 11 of 12 and 1.7 s once, and
+# the Event screen's longest build fell from 561 to 171 ms. It runs once,
+# for a few hundred milliseconds, before anything else is on screen.
+PRIORITY = QThread.Priority.HighestPriority
 
 
 class FontWarmUp(QObject):
@@ -93,7 +105,7 @@ class FontWarmUp(QObject):
         self.took_s: float | None = None
         self._thread.finished.connect(self._finished,
                                       Qt.ConnectionType.DirectConnection)
-        self._thread.start()
+        self._thread.start(PRIORITY)
         QMetaObject.invokeMethod(width, "start",
                                  Qt.ConnectionType.QueuedConnection)
 

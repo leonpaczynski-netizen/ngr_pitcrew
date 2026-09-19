@@ -196,3 +196,24 @@ def test_a_slow_font_warm_up_is_a_warning(qt_app, caplog, monkeypatch):
             qt_app.processEvents()
             time.sleep(0.005)
     assert _warnings(caplog, "font warm-up test-slow finished in")
+
+
+def test_the_font_warm_up_runs_above_the_qt_threads_priority(qt_app):
+    """It holds Qt's font lock while it loads; a starved worker makes the
+    Qt thread wait on it (measured under load: up to 3.1 s)."""
+    from PyQt6.QtCore import QThread
+
+    from pitcrew.ui import font_warm, theme
+
+    assert font_warm.PRIORITY == QThread.Priority.HighestPriority
+    assert "self._thread.start(PRIORITY)" in inspect.getsource(
+        font_warm.FontWarmUp.__init__)
+    warm = font_warm.start("x", theme.text_font(15), "test-priority")
+    try:
+        # Read while it may still be running; once finished Qt reports
+        # InheritPriority, so only a live read is meaningful.
+        priority = warm._thread.priority()
+        if not warm.done():
+            assert priority == QThread.Priority.HighestPriority
+    finally:
+        font_warm.stop_all()
