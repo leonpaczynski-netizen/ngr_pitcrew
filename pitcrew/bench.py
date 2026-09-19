@@ -79,7 +79,13 @@ class Bench:
         self.bridge = bridge
         self.voice = voice
         self.rig = rig
-        self.practice = practice
+        # **A reader, or the screen itself** (round 4): the Practice screen is
+        # built after the window's first frame, and this object is built
+        # before it. A reader is a callable with no `set_status` - a screen
+        # (or a test's stand-in for one) always has that.
+        self._practice = (practice if callable(practice)
+                          and not hasattr(practice, "set_status")
+                          else (lambda: practice))
         # **A reader returning the checker, not the checker.** Tests rebind
         # `controller._confirm_audio` after construction to ask a different
         # question - a stubbed tone, or a build agent with no audio hardware -
@@ -107,6 +113,16 @@ class Bench:
 
     def listener(self):
         return self._listener()
+
+    @property
+    def practice(self):
+        """The Practice screen as it is now - built on first use by the
+        controller's reader, so a line for it is never written into nothing."""
+        return self._practice()
+
+    @practice.setter
+    def practice(self, screen) -> None:
+        self._practice = lambda: screen
 
     def parse_errors(self) -> int:
         return self._parse_errors()

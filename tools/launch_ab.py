@@ -276,6 +276,14 @@ def launch_outside(root: str, hold_s: float = HOLD_S) -> dict:
                           line)
         if found:
             marks[found.group(1).strip()] = int(found.group(2))
+    # Every `diagnostics.timed_step`: {name: [took ms, ended ms since the
+    # process was created]}. Only checkouts that log fast steps have these.
+    steps = {}
+    for line in lines:
+        found = re.search(r"launch step: (.+?)\s+([\d.]+) ms", line)
+        if found:
+            steps[found.group(1).strip()] = [
+                float(found.group(2)), _stamp_ms(line, created_epoch)]
     row.update({
         "visible": round(visible),
         "answering": round(answering) if answering is not None else None,
@@ -285,7 +293,8 @@ def launch_outside(root: str, hold_s: float = HOLD_S) -> dict:
         "app_stalls": app_stalls,
         "machine_stalls": machine_stalls,
         "pings": len(pings),
-        "marks": marks})
+        "marks": marks,
+        "steps": steps})
     return row
 
 

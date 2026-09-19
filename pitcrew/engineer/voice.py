@@ -675,9 +675,10 @@ AUTO = object()
 ENGINE_WAIT_S = 5.0
 
 # How long the voice thread waits for an arriving engine before it says so.
-# Measured (19 Sep 2026): the build lands 0.3-1.5 s after the controller on a
-# quiet machine and inside 4.5 s with the CPU saturated, so 10 s is only ever
-# a build that is stuck - PortAudio hanging in the sounddevice import is the
+# Measured (19 Sep 2026) over the 170 landings logged in this round's launch
+# runs, quiet and CPU-saturated alike: median 1.3 s after the controller was
+# built, 90th percentile 2.1 s, worst 5.1 s. So 10 s is only ever a build
+# that is stuck - PortAudio hanging in the sounddevice import is the
 # known way. Past it George is reported as not loaded: an ERROR in the log,
 # `health()` on the RACE board's top line and on Settings, and every waiting
 # line answered "not heard" so its owner re-offers it instead of believing

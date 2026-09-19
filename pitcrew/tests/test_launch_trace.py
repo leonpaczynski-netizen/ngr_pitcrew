@@ -143,13 +143,15 @@ def test_every_step_of_the_window_build_is_timed(qt_app, store, monkeypatch,
     with caplog.at_level("INFO"):
         window = PitCrewWindow(store)
         try:
-            window._ensure_screen(1)
-            window._ensure_screen(6)
+            for index in (1, 2, 3, 4, 6):
+                window._ensure_screen(index)
         finally:
             window.controller.shutdown()
     said = " | ".join(_warnings(caplog, "slow launch step"))
-    for step in ("EventScreen", "PracticeScreen", "StrategyScreen",
-                 "RaceScreen", "NavRail", "PitCrewController",
+    # Practice, Strategy and Race are built after the first frame since
+    # round 4, and timed under their window attribute names like the others.
+    for step in ("EventScreen", "practice_screen", "strategy_screen",
+                 "race_screen", "NavRail", "PitCrewController",
                  "car_screen", "settings_screen"):
         assert f"slow launch step: {step} took" in said, step
 

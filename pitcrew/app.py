@@ -872,12 +872,21 @@ class PitCrewWindow(QMainWindow):
 
         self.stack = QStackedWidget(shell)
         row.addWidget(self.stack, 1)
-        # **Three of the seven are not built here.** Car, Reference and
-        # Settings are made in the idle turns straight after the window is
-        # shown (`warm_screens`), or on the first visit if that comes sooner.
-        # Event and Practice are unconditional in the controller; Strategy
-        # and Race are 16 and 8 ms and are wanted on race day, so all four
-        # stay eager and none of that is worth the deferral.
+        # **Only the Event screen is built here** - the one on screen at
+        # launch. The other six are made in the idle turns straight after the
+        # window's first frame (`warm_screens`), Practice, Strategy and Race
+        # first, or on the first visit if that comes sooner.
+        #
+        # **Practice, Strategy and Race were eager until round 4** (critic,
+        # 19 Sep 2026): "wanted on race day" was the reason, and it is kept
+        # by a guarantee instead of by building them first. The controller
+        # builds any of the three the moment anything reads it
+        # (`PitCrewController._lazy_screen`) - and a session or a race is
+        # only ever armed through code that reads one - so nothing can find
+        # one missing; and `warm_screens` has built all three within about
+        # 150 ms of the first frame. Measured: 57-95 ms of building, their
+        # share of `show()` and the Practice fill's compound-pace read, all
+        # off the path to the first frame. See `CONTROLLER_SCREENS`.
         #
         # **Car was eager until 19 Sep 2026, and the reason no longer holds.**
         # Its ~300 ms (210 widgets) hid inside the window's wait for the
@@ -892,12 +901,9 @@ class PitCrewWindow(QMainWindow):
         with timed("EventScreen"):
             self.event_screen = EventScreen(parent=self.stack)
         self.car_screen = None
-        with timed("PracticeScreen"):
-            self.practice_screen = PracticeScreen(parent=self.stack)
-        with timed("StrategyScreen"):
-            self.strategy_screen = StrategyScreen(parent=self.stack)
-        with timed("RaceScreen"):
-            self.race_screen = RaceScreen(parent=self.stack)
+        self.practice_screen = None
+        self.strategy_screen = None
+        self.race_screen = None
         self.reference_screen = None
         self.settings_screen = None
         # Order must match SCREENS, which NAV_GROUPS defines: the rail
@@ -921,16 +927,51 @@ class PitCrewWindow(QMainWindow):
 
         with timed("PitCrewController"):
             self.controller = PitCrewController(
-                store, self.event_screen, self.practice_screen,
-                self.strategy_screen, self.race_screen,
+                store, self.event_screen, None, None, None,
                 car_screen=None, settings_screen=None,
                 port=port, warm=warm, voice_engine=voice_engine,
-                defer_strip=True)
+                defer_strip=True, screen_builder=self._make_screen)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
         self._update_rail(self.controller.nav_state())
         self._install_shortcuts()
+
+    # Index in the stack -> (attribute, class, the controller's name for it).
+    # **The controller builds these** - on the first read of
+    # `controller.practice` / `.strategy` / `.race_screen`, through
+    # `_make_screen` - and attaches them itself. The window reaches them the
+    # same way, so there is one path that makes each, not two.
+    CONTROLLER_SCREENS = {
+        2: ("practice_screen", PracticeScreen, "practice"),
+        3: ("strategy_screen", StrategyScreen, "strategy"),
+        4: ("race_screen", RaceScreen, "race_screen"),
+    }
+
+    # The order `warm_screens` builds them in: the race-day three first.
+    WARM_ORDER = (2, 3, 4, 1, 5, 6)
+
+    def _make_screen(self, slot: str):
+        """The controller's `screen_builder`: make one of Practice, Strategy
+        or Race and put it in the stack. The controller attaches it.
+
+        Idempotent: a second call returns the screen already made.
+        """
+        index = next(i for i, (_n, _f, name) in self.CONTROLLER_SCREENS.items()
+                     if name == slot)
+        attr, factory, _name = self.CONTROLLER_SCREENS[index]
+        existing = getattr(self, attr)
+        if existing is not None:
+            return existing
+        with diagnostics.timed_step(attr):
+            screen = factory(parent=self.stack)
+        setattr(self, attr, screen)
+        placeholder = self.stack.widget(index)
+        self.stack.insertWidget(index, screen)
+        if placeholder is not None:
+            self.stack.removeWidget(placeholder)
+            placeholder.deleteLater()
+        return screen
 
     # Index in the stack -> (attribute, class, how to wire it up). The rail
     # indexes straight into the stack, so these are positions in SCREENS.
@@ -949,6 +990,12 @@ class PitCrewWindow(QMainWindow):
         the life of the process, with nothing to see until one Save wrote two
         records.
         """
+        owned = self.CONTROLLER_SCREENS.get(index)
+        if owned is not None:
+            # Built and attached by the controller on this read.
+            screen = getattr(self.controller, owned[2])
+            self._update_rail(self.controller.nav_state())
+            return screen
         late = self.LATE_SCREENS.get(index)
         if late is None:
             return self.stack.widget(index)
@@ -1001,8 +1048,9 @@ class PitCrewWindow(QMainWindow):
         of the race with nothing in the log**, which is a worse fault than
         the 90 ms of building it was trying to hide.
         """
-        pending = [i for i in sorted(self.LATE_SCREENS)
-                   if getattr(self, self.LATE_SCREENS[i][0]) is None]
+        slots = {**self.LATE_SCREENS, **self.CONTROLLER_SCREENS}
+        pending = [i for i in self.WARM_ORDER
+                   if getattr(self, slots[i][0]) is None]
         if not pending:
             self.finish_launch()
             return
@@ -1012,11 +1060,14 @@ class PitCrewWindow(QMainWindow):
         except Exception:                         # noqa: BLE001
             # Named, and with a traceback: under pythonw this is the only
             # trace a screen that cannot be built will ever leave. The rail
-            # will try again if he navigates there, and fail visibly.
+            # will try again if he navigates there, and fail visibly - and
+            # for Practice, Strategy and Race so will the first thing that
+            # reads one, which is the loud failure a deferred load owes.
             diagnostics.log().error(
                 "could not warm the %s screen in the background",
-                self.LATE_SCREENS[index][0], exc_info=True)
-            setattr(self, self.LATE_SCREENS[index][0], None)
+                slots[index][0], exc_info=True)
+            if index in self.LATE_SCREENS:
+                setattr(self, slots[index][0], None)
             # The chain ends here, and what waits on its end must not.
             self.finish_launch()
             return

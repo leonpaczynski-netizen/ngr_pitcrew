@@ -247,8 +247,12 @@ class timed_step:
     **Why this exists** (19 Sep 2026): one launch under load spent 17.7 s
     building the Event screen, and the log said nothing at all between "store
     open" and "window built" - a repeat on race day would have left no trace
-    of where. Silent when fast, so it costs a log line only when there is
-    something to say.
+    of where.
+
+    **Every step is written, at INFO, and a slow one at WARNING** (round 4).
+    Silent-when-fast left the log unable to say where a normal launch's time
+    goes, so the waterfall had to be rebuilt by hand each time it was asked.
+    A dozen lines per launch, into a log that already takes hundreds.
     """
 
     def __init__(self, name: str, warn_after_s: float | None = None) -> None:
@@ -267,6 +271,9 @@ class timed_step:
             log("startup").warning(
                 "slow launch step: %s took %.0f ms (warns over %.0f ms)",
                 self.name, self.took_s * 1000.0, limit * 1000.0)
+        else:
+            log("startup").info("launch step: %-24s %6.1f ms",
+                                self.name, self.took_s * 1000.0)
         return False
 
 

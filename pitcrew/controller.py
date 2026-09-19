@@ -42,7 +42,7 @@ from pitcrew.analysis.runs import (
     flag_opening_lap,
     fuel_implausible_laps,
 )
-from pitcrew.diagnostics import log
+from pitcrew.diagnostics import log, timed_step
 from pitcrew.engineer.ptt import (
     PushToTalk,
     best_listener,
@@ -965,13 +965,27 @@ class PitCrewController(QObject):
                  car_screen=None, settings_screen=None,
                  port: int | None = None, voice=None, warm=None,
                  voice_engine=None, defer_strip: bool = False,
+                 screen_builder=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
         self.event_screen = event_screen
-        self.practice = practice_screen
-        self.strategy = strategy_screen
-        self.race_screen = race_screen
+        # **Practice, Strategy and Race may be built after the first frame**
+        # (round 4). The window passes None for them and `screen_builder`,
+        # which makes one on demand - see `_lazy_screen`: any read of
+        # `self.practice`, `self.strategy` or `self.race_screen` builds and
+        # attaches the screen first, so no code path in this class can find
+        # one missing. Tests, replays and the bench pass real screens and no
+        # builder, exactly as before.
+        self._screen_builder = screen_builder
+        self._practice = None
+        self._strategy = None
+        self._race_screen = None
+        # The screen objects whose signals are connected - see `_wire_screen`.
+        self._practice_wired_to = None
+        self._strategy_wired_to = None
+        self._race_wired_to = None
+        self._race_picker_wired_to = None
         self.car_screen = car_screen
         self.settings_screen = settings_screen
         # An exclusion reason the driver gave mid-lap, waiting for
@@ -990,9 +1004,8 @@ class PitCrewController(QObject):
         # The screen-filling notice, anchored to whichever screen the practice
         # page is on. None where there is no Qt widget to anchor to, which is
         # every controller test and every capture replay - the recording path
-        # has to stay drivable headless.
-        self._banner = (Banner(practice_screen)
-                        if isinstance(practice_screen, QWidget) else None)
+        # has to stay drivable headless. Made by `attach_practice_screen`.
+        self._banner = None
         # An explicit port wins - the tests bind their own - but otherwise the
         # setting is the source of truth, not a constant in this file.
         self._port_override = port
@@ -1116,7 +1129,8 @@ class PitCrewController(QObject):
             settings=lambda: self.settings,
             settings_screen=lambda: self.settings_screen, bridge=self.bridge,
             voice=self.voice, rig=self.rig,
-            listener=lambda: self.listener, practice=self.practice,
+            listener=lambda: self.listener,
+            practice=lambda: self.practice,
             confirm_audio=lambda: self._confirm_audio,
             parse_errors=lambda: self._parse_errors)
         self.listener: UDPListener | None = None
@@ -1172,39 +1186,15 @@ class PitCrewController(QObject):
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
         self.event_screen.switched.connect(self.switch_event)
-        self.practice.recording_toggled.connect(self._on_recording_toggled)
-        self.practice.lap_changed.connect(self._on_lap_changed)
-        self.practice.export_requested.connect(self._on_export)
-        self.practice.practice_mode_changed.connect(self._on_practice_mode)
-        self.practice.practice_intent_changed.connect(
-            self._on_practice_intent)
-        self.practice.coach_speaks_changed.connect(self._on_coach_speaks)
-        self.practice.debrief_requested.connect(self.read_the_stint)
-        if self.strategy is not None:
-            self.strategy.build_requested.connect(self.build_strategy)
-            self.strategy.qualifying_requested.connect(
-                self.plan_qualifying)
-            self.strategy.approve_requested.connect(self.approve_strategy)
-            self.strategy.approve_loaded_requested.connect(
-                self.approve_stored_strategy)
-        if self.race_screen is not None:
-            self.race_screen.start_requested.connect(self.start_race)
-            self.race_screen.shown.connect(self.refresh_plan)
-            self.race_screen.replan_accepted.connect(
-                lambda: self._resolve_replan(accepted=True))
-            self.race_screen.replan_declined.connect(
-                lambda: self._resolve_replan(accepted=False))
-            self.race_screen.stop_requested.connect(self.stop_race)
-            # **His own choice of plan re-asks whether it will arm** (critic
-            # 2, pass 4): choosing "No plan" left "The approved plan will not
-            # arm" up about a plan he had just set aside. The screen's own
-            # slot runs first - it is connected in the screen's constructor -
-            # so `use_plan()` has already moved when this asks.
-            picker = getattr(self.race_screen, "plan_picker", None)
-            if picker is not None:
-                picker.activated.connect(
-                    lambda _index: self._refresh_race_options(
-                        self.active_event()))
+        # Practice, Strategy and Race are wired by their attach methods, the
+        # same whether the screen came in here or is built after the first
+        # frame. Here, before the first fill, an attach only wires.
+        if practice_screen is not None:
+            self.attach_practice_screen(practice_screen)
+        if strategy_screen is not None:
+            self.attach_strategy_screen(strategy_screen)
+        if race_screen is not None:
+            self.attach_race_screen(race_screen)
         # The Car screen that is wired, like `_settings_wired_to`.
         self._car_wired_to = None
         self._car_groups: list = []
@@ -1307,14 +1297,15 @@ class PitCrewController(QObject):
         # One calendar read for the three questions below - see
         # `hub_proposals`. Scoped to this call and dropped in the `finally`.
         self._hub_memo = {}
-        try:
-            # Before the load, not after: this decides which event the load
-            # shows.
-            self.open_on_next_round()
-            self.load_active_event()
-        finally:
-            self._hub_memo = None
-        self._close_orphaned_sessions()
+        with timed_step("the first fill"):
+            try:
+                # Before the load, not after: this decides which event the
+                # load shows.
+                self.open_on_next_round()
+                self.load_active_event()
+            finally:
+                self._hub_memo = None
+            self._close_orphaned_sessions()
 
     # --------------------------------------------------------------- catalog
 
@@ -1424,6 +1415,155 @@ class PitCrewController(QObject):
         """Connect the Car screen's two signals, once per screen."""
         self._car_wired_to = self._wire_screen(
             self._car_wired_to, screen, self._car_slots())
+
+    # --------------------------------------- Practice, Strategy and Race
+    #
+    # **Built after the window's first frame since round 4 (19 Sep 2026).**
+    # None of the three is visible at launch; together they were 57-95 ms of
+    # widget building, their share of `show()`, and the Practice fill's
+    # compound-pace read, all on the path to the first frame. The guarantee
+    # that replaces "built before anything can happen" is `_lazy_screen`:
+    # every read of `self.practice`, `self.strategy` or `self.race_screen`
+    # builds the screen and attaches it first. A session or a race can only
+    # be armed through code that reads one of them (the Start buttons are on
+    # them), so none can be armed against a screen that is not there.
+
+    def _lazy_screen(self, attr: str, attach):
+        screen = getattr(self, attr, None)
+        builder = getattr(self, "_screen_builder", None)
+        if screen is None and builder is not None:
+            made = builder(attr.lstrip("_"))
+            if getattr(self, attr, None) is None:
+                attach(made)
+            screen = getattr(self, attr)
+        return screen
+
+    @property
+    def practice(self):
+        return self._lazy_screen("_practice", self.attach_practice_screen)
+
+    @practice.setter
+    def practice(self, screen) -> None:
+        self._practice = screen
+
+    @property
+    def strategy(self):
+        return self._lazy_screen("_strategy", self.attach_strategy_screen)
+
+    @strategy.setter
+    def strategy(self, screen) -> None:
+        self._strategy = screen
+
+    @property
+    def race_screen(self):
+        return self._lazy_screen("_race_screen", self.attach_race_screen)
+
+    @race_screen.setter
+    def race_screen(self, screen) -> None:
+        self._race_screen = screen
+
+    def _practice_slots(self) -> tuple:
+        return (("recording_toggled", self._on_recording_toggled),
+                ("lap_changed", self._on_lap_changed),
+                ("export_requested", self._on_export),
+                ("practice_mode_changed", self._on_practice_mode),
+                ("practice_intent_changed", self._on_practice_intent),
+                ("coach_speaks_changed", self._on_coach_speaks),
+                ("debrief_requested", self.read_the_stint))
+
+    def _strategy_slots(self) -> tuple:
+        return (("build_requested", self.build_strategy),
+                ("qualifying_requested", self.plan_qualifying),
+                ("approve_requested", self.approve_strategy),
+                ("approve_loaded_requested", self.approve_stored_strategy))
+
+    def _race_slots(self) -> tuple:
+        return (("start_requested", self.start_race),
+                ("shown", self.refresh_plan),
+                ("replan_accepted", self._accept_replan),
+                ("replan_declined", self._decline_replan),
+                ("stop_requested", self.stop_race))
+
+    def _accept_replan(self) -> None:
+        self._resolve_replan(accepted=True)
+
+    def _decline_replan(self) -> None:
+        self._resolve_replan(accepted=False)
+
+    def _on_plan_picked(self, _index=None) -> None:
+        # **His own choice of plan re-asks whether it will arm** (critic 2,
+        # pass 4): choosing "No plan" left "The approved plan will not arm"
+        # up about a plan he had just set aside. The screen's own slot runs
+        # first - it is connected in the screen's constructor - so
+        # `use_plan()` has already moved when this asks.
+        self._refresh_race_options(self.active_event())
+
+    def _filled_since_launch(self) -> bool:
+        """Whether the first fill has run - so a screen attached now missed
+        it and has to be brought up to date by its attach."""
+        return bool(getattr(self, "_first_paint_done", False))
+
+    def attach_practice_screen(self, screen) -> None:
+        """Wire the Practice screen and, after the first fill, fill it.
+
+        Idempotent for the same screen; a different one is wired and the
+        one it replaces disconnected (`_wire_screen`).
+        """
+        if self._practice is screen and self._practice_wired_to is screen:
+            return
+        self._practice = screen
+        self._practice_wired_to = self._wire_screen(
+            self._practice_wired_to, screen, self._practice_slots())
+        self._banner = (Banner(screen) if isinstance(screen, QWidget)
+                        else None)
+        if screen is None or not self._filled_since_launch():
+            return
+        self._fill_practice(self.active_event())
+
+    def attach_strategy_screen(self, screen) -> None:
+        """Wire the Strategy screen. Nothing is pushed into it at launch -
+        it fills when he builds or loads a plan."""
+        if self._strategy is screen and self._strategy_wired_to is screen:
+            return
+        self._strategy = screen
+        self._strategy_wired_to = self._wire_screen(
+            self._strategy_wired_to, screen, self._strategy_slots())
+
+    def attach_race_screen(self, screen) -> None:
+        """Wire the Race screen and, after the first fill, show it the
+        approved plan - what `load_active_event` would have pushed."""
+        if self._race_screen is screen and self._race_wired_to is screen:
+            return
+        self._race_screen = screen
+        self._race_wired_to = self._wire_screen(
+            self._race_wired_to, screen, self._race_slots())
+        picker = getattr(screen, "plan_picker", None)
+        self._race_picker_wired_to = self._wire_screen(
+            self._race_picker_wired_to, picker,
+            (("activated", self._on_plan_picked),))
+        if screen is None or not self._filled_since_launch():
+            return
+        self._refresh_race_options(self.active_event())
+
+    def _fill_practice(self, event) -> None:
+        """What the Practice screen shows for the active event, when idle.
+
+        Part of `load_active_event`, and the whole of what
+        `attach_practice_screen` does for a screen built after the first
+        fill. **Does not build the screen**: one not built yet is filled by
+        its attach, from the same store.
+        """
+        practice = self._practice
+        if practice is None:
+            return
+        if event is None:
+            practice.set_status(
+                "No event yet. Create one on the Event screen first.",
+                warn=True)
+            return
+        practice.set_laps(self._rows_for_event(event["id"]))
+        self._refresh_compound_pace(event["id"])
+        practice.set_status(self._idle_status(event))
 
     def attach_car_screen(self, screen) -> None:
         """Wire the Car screen, whenever it turns up.
@@ -1725,8 +1865,12 @@ class PitCrewController(QObject):
         Offering "Approved plan" with none approved is a control that cannot
         do what it says, on a screen whose subtitle would be saying the
         opposite two inches away.
+
+        **Does not build the Race screen** (round 4): one not built yet is
+        brought up to date by `attach_race_screen`, from the store, which is
+        all this reads. That is what keeps it off the launch's first fill.
         """
-        if self.race_screen is None:
+        if self._race_screen is None:
             return
         approved = (self.store.get_approved_strategy(event["id"])
                     if event else None)
@@ -1819,9 +1963,7 @@ class PitCrewController(QObject):
         # only route back to one that does exist.
         self._refresh_event_picker(event["id"] if event else None)
         if event is None:
-            self.practice.set_status(
-                "No event yet. Create one on the Event screen first.",
-                warn=True)
+            self._fill_practice(None)
             # The Engineer's premise plate is the screen's whole argument -
             # the division between what the app knows and what only he does,
             # visible before anything is generated. It returned early here and
@@ -1837,9 +1979,7 @@ class PitCrewController(QObject):
         # Save wrote that stale copy back over it.
         event, proposal, applied = self._apply_hub_regulations(event)
         self.event_screen.load(event)
-        self.practice.set_laps(self._rows_for_event(event["id"]))
-        self._refresh_compound_pace(event["id"])
-        self.practice.set_status(self._idle_status(event))
+        self._fill_practice(event)
         self._refresh_race_options(event)
         self.refresh_nav_state()
         if self.car_screen is not None and event["car_name"]:
@@ -3305,7 +3445,13 @@ class PitCrewController(QObject):
         path stays drivable headless - which is what the controller tests
         do, and what a capture replay does.
         """
-        if not self.settings.banner_enabled or self._banner is None:
+        if not self.settings.banner_enabled:
+            return
+        if self._banner is None and self._practice is None:
+            # Its anchor is built after the first frame; a notice before
+            # that builds it rather than going nowhere.
+            self.practice  # noqa: B018 - the read builds and attaches it
+        if self._banner is None:
             return
         self._banner.announce(headline, subtitle, warn=warn)
 
