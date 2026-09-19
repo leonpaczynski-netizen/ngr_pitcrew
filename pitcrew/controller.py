@@ -1301,11 +1301,14 @@ class PitCrewController(QObject):
             try:
                 # Before the load, not after: this decides which event the
                 # load shows.
-                self.open_on_next_round()
-                self.load_active_event()
+                with timed_step("  the calendar's next round"):
+                    self.open_on_next_round()
+                with timed_step("  the active event's load"):
+                    self.load_active_event()
             finally:
                 self._hub_memo = None
-            self._close_orphaned_sessions()
+            with timed_step("  the orphaned-session sweep"):
+                self._close_orphaned_sessions()
 
     # --------------------------------------------------------------- catalog
 

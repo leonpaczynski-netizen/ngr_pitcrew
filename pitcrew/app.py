@@ -1173,6 +1173,35 @@ class PitCrewWindow(QMainWindow):
         super().closeEvent(event)
 
 
+# **Imported while the font warm-up finishes, not inside the controller.**
+# Measured 20 Sep 2026 (real launches, the step log): the imports now end
+# and the store opens at ~430-460 ms, but the font warm-up started at ~165 ms
+# takes 350-440 ms, so the Event screen - the first thing to ask Qt for a
+# font - waited 80-150 ms on Qt's font lock. Meanwhile the controller, built
+# after it, imported these on the Qt thread for the first time (~35 ms:
+# numpy's random and fft for the radio bursts, pynput for the button hook,
+# the phone strip and the driver board). Imported here, before the Event
+# screen, that work fills the wait instead of following it. Every one of them
+# is imported by the window build anyway - `test_launch_prefetch` pins that -
+# so on a launch where the fonts are already loaded this is the same work,
+# earlier, and never extra.
+PREFETCH = ("numpy.random", "numpy.fft", "pynput.keyboard",
+            "pitcrew.ui.strip", "pitcrew.ui.driver_view")
+
+
+def prefetch_while_fonts_load() -> None:
+    """Import `PREFETCH`. A module that will not import is left for its real
+    importer, which fails - or copes - exactly as it always did."""
+    import importlib
+
+    for name in PREFETCH:
+        try:
+            importlib.import_module(name)
+        except Exception:                          # noqa: BLE001
+            diagnostics.log().warning("could not prefetch %s", name,
+                                      exc_info=True)
+
+
 def main() -> int:
     # First, before anything can fail. The shortcut launches this through
     # pythonw, which has no console: without a log file a crash leaves nothing
@@ -1244,6 +1273,8 @@ def main() -> int:
         # about to be refused must not first load a quarter of a gigabyte.
         warm = ptt.start_warm_up(settings.load(store).speech_backend,
                                  start=False)
+        with diagnostics.timed_step("the prefetch"):
+            prefetch_while_fonts_load()
         with diagnostics.timed_step("the window build"):
             window = PitCrewWindow(store, warm=warm,
                                    voice_engine=voice_engine)
