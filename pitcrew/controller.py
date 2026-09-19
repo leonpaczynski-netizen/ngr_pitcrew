@@ -1118,8 +1118,11 @@ class PitCrewController(QObject):
         self._filed_calls: dict = {}
         self._filed_session: int | None = None
 
-        # Set once, so an attach that runs twice does not connect twice.
-        self._settings_wired = False
+        # **The screen whose signals are connected, not a flag for the
+        # process.** A bool latched: an attach that raised after wiring left
+        # it True, and the replacement screen the rail built next was never
+        # connected - Save did nothing, silently. See `_wire_screen`.
+        self._settings_wired_to = None
         # **The tyre split's per-lap history, and it is reset per session.**
         # See CLAUDE.md rule 11: state that outlives a session gets read as
         # though it belongs to this one, and this app has already opened a
@@ -1188,8 +1191,8 @@ class PitCrewController(QObject):
                 picker.activated.connect(
                     lambda _index: self._refresh_race_options(
                         self.active_event()))
-        # Set once, like `_settings_wired`; see `attach_car_screen`.
-        self._car_wired = False
+        # The Car screen that is wired, like `_settings_wired_to`.
+        self._car_wired_to = None
         self._car_groups: list = []
         if self.car_screen is not None:
             self._wire_car_screen(self.car_screen)
@@ -1335,21 +1338,13 @@ class PitCrewController(QObject):
         objects by hand is the shape of a reset with no caller, and the five
         buttons it would silently disable are the pre-race checks.
         """
-        if self.settings_screen is screen and self._settings_wired:
+        if self.settings_screen is screen and self._settings_wired_to is screen:
             return
         self.settings_screen = screen
+        self._settings_wired_to = self._wire_screen(
+            self._settings_wired_to, screen, self._settings_slots())
         if screen is None:
             return
-        if not self._settings_wired:
-            screen.saved.connect(self.save_settings)
-            screen.test_beep_requested.connect(self.test_beep)
-            screen.test_voice_requested.connect(self.test_voice)
-            screen.test_haptics_requested.connect(self.test_haptics)
-            screen.test_feed_requested.connect(self.test_feed)
-            screen.test_gauge_requested.connect(self.test_gauge)
-            screen.capture_toggled.connect(self.toggle_capture)
-            screen.listen_toggled.connect(self.probe_button)
-            self._settings_wired = True
         screen.load(self.settings)
         screen.show_capabilities(speech=self.voice.engine_name,
                                  hook=self.ptt.has_listener)
@@ -1357,13 +1352,55 @@ class PitCrewController(QObject):
         # think nothing was running.
         self._tell_settings_about_the_session()
 
+    def _settings_slots(self) -> tuple:
+        return (("saved", self.save_settings),
+                ("test_beep_requested", self.test_beep),
+                ("test_voice_requested", self.test_voice),
+                ("test_haptics_requested", self.test_haptics),
+                ("test_feed_requested", self.test_feed),
+                ("test_gauge_requested", self.test_gauge),
+                ("capture_toggled", self.toggle_capture),
+                ("listen_toggled", self.probe_button))
+
+    def _car_slots(self) -> tuple:
+        return (("car_changed", self.load_car),
+                ("saved", self.save_ranges))
+
+    @staticmethod
+    def _wire_screen(wired_to, screen, slots):
+        """Connect `screen`'s signals, once per screen; returns what is wired.
+
+        **Keyed on the screen object, never on a flag for the process.** The
+        flag this replaced was set before the attach finished, so an attach
+        that raised afterwards (`load_car`, `screen.load`) left it latched on:
+        the next screen the rail built for the same slot was never connected,
+        and its Save wrote nothing with no trace anywhere (critic, 19 Sep
+        2026). Now a different screen is always wired, the one it replaces is
+        disconnected first - a discarded screen must not keep writing - and
+        the same screen is never wired twice, which is the doubled-`connect`
+        the flag was there to prevent: every Save firing twice for the life
+        of the process.
+        """
+        if wired_to is screen:
+            return screen
+        if wired_to is not None:
+            for name, slot in slots:
+                try:
+                    getattr(wired_to, name).disconnect(slot)
+                except (TypeError, RuntimeError):
+                    # Never connected, or its C++ half is already gone -
+                    # either way it can no longer reach the slot.
+                    pass
+        if screen is None:
+            return None
+        for name, slot in slots:
+            getattr(screen, name).connect(slot)
+        return screen
+
     def _wire_car_screen(self, screen) -> None:
-        """Connect the Car screen's two signals, once for the process."""
-        if self._car_wired:
-            return
-        screen.car_changed.connect(self.load_car)
-        screen.saved.connect(self.save_ranges)
-        self._car_wired = True
+        """Connect the Car screen's two signals, once per screen."""
+        self._car_wired_to = self._wire_screen(
+            self._car_wired_to, screen, self._car_slots())
 
     def attach_car_screen(self, screen) -> None:
         """Wire the Car screen, whenever it turns up.
@@ -1376,12 +1413,12 @@ class PitCrewController(QObject):
         `attach_settings_screen` gives: a doubled `connect` fires every Save
         twice for the life of the process.
         """
-        if self.car_screen is screen and self._car_wired:
+        if self.car_screen is screen and self._car_wired_to is screen:
             return
         self.car_screen = screen
+        self._wire_car_screen(screen)
         if screen is None:
             return
-        self._wire_car_screen(screen)
         screen.set_car_groups(self._car_groups)
         event = self.active_event()
         if event and event.get("car_name"):
@@ -6635,10 +6672,12 @@ class PitCrewController(QObject):
 
         A strip already up - a Settings save got there first - is left alone.
         """
-        if not self.__dict__.get("_strip_deferred"):
+        # Plain attributes: both are set in `__init__`, and a default here
+        # would hide one that went missing.
+        if not self._strip_deferred:
             return
         self._strip_deferred = False
-        if self.__dict__.get("strip") is None:
+        if self.strip is None:
             self._start_strip()
 
     def _stop_strip(self) -> None:

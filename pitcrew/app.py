@@ -955,7 +955,21 @@ class PitCrewWindow(QMainWindow):
         # that is fully itself before anything can show it.
         setattr(self, name, screen)
         if attach is not None:
-            getattr(self.controller, attach)(screen)
+            try:
+                getattr(self.controller, attach)(screen)
+            except BaseException:
+                # **A half-attached screen is forgotten on both sides.** Left
+                # on the window, the next visit would return a screen that
+                # was never put in the stack; left on the controller, it
+                # would keep receiving pushes, and its signals would keep
+                # writing. The next `_ensure_screen` builds a fresh one and
+                # wires it (see `PitCrewController._wire_screen`).
+                setattr(self, name, None)
+                try:
+                    getattr(self.controller, attach)(None)
+                finally:
+                    screen.deleteLater()
+                raise
         placeholder = self.stack.widget(index)
         self.stack.insertWidget(index, screen)
         if placeholder is not None:
