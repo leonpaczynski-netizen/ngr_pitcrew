@@ -394,6 +394,93 @@ def test_a_refresh_that_raises_is_a_logged_warning_and_nothing_changes(
         logging.WARNING)
 
 
+def test_a_stood_down_refresh_stores_nothing_and_the_next_close_does(
+        store, records):
+    """The next session's start stands the refresh down (it decodes up to
+    160 laps - 13.7 s on Monza - beside the start). It stops within one lap,
+    stores nothing, says so, and the next close plans it again from the same
+    laps: nothing about a stood-down refresh is remembered."""
+    event = event_at(store)
+    session = store.start_session(event, "practice")
+    add_laps(store, session, 12)
+    asked: list[int] = []
+
+    def cancelled():
+        asked.append(1)
+        return len(asked) > 8          # part-way through reading the laps
+
+    with pytest.raises(refresh.RefreshStoodDown):
+        refresh.refresh_after_session(store, session, cancelled=cancelled)
+    assert stored_json(store) is None
+    # Already stood down when it starts: not one query, not even the
+    # circuit lookup.
+    queries: list[str] = []
+    real_query = store._query
+    store._query = lambda sql, params=(): queries.append(sql) or real_query(
+        sql, params)
+    try:
+        with pytest.raises(refresh.RefreshStoodDown):
+            refresh.refresh_after_session(store, session,
+                                          cancelled=lambda: True)
+    finally:
+        del store._query
+    assert queries == []
+
+    thread = refresh.refresh_in_background(store, session,
+                                           cancelled=lambda: True)
+    thread.join(timeout=30)
+    assert stored_json(store) is None
+    assert "stood down" in records.text()
+    assert "could not refresh" not in records.text(logging.WARNING)
+
+    assert refresh.refresh_after_session(store, session).action == "stored"
+    assert stored_json(store)["laps"] == 12
+
+
+def test_a_refresh_stood_down_after_the_derivation_does_not_save(
+        store, monkeypatch):
+    """Stood down while the (pure) derivation ran: it finishes, but the
+    model is not written into the session that has since opened."""
+    event = event_at(store)
+    session = store.start_session(event, "practice")
+    add_laps(store, session, 12)
+    down = {"now": False}
+    real = derivation.derive
+
+    def derive(*args, **kwargs):
+        got = real(*args, **kwargs)
+        down["now"] = True
+        return got
+
+    monkeypatch.setattr(refresh.derivation, "derive", derive)
+    with pytest.raises(refresh.RefreshStoodDown, match="before the save"):
+        refresh.refresh_after_session(store, session,
+                                      cancelled=lambda: down["now"])
+    assert stored_json(store) is None
+
+
+def test_loaded_laps_are_dropped_one_at_a_time(monkeypatch):
+    """80 laps are ~540,000 frames; one `del` freed them in one cascade no
+    other thread could interrupt - 249 ms at the end of a Monza derivation.
+    `release` drops a lap, sleeps, drops the next."""
+    import time as clock
+
+    slept: list[float] = []
+    real_sleep, me = clock.sleep, threading.current_thread()
+
+    def sleep(seconds):
+        if threading.current_thread() is me:
+            slept.append(seconds)
+        else:
+            real_sleep(seconds)
+
+    monkeypatch.setattr(refresh.time, "sleep", sleep)
+    laps = [object(), object(), object()]
+    refresh.release(laps)
+    assert laps == [] and slept == [refresh.RELEASE_YIELD_S] * 3
+    assert refresh.RELEASE_YIELD_S > 0
+
+
 def test_no_session_is_no_thread():
     assert refresh.refresh_in_background(object(), None) is None
 
@@ -405,7 +492,7 @@ def test_closing_practice_refreshes_the_closed_session_off_the_ui_thread(
     session = controller.open_practice_session()
     seen = []
 
-    def spy(store_, session_id):
+    def spy(store_, session_id, **_stand_down):
         ended = store_._conn.execute(
             "SELECT ended_at FROM sessions WHERE id = ?",
             (session_id,)).fetchone()[0]
@@ -425,7 +512,7 @@ def test_closing_a_race_refreshes_its_session(raced, monkeypatch):
     session = controller.session_id
     seen = []
     monkeypatch.setattr(refresh, "refresh_in_background",
-                        lambda s, sid: seen.append(sid))
+                        lambda s, sid, **_stand_down: seen.append(sid))
     controller.stop_race()
     assert seen == [session]
 
@@ -436,7 +523,7 @@ def test_a_refresh_that_cannot_start_never_breaks_the_close(
     controller._on_event_saved(an_event())
     session = controller.open_practice_session()
 
-    def broken(*_args):
+    def broken(*_args, **_stand_down):
         raise RuntimeError("no threads left")
 
     monkeypatch.setattr(refresh, "refresh_in_background", broken)

@@ -1195,9 +1195,21 @@ class PitCrewController(QObject):
         # which asks for a prefetch.
         self._prewarmed = False
         self._frame_prefetch = None
-        # Set to stand the running practice debrief down - see
-        # `_stand_down_debrief`.
+        # **What a stop leaves running, and how a start stands it down.**
+        # A practice stop starts the debrief (every practice lap of the event
+        # decoded, ~15 s on event 1) and, with a race stop, the straights
+        # refresh (up to 160 laps, 13.7 s on Monza); the prefetch above is
+        # the third. A Start pressed inside that window used to share the
+        # interpreter with all three - see `_stand_down_post_session_work`.
         self._debrief_stop: threading.Event | None = None
+        self._debrief_thread: threading.Thread | None = None
+        self._debrief_event: dict | None = None
+        self._straights_stop: threading.Event | None = None
+        self._straights_thread: threading.Thread | None = None
+        self._straights_session: int | None = None
+        # What a start that is then refused puts back - see
+        # `_resume_post_session_work`.
+        self._resume_on_refusal: list = []
 
         # **The glance-up board above the game, and the tick that keeps its
         # countdown honest.** Everything else on it moves on a lap crossing;
@@ -1343,17 +1355,64 @@ class PitCrewController(QObject):
             pass
         self._prefetch_event_frames()
 
-    def _stand_down_debrief(self) -> None:
-        """A session has just opened: the last run's debrief, if it is still
-        being built, stops at its next lap. Its answer would not be said now
-        anyway (`_on_debriefed`, rule 11), and building it decodes every
-        practice lap of the event - 18 s on event 1's 176 laps - beside the
-        new session's listener, coach and voice. Only here, once the session
-        row exists: a start refused before this keeps its debrief."""
-        stop = self._debrief_stop
-        if stop is not None and not stop.is_set():
-            stop.set()
-        self._debrief_stop = None
+    def _stand_down_post_session_work(self) -> None:
+        """First thing in every start: what the last stop left running stops
+        before its next lap.
+
+        **Three jobs, all decoding lap blobs beside the start.** Measured a
+        Start 0.8 s after a stop on event 1: at +40, +120 and +220 ms the
+        debrief, the frame prefetch and the straights refresh were ALL
+        decoding, and the Qt thread's own 12 ms read of the rack took
+        100-500 ms. The debrief's answer would not be said now anyway
+        (`_on_debriefed`, rule 11); the prefetch's is asked for again by the
+        start itself (`store/frame_memo`); the straights refresh stores
+        nothing until it finishes, and the next close plans it again.
+
+        A start refused after this puts back what it stood down
+        (`_resume_post_session_work`): the debrief of the run he just drove
+        is still built and said, from the start - it holds no partial state.
+        """
+        self._resume_on_refusal = []
+        self._stand_down_prefetch()
+        self._resume_on_refusal.append(self._prefetch_event_frames)
+        running = self._debrief_thread
+        if running is not None and running.is_alive():
+            self._debrief_stop.set()
+            event = self._debrief_event
+            self._resume_on_refusal.append(
+                lambda: self._start_debrief(event))
+            log("session").info("stood the debrief down for the start")
+        running = self._straights_thread
+        if running is not None and running.is_alive():
+            self._straights_stop.set()
+            closed = self._straights_session
+            self._resume_on_refusal.append(
+                lambda: self._refresh_straights(closed))
+            log("session").info("stood the straights refresh down for the "
+                                "start")
+
+    def _resume_post_session_work(self) -> None:
+        """The start was refused, so nothing opened: put back what
+        `_stand_down_post_session_work` stood down. Only with no session
+        open - with one, none of it belongs (rule 11)."""
+        resume, self._resume_on_refusal = self._resume_on_refusal, []
+        if self.session_id is not None:
+            return
+        for again in resume:
+            try:
+                again()
+            except Exception:                                # noqa: BLE001
+                log("session").warning("could not resume post-session work "
+                                       "after a refused start", exc_info=True)
+
+    def _session_opened(self) -> None:
+        """The session row exists: a refused start can no longer happen, so
+        nothing stood down is put back. And a stand-down, again, for any
+        path that opened a session without the start's first line."""
+        self._resume_on_refusal = []
+        for stop in (self._debrief_stop, self._straights_stop):
+            if stop is not None:
+                stop.set()
 
     def _stand_down_prefetch(self) -> None:
         """A session is starting: no decode of the prefetch's may run beside
@@ -2749,7 +2808,7 @@ class PitCrewController(QObject):
             practice_intent=intent,
             game_version=self.settings.game_version)
         self.session_kind = "practice"
-        self._stand_down_debrief()
+        self._session_opened()
         # **The tyre he said is fitted**, from the Practice screen. It tags the
         # session's laps until its first pit lap and locks the board's bests.
         self._started_compound = self.practice.starting_compound()
@@ -3154,7 +3213,7 @@ class PitCrewController(QObject):
 
 
     def start_practice(self) -> None:
-        self._stand_down_prefetch()
+        self._stand_down_post_session_work()
         # Starting one session over another left the first with no `ended_at`
         # and its listener running: SO_REUSEADDR lets the second UDP bind
         # succeed, and on Windows the *first* socket keeps the datagrams, so
@@ -3164,6 +3223,7 @@ class PitCrewController(QObject):
                 "A session is already open. Stop it before starting another.",
                 warn=True)
             self.practice.set_recording(False)
+            self._resume_post_session_work()
             return
         # **Before the session row exists.** Asked here so that choosing to go
         # and set OBS up leaves nothing behind - no half-open session, no
@@ -3173,14 +3233,15 @@ class PitCrewController(QObject):
                 "Not started - set the OBS projector up and start again.",
                 warn=True)
             self.practice.set_recording(False)
-            # Not starting after all: the prefetch stood down may carry on.
-            self._prefetch_event_frames()
+            # Not starting after all: what was stood down carries on.
+            self._resume_post_session_work()
             return
         if self.open_practice_session() is None:
             self.practice.set_status(
                 "Create an event before recording - laps have to belong to "
                 "something.", warn=True)
             self.practice.set_recording(False)
+            self._resume_post_session_work()
             return
 
         # **After the session exists.** The zero is stamped against a session
@@ -3298,7 +3359,10 @@ class PitCrewController(QObject):
         """
         try:
             from pitcrew.analysis.straight_refresh import refresh_in_background
-            refresh_in_background(self.store, session_id)
+            stop = threading.Event()
+            self._straights_stop, self._straights_session = stop, session_id
+            self._straights_thread = refresh_in_background(
+                self.store, session_id, cancelled=stop.is_set)
         except Exception:                                    # noqa: BLE001
             log("straights").warning(
                 "could not start the straights refresh for session %s",
@@ -3326,7 +3390,7 @@ class PitCrewController(QObject):
             return
         event_id = event["id"]
         stop = threading.Event()
-        self._debrief_stop = stop
+        self._debrief_stop, self._debrief_event = stop, event
 
         def work() -> None:
             from pitcrew.analysis.debrief import DebriefCancelled
@@ -3336,7 +3400,7 @@ class PitCrewController(QObject):
                                      cancelled=stop.is_set)
             except DebriefCancelled:
                 log("session").info("debrief of event %s stood down - a "
-                                    "session opened before it was built",
+                                    "session started before it was built",
                                     event_id)
                 return
             except Exception:
@@ -3348,7 +3412,9 @@ class PitCrewController(QObject):
             if debrief is not None:
                 self.bridge.debriefed.emit(debrief)
 
-        threading.Thread(target=work, name="debrief", daemon=True).start()
+        self._debrief_thread = threading.Thread(target=work, name="debrief",
+                                                daemon=True)
+        self._debrief_thread.start()
 
     def _on_debriefed(self, debrief) -> None:
         """Say it, and put the same words on the screen.
@@ -5167,7 +5233,7 @@ class PitCrewController(QObject):
 
     def start_race(self) -> bool:
         """Arm the race. Nothing fires until the car actually goes green."""
-        self._stand_down_prefetch()
+        self._stand_down_post_session_work()
         # **The model loads while the rest of arming happens.** `warm()`
         # returns immediately - it spawns a thread - so putting it just
         # before the brief bought almost nothing: the brief queued a few
@@ -5197,6 +5263,7 @@ class PitCrewController(QObject):
             self.bridge.board_live = None
             self._close_driver_board()
         if self.race_screen is None:
+            self._resume_post_session_work()
             return False
 
         # **Every refusal on the grid is logged, word for word.** Suzuka, 13
@@ -5206,9 +5273,9 @@ class PitCrewController(QObject):
         def refuse(why: str) -> bool:
             self.race_screen.set_status(why, warn=True)
             log("race").warning("start race refused: %s", why)
-            # Not arming after all: the prefetch stood down at the top may
-            # carry on (it only runs with no session open).
-            self._prefetch_event_frames()
+            # Not arming after all: what was stood down at the top carries
+            # on (none of it runs with a session open).
+            self._resume_post_session_work()
             return False
 
         event = self.active_event()
@@ -5449,7 +5516,7 @@ class PitCrewController(QObject):
             event["id"], "race",
             rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
-        self._stand_down_debrief()
+        self._session_opened()
         self._tell_settings_about_the_session()
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)

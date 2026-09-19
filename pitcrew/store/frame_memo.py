@@ -119,7 +119,13 @@ def derived(store, lap_id: int, name, compute):
 
 def _compute(store, row, key, compute):
     _STATS["misses"] += 1
-    value = compute(store.decode_lap_frames_row(row))
+    frames = store.decode_lap_frames_row(row)
+    # And again between the decode and the derivation: a stood-down prefetch
+    # does not go on to work out an answer nobody is waiting for. Measured
+    # 0.8 s after a stop on event 1, it was still in `lap_axle_means` 220 ms
+    # after the Start. Whoever waits on this key works it out itself.
+    _stop_if_stood_down()
+    value = compute(frames)
     with _LOCK:
         _MEMO[key] = value
         _MEMO.move_to_end(key)

@@ -517,6 +517,41 @@ def test_a_stood_down_prefetch_stops_before_its_next_decode(store, event_id):
                               lambda stored: "again") == laps[0]
 
 
+def test_a_prefetch_stood_down_mid_decode_does_not_go_on_to_derive(
+        store, event_id, monkeypatch):
+    """Measured 0.8 s after a stop on event 1: the stood-down prefetch was
+    still in `lap_axle_means` 220 ms after the Start. Stood down while it
+    decodes, it stops before deriving; nothing is filed, and the next asker
+    works it out itself."""
+    from pitcrew.store import frame_memo
+
+    frame_memo.clear()
+    session = store.start_session(event_id, "practice")
+    lap = store.add_lap(session, _a_lap(1, 10_000),
+                        frames=_recorded_frames(seconds=2.0))
+    inside, release = threading.Event(), threading.Event()
+    real_decode = store.decode_lap_frames_row
+
+    def decode(row):
+        inside.set()
+        release.wait(5.0)
+        return real_decode(row)
+
+    monkeypatch.setattr(store, "decode_lap_frames_row", decode)
+    derived: list[int] = []
+    running = frame_memo.prefetch(
+        lambda: frame_memo.derived(store, lap, "k",
+                                   lambda frames: derived.append(1) or 7),
+        name="test")
+    assert inside.wait(5.0)
+    running.cancel()
+    release.set()
+    running.join(5.0)
+    assert not running.is_alive()
+    assert derived == [], "derived an answer after the stand-down"
+    assert frame_memo.derived(store, lap, "k", lambda frames: 8) == 8
+
+
 def test_a_lap_without_frames_is_not_an_answer(store, event_id):
     from pitcrew.store import frame_memo
 
@@ -1062,31 +1097,124 @@ def test_a_debrief_not_stood_down_sees_the_store_unchanged(store, event_id):
         proxy.get_event(event_id)
 
 
-def test_opening_a_session_stands_the_last_debrief_down(qt_app, window, store,
-                                                        event_id):
+class _Alive:
+    def is_alive(self):
+        return True
+
+
+def _running_jobs(ctrl):
+    """The debrief and the straights refresh as a stop leaves them: running,
+    each with its stop flag down."""
+    ctrl._debrief_stop, ctrl._debrief_thread = threading.Event(), _Alive()
+    ctrl._debrief_event = {"id": 1}
+    ctrl._straights_stop, ctrl._straights_thread = threading.Event(), _Alive()
+    ctrl._straights_session = 41
+    return ctrl._debrief_stop, ctrl._straights_stop
+
+
+def _forget_jobs(ctrl):
+    ctrl._debrief_stop = ctrl._debrief_thread = ctrl._debrief_event = None
+    ctrl._straights_stop = ctrl._straights_thread = None
+    ctrl._straights_session = None
+    ctrl._resume_on_refusal = []
+
+
+@pytest.mark.parametrize("start", ["start_practice", "start_race"])
+def test_a_start_stands_the_stops_work_down_before_anything_else(
+        qt_app, window, monkeypatch, start):
+    """Measured 0.8 s after a stop on event 1: at +40, +120 and +220 ms the
+    debrief, the prefetch AND the straights refresh were all decoding, and
+    the Qt thread's 12 ms rack read took 100-500 ms. All three are stood
+    down by the start's first line - before the pre-flight - not once the
+    session row exists."""
+    ctrl = window.controller
+    debrief, straights = _running_jobs(ctrl)
+    at_preflight: list = []
+
+    def preflight(what):
+        at_preflight.append((debrief.is_set(), straights.is_set()))
+        return True
+
+    monkeypatch.setattr(ctrl, "gauge_preflight_ok", preflight)
+    # Stop right after the pre-flight: what happens next is not this test's.
+    monkeypatch.setattr(ctrl, "open_practice_session", lambda: None)
+    monkeypatch.setattr(ctrl, "active_event", lambda: None)
+    monkeypatch.setattr(ctrl, "_resume_post_session_work", lambda: None)
+    try:
+        getattr(ctrl, start)()
+    finally:
+        _forget_jobs(ctrl)
+    assert debrief.is_set() and straights.is_set()
+    assert at_preflight in ([], [(True, True)]), (
+        "the pre-flight ran beside the last stop's decoding")
+
+
+@pytest.mark.parametrize("start", ["start_practice", "start_race"])
+def test_a_refused_start_puts_back_what_it_stood_down(qt_app, window,
+                                                      monkeypatch, start):
+    """Refused, so nothing opened: the debrief of the run he just drove is
+    built again from the start and said, the straights refresh runs again,
+    and the prefetch carries on."""
+    ctrl = window.controller
+    debrief, straights = _running_jobs(ctrl)
+    again: list = []
+    monkeypatch.setattr(ctrl, "gauge_preflight_ok", lambda what: False)
+    monkeypatch.setattr(ctrl, "_start_debrief",
+                        lambda event: again.append(("debrief", event["id"])))
+    monkeypatch.setattr(ctrl, "_refresh_straights",
+                        lambda session: again.append(("straights", session)))
+    monkeypatch.setattr(ctrl, "_prefetch_event_frames",
+                        lambda: again.append(("prefetch", None)))
+    try:
+        getattr(ctrl, start)()
+    finally:
+        _forget_jobs(ctrl)
+    assert debrief.is_set() and straights.is_set()
+    assert sorted(again) == [("debrief", 1), ("prefetch", None),
+                             ("straights", 41)]
+
+
+def test_a_finished_debrief_is_not_built_again_on_a_refusal(qt_app, window,
+                                                            monkeypatch):
+    """Only what was still running is put back: a debrief already said is
+    not said twice because a later start was refused."""
+    ctrl = window.controller
+    _running_jobs(ctrl)
+
+    class _Done:
+        def is_alive(self):
+            return False
+
+    ctrl._debrief_thread = ctrl._straights_thread = _Done()
+    again: list = []
+    monkeypatch.setattr(ctrl, "gauge_preflight_ok", lambda what: False)
+    monkeypatch.setattr(ctrl, "_start_debrief", lambda event: again.append(1))
+    monkeypatch.setattr(ctrl, "_refresh_straights", lambda s: again.append(2))
+    try:
+        ctrl.start_practice()
+    finally:
+        _forget_jobs(ctrl)
+    assert again == []
+
+
+def test_nothing_is_put_back_once_a_session_has_opened(qt_app, window, store,
+                                                       event_id, monkeypatch):
     ctrl = window.controller
     store.set_state("active_event_id", event_id)
     ctrl.load_active_event()
-    stop = threading.Event()
-    ctrl._debrief_stop = stop
+    debrief, straights = _running_jobs(ctrl)
+    ctrl._stand_down_post_session_work()
+    again: list = []
+    ctrl._resume_on_refusal.append(lambda: again.append(1))
     try:
         assert ctrl.open_practice_session() is not None
-        assert stop.is_set(), "the last run's debrief went on decoding"
-        assert ctrl._debrief_stop is None
+        assert debrief.is_set() and straights.is_set()
+        assert ctrl._resume_on_refusal == []
+        ctrl._resume_post_session_work()
+        assert again == [], "post-session work put back into a live session"
     finally:
         if ctrl.session_id is not None:
             store.end_session(ctrl.session_id)
         ctrl.session_id = None
         ctrl.session_kind = None
-
-
-def test_a_refused_start_keeps_the_last_debrief(qt_app, window, monkeypatch):
-    """Refused before the session row exists: nothing opened, so the debrief
-    of the run he just stopped is still built and said."""
-    ctrl = window.controller
-    stop = threading.Event()
-    ctrl._debrief_stop = stop
-    monkeypatch.setattr(ctrl, "gauge_preflight_ok", lambda what: False)
-    ctrl.start_practice()
-    assert not stop.is_set()
-    ctrl._debrief_stop = None
+        _forget_jobs(ctrl)

@@ -369,6 +369,10 @@ def _stub_controller(answer: bool):
     app._prewarmed = False
     app._frame_prefetch = None
     app._debrief_stop = None
+    app._debrief_thread = app._debrief_event = None
+    app._straights_stop = app._straights_thread = None
+    app._straights_session = None
+    app._resume_on_refusal = []
     app.hud = _session(source=_Source(why="no program projector open"))
     app.confirm_without_gauge = lambda what, check: answer
     app.practice = _Screen()

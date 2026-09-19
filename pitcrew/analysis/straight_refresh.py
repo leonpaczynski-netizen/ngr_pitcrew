@@ -114,6 +114,42 @@ Query = Callable[[str, tuple], list]
 
 _LOG = "straights"
 
+# How long `release` sleeps between two laps' frees - see there.
+RELEASE_YIELD_S = 0.002
+
+
+class RefreshStoodDown(Exception):
+    """A refresh was stood down part-way because a session is opening.
+    Nothing was stored: the next session close plans it again from the
+    same stored model and the same laps."""
+
+
+def stoppable(query, cancelled):
+    """`query`, refusing every call once `cancelled()` is true. The laps are
+    read one query per blob, so a stand-down is honoured within one lap."""
+    if cancelled is None:
+        return query
+
+    def ask(sql, params=()):
+        if cancelled():
+            raise RefreshStoodDown(sql.split(None, 1)[0])
+        return query(sql, params)
+    return ask
+
+
+def release(laps: list) -> None:
+    """Drop loaded laps one at a time, with a short sleep between each.
+
+    80 laps are ~540,000 frames. Dropped with one `del`, CPython frees them
+    in one uninterruptible cascade that no other thread can take the GIL
+    inside: a 249 ms stall on any thread at the end of a Monza derivation,
+    measured with a 1 ms ticker. That lands on the Qt thread of a session
+    that has just opened, if one has.
+    """
+    while laps:
+        laps.pop()
+        time.sleep(RELEASE_YIELD_S)
+
 _CLEAN = (
     "FROM laps l JOIN lap_frames f ON f.lap_id = l.id "
     "JOIN sessions s ON s.id = l.session_id "
@@ -210,17 +246,21 @@ def load_laps(query: Query, event_ids: list[int], *,
     never held across a whole circuit's blobs.
     """
     laps = []
-    for lap_id, session_id, lap_num, lap_ms, car in _recent_rows(
-            query, event_ids, limit, exclude_sessions):
-        frames, hz = _frames(query, lap_id)
-        if frames is None:
-            continue
-        laps.append(derivation.LapInput(
-            session_id, lap_num, lap_ms,
-            [Frame(tuple(frame.get(name) for name in _KEEP))
-             for frame in frames],
-            hz or derivation.SAMPLE_HZ, car,
-            teleported=teleports(frames).happened))
+    try:
+        for lap_id, session_id, lap_num, lap_ms, car in _recent_rows(
+                query, event_ids, limit, exclude_sessions):
+            frames, hz = _frames(query, lap_id)
+            if frames is None:
+                continue
+            laps.append(derivation.LapInput(
+                session_id, lap_num, lap_ms,
+                [Frame(tuple(frame.get(name) for name in _KEEP))
+                 for frame in frames],
+                hz or derivation.SAMPLE_HZ, car,
+                teleported=teleports(frames).happened))
+    except RefreshStoodDown:
+        release(laps)
+        raise
     laps.reverse()
     return laps
 
@@ -362,12 +402,22 @@ def refresh(query: Query, key: str, event_ids: list[int], *,
             save: Callable[[str, dict], None] | None = None,
             always: bool = False, replace: bool = False,
             today: str | None = None,
-            exclude_sessions=()) -> Outcome:
+            exclude_sessions=(),
+            cancelled: Callable[[], bool] | None = None) -> Outcome:
     """Derive `key` if `plan` says so (or `always`), and store it through
     `save` if `compare` lets it. `save=None` is a dry run.
 
     Logs every outcome, accepts included (rule 10).
+
+    `cancelled`, if given, is asked before every query (`stoppable`), before
+    the derivation and before the save; once it answers True this raises
+    `RefreshStoodDown` and nothing is stored.
     """
+    def stop_if(where: str) -> None:
+        if cancelled is not None and cancelled():
+            raise RefreshStoodDown(where)
+
+    query = stoppable(query, cancelled)
     logger = log(_LOG)
     stored = stored_model(query, key)
     available = clean_lap_count(query, event_ids,
@@ -381,10 +431,13 @@ def refresh(query: Query, key: str, event_ids: list[int], *,
 
     started = time.monotonic()
     laps = load_laps(query, event_ids, exclude_sessions=exclude_sessions)
-    derived = derivation.derive(
-        key, laps, derived_on=today or datetime.date.today().isoformat(),
-        max_laps=MAX_LAPS, reference_length_m=decided.reference_length_m)
-    del laps
+    try:
+        stop_if("before the derivation")
+        derived = derivation.derive(
+            key, laps, derived_on=today or datetime.date.today().isoformat(),
+            max_laps=MAX_LAPS, reference_length_m=decided.reference_length_m)
+    finally:
+        release(laps)
     took = time.monotonic() - started
     if derived.model is not None:
         derived.model["laps_available"] = available
@@ -403,6 +456,7 @@ def refresh(query: Query, key: str, event_ids: list[int], *,
     if save is None:
         return Outcome(key, "would-store", decided.reason, derived, available,
                        took)
+    stop_if("before the save")
     save(key, derived.model)
     logger.info("straights %s: stored (%s) - %s%s [%.1f s]", key,
                 decided.reason, _summary(derived.model),
@@ -419,11 +473,13 @@ def refresh(query: Query, key: str, event_ids: list[int], *,
 _REFRESHING = threading.Lock()
 
 
-def refresh_after_session(store, session_id: int) -> Outcome | None:
+def refresh_after_session(store, session_id: int, *,
+                          cancelled: Callable[[], bool] | None = None
+                          ) -> Outcome | None:
     """Re-derive the closed session's circuit if it needs it. Reads through
     the store's own lock one query at a time; writes through
-    `Store.save_straight_model`."""
-    query = store._query
+    `Store.save_straight_model`. `cancelled`: see `refresh`."""
+    query = stoppable(store._query, cancelled)
     with _REFRESHING:
         rows = query("SELECT e.track, e.layout FROM sessions s "
                      "JOIN events e ON e.id = s.event_id WHERE s.id = ?",
@@ -434,18 +490,26 @@ def refresh_after_session(store, session_id: int) -> Outcome | None:
             return None
         key = circuit_key(rows[0][0], rows[0][1])
         return refresh(query, key, circuits(query).get(key, []),
-                       save=store.save_straight_model)
+                       save=store.save_straight_model, cancelled=cancelled)
 
 
-def refresh_in_background(store, session_id: int | None) -> threading.Thread | None:
+def refresh_in_background(store, session_id: int | None, *,
+                          cancelled: Callable[[], bool] | None = None
+                          ) -> threading.Thread | None:
     """`refresh_after_session` on a daemon thread; never raises into the
-    caller, and a failure is a logged warning."""
+    caller, and a failure is a logged warning. `cancelled` stands it down:
+    the app does when the next session starts, because this decodes up to
+    160 laps (13.7 s measured on Monza) beside it."""
     if session_id is None:
         return None
 
     def work() -> None:
         try:
-            refresh_after_session(store, session_id)
+            refresh_after_session(store, session_id, cancelled=cancelled)
+        except RefreshStoodDown as exc:
+            log(_LOG).info("straights: refresh after session %s stood down "
+                           "(%s) for a session start - nothing stored; the "
+                           "next close plans it again", session_id, exc)
         except Exception:                                # noqa: BLE001
             log(_LOG).warning(
                 "straights: could not refresh the model after session %s - "

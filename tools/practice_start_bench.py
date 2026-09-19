@@ -499,6 +499,7 @@ def main() -> int:
         "root": str(ROOT),
         "intent": ARGS.intent,
         "cpu_load_pct": cpu,
+        "own_cpu_pct_of_a_core": OWN_CPU[0],
         "recording": recording,
         "click_ms": round((returned - press) * 1000, 1),
         "first_packet_ms": (round((first_packet[0] - press) * 1000, 1)
@@ -555,13 +556,32 @@ def _cpu_load() -> float | None:
             as_int = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime  # noqa: E731
             return as_int(idle), as_int(kernel), as_int(user)
 
+        def own():
+            times = [wintypes.FILETIME() for _ in range(4)]
+            k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+                ctypes.POINTER(wintypes.FILETIME)] * 4
+            k32.GetProcessTimes(k32.GetCurrentProcess(),
+                                *(ctypes.byref(t) for t in times))
+            as_int = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime  # noqa: E731
+            return as_int(times[2]) + as_int(times[3])     # kernel + user
+
         i0, k0, u0 = sample()
+        o0, w0 = own(), time.perf_counter()
         time.sleep(0.3)
         i1, k1, u1 = sample()
+        o1, w1 = own(), time.perf_counter()
+        # THIS process's CPU over the same window, in cores (100 = one core
+        # flat out): says whether a busy machine is us or somebody else.
+        OWN_CPU[0] = round(100.0 * (o1 - o0) / 1e7 / (w1 - w0), 1)
         total = (k1 - k0) + (u1 - u0)          # kernel time includes idle
         return round(100.0 * (total - (i1 - i0)) / total, 1) if total else None
     except Exception:                                          # noqa: BLE001
         return None
+
+
+OWN_CPU: list = [None]
 
 
 if __name__ == "__main__":
