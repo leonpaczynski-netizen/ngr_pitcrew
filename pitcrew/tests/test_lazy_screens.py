@@ -1,4 +1,4 @@
-"""The three screens that are built on first visit rather than at launch.
+"""The screens that are built after the window appears rather than before it.
 
 **Nothing in this repository built a `PitCrewWindow` before this file.** It is
 constructed in exactly one place, `app.main`, and 145 test files went around
@@ -42,8 +42,11 @@ def window(qt_app, store: Store):
     made.controller.shutdown()
 
 
-LATE = (5, 6)             # Reference, Settings
+LATE = (1, 5, 6)          # Car, Reference, Settings
 SIGNALS = {
+    # Car joined these on 19 Sep 2026, when the window stopped waiting for
+    # the speech models and its 300 ms stopped hiding inside that wait.
+    1: ("saved", "car_changed"),
     6: ("saved", "test_beep_requested", "test_voice_requested",
         "test_haptics_requested", "test_feed_requested",
         "test_gauge_requested", "capture_toggled", "listen_toggled"),
@@ -83,6 +86,8 @@ def test_the_controller_sees_the_screen_it_was_given(window, index):
     screen = window.stack.widget(index)
     if index == 6:
         assert window.controller.settings_screen is screen
+    elif index == 1:
+        assert window.controller.car_screen is screen
     else:
         # Reference is never passed to the controller at all, by design.
         assert window.reference_screen is screen

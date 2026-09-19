@@ -55,7 +55,7 @@ from pitcrew.bench import Bench
 from pitcrew.telemetry.hud_session import HudSession
 from pitcrew.rig.wind_curve import WindCurve
 from pitcrew.engineer import audio_devices, endpoint_meter
-from pitcrew.engineer.voice import Voice
+from pitcrew.engineer.voice import Voice, engine_from
 from pitcrew.export.build import (
     _rows_to_laps,
     build_event_export,
@@ -960,6 +960,7 @@ class PitCrewController(QObject):
                  strategy_screen=None, race_screen=None, *,
                  car_screen=None, settings_screen=None,
                  port: int | None = None, voice=None, warm=None,
+                 voice_engine=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
@@ -992,7 +993,11 @@ class PitCrewController(QObject):
         # setting is the source of truth, not a constant in this file.
         self._port_override = port
         self.port = port if port is not None else self.settings.udp_port
-        self.voice = voice if voice is not None else Voice()
+        # `voice_engine` is the launch's `voice.start_engine_build`, begun
+        # beside the screens; `engine_from` collects it (None -> AUTO, which
+        # is exactly what `Voice()` always did).
+        self.voice = (voice if voice is not None
+                      else Voice(engine_from(voice_engine)))
         self.race: RaceCoordinator | None = None
         self.race_run_id: int | None = None
         self._race_inputs = None
@@ -1023,11 +1028,19 @@ class PitCrewController(QObject):
         # there is no distance, so the whole five-stage gate was skipped on the
         # one path that needs it. Only free dictation needs it; SAPI's closed
         # grammar is exact by construction.
-        # `warm` is the launch's background load, joined here. It is None
-        # everywhere else - tests, replay, the bench - and `speech_from` then
-        # builds exactly what this line used to build inline, which is why
-        # there is no second code path to keep in step.
-        recogniser, matcher = speech_from(warm, self.settings.speech_backend)
+        # `warm` is the launch's background load. **It is NOT joined here**
+        # any more: that join held the window back for 2.4-3.1 s of every
+        # launch, and 8.5 s of a busy one. `PushToTalk` installs the pair at
+        # the first press after it lands - see `PushToTalk._take_arrival`.
+        # `warm` is None everywhere else - tests, replay, the bench - and
+        # `speech_from` then builds exactly what this line used to build
+        # inline, which is why there is no second code path to keep in step.
+        if warm is not None:
+            recogniser, matcher, arriving = None, None, warm
+        else:
+            recogniser, matcher = speech_from(None,
+                                              self.settings.speech_backend)
+            arriving = None
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
             speak=self.voice.say,
@@ -1036,7 +1049,8 @@ class PitCrewController(QObject):
             on_answer=self._on_ptt_answer,
             matcher=matcher,
             sensitivity=self.settings.speech_sensitivity,
-            toggle=self.settings.ptt_toggle)
+            toggle=self.settings.ptt_toggle,
+            arriving=arriving)
         self._plans: list = []
         self._inputs = None
         self._plans_event_id: int | None = None
@@ -1174,9 +1188,11 @@ class PitCrewController(QObject):
                 picker.activated.connect(
                     lambda _index: self._refresh_race_options(
                         self.active_event()))
+        # Set once, like `_settings_wired`; see `attach_car_screen`.
+        self._car_wired = False
+        self._car_groups: list = []
         if self.car_screen is not None:
-            self.car_screen.car_changed.connect(self.load_car)
-            self.car_screen.saved.connect(self.save_ranges)
+            self._wire_car_screen(self.car_screen)
         if self.settings_screen is not None:
             self.attach_settings_screen(self.settings_screen)
 
@@ -1323,6 +1339,36 @@ class PitCrewController(QObject):
         # think nothing was running.
         self._tell_settings_about_the_session()
 
+    def _wire_car_screen(self, screen) -> None:
+        """Connect the Car screen's two signals, once for the process."""
+        if self._car_wired:
+            return
+        screen.car_changed.connect(self.load_car)
+        screen.saved.connect(self.save_ranges)
+        self._car_wired = True
+
+    def attach_car_screen(self, screen) -> None:
+        """Wire the Car screen, whenever it turns up.
+
+        Built after the window is shown since 19 Sep 2026 (see
+        `app.PitCrewWindow`), so everything the eager path pushed into it at
+        launch is pushed here instead: the car catalogue `refresh_catalogs`
+        already built, and the active event's car that `load_active_event`
+        would have shown. **Idempotent**, for the reason
+        `attach_settings_screen` gives: a doubled `connect` fires every Save
+        twice for the life of the process.
+        """
+        if self.car_screen is screen and self._car_wired:
+            return
+        self.car_screen = screen
+        if screen is None:
+            return
+        self._wire_car_screen(screen)
+        screen.set_car_groups(self._car_groups)
+        event = self.active_event()
+        if event and event.get("car_name"):
+            self.load_car(event["car_name"])
+
     def refresh_catalogs(self) -> None:
         """Shipped names, plus anything added straight to the store.
 
@@ -1343,6 +1389,9 @@ class PitCrewController(QObject):
             groups.append(("Added", tuple(sorted(extra))))
             nested.append(("Added", {"Added": tuple(sorted(extra))}))
         self.event_screen.set_catalogs(tracks, nested)
+        # Kept for a Car screen that is built after this runs - see
+        # `attach_car_screen`.
+        self._car_groups = groups
         if self.car_screen is not None:
             self.car_screen.set_car_groups(groups)
 

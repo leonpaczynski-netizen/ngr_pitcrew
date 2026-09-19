@@ -10,7 +10,7 @@ import time
 
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import (QColor, QFontMetrics, QIcon, QKeySequence,
                          QPainter, QShortcut)
 from PyQt6.QtWidgets import (
@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from pitcrew import diagnostics, settings
-from pitcrew.engineer import ptt
+from pitcrew.engineer import ptt, voice
 from pitcrew.controller import DEFAULT_PORT, PitCrewController
 from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
@@ -77,6 +77,14 @@ NAV_GROUPS = (
 )
 SCREENS = tuple(name for _heading, names in NAV_GROUPS for name in names)
 ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
+
+# The latest the launch holds the speech warm-up back after the window is
+# shown - see `PitCrewWindow.release_speech`. Normally released well before.
+SPEECH_BACKSTOP_MS = 3000
+
+# How long the launch waits for the window's first paint before warming the
+# deferred screens anyway - see `_FirstPaint`.
+FIRST_PAINT_BACKSTOP_MS = 1000
 
 # Windows groups taskbar buttons by this id. Without one, a Python GUI app is
 # grouped under the interpreter, so a pinned shortcut and the running window
@@ -784,10 +792,46 @@ def fit_to_screen(widget, width: int, height: int) -> tuple[int, int]:
             min(height, max(320, available.height() - 60)))
 
 
+class _FirstPaint(QObject):
+    """Waits for a window's first paint, then runs one callable, once.
+
+    **Also the launch's first honest "the window is on the screen" line.**
+    `first idle after show` was the proxy the 5 Sep investigation settled
+    for, and it turned out to run BEFORE the paint: every zero-timer queued
+    at launch is dispatched ahead of the window's first frame.
+    """
+
+    def __init__(self, window: QWidget, then) -> None:
+        super().__init__(window)
+        self._window = window
+        self._then = then
+        self._done = False
+        window.installEventFilter(self)
+        QTimer.singleShot(FIRST_PAINT_BACKSTOP_MS,
+                          lambda: self._fire(painted=False))
+
+    def eventFilter(self, watched, event):           # noqa: N802 - Qt naming
+        if watched is self._window and event.type() == QEvent.Type.Paint:
+            # Queued, so it runs after this paint has finished, not inside it.
+            QTimer.singleShot(0, lambda: self._fire(painted=True))
+        return False
+
+    def _fire(self, *, painted: bool) -> None:
+        if self._done:
+            return
+        self._done = True
+        self._window.removeEventFilter(self)
+        diagnostics.mark("first paint" if painted
+                         else "no paint yet - warming anyway")
+        self._then()
+
+
 class PitCrewWindow(QMainWindow):
     def __init__(self, store: Store, *, port: int = DEFAULT_PORT,
-                 warm=None) -> None:
+                 warm=None, voice_engine=None) -> None:
         super().__init__()
+        # The launch's speech warm-up, held back until `release_speech`.
+        self._warm = warm
         self.setWindowTitle("Next Gear Racing Pit Crew")
         # The floor is the *smaller* of what the layout wants and what the
         # screen can show. Pinning it above the work area makes the window
@@ -805,17 +849,21 @@ class PitCrewWindow(QMainWindow):
         row.setSpacing(0)
 
         self.stack = QStackedWidget()
-        # **Two of the seven are not built here.** Reference and Settings are
-        # made when the driver first navigates to them, which takes ~300 ms
-        # off every launch. Event and Practice are unconditional
-        # in the controller; Strategy and Race are 16 and 8 ms and are wanted
-        # on race day, so all four stay eager and none of that is worth the
-        # deferral. Car stays eager too, and that one is a measurement rather
-        # than a judgement: its 300 ms hides entirely inside the wait for the
-        # speech warm-up, so deferring it saves nothing and costs a freeze on
-        # first click.
+        # **Three of the seven are not built here.** Car, Reference and
+        # Settings are made in the idle turns straight after the window is
+        # shown (`warm_screens`), or on the first visit if that comes sooner.
+        # Event and Practice are unconditional in the controller; Strategy
+        # and Race are 16 and 8 ms and are wanted on race day, so all four
+        # stay eager and none of that is worth the deferral.
+        #
+        # **Car was eager until 19 Sep 2026, and the reason no longer holds.**
+        # Its ~300 ms (210 widgets) hid inside the window's wait for the
+        # speech warm-up, so deferring it saved nothing. That wait is gone -
+        # see `PushToTalk._take_arrival` - and Car's build is now straight on
+        # the path to the window. It is the first screen `warm_screens`
+        # builds, so it is ready long before anyone can click it.
         self.event_screen = EventScreen()
-        self.car_screen = CarScreen()
+        self.car_screen = None
         self.practice_screen = PracticeScreen()
         self.strategy_screen = StrategyScreen()
         self.race_screen = RaceScreen()
@@ -843,8 +891,8 @@ class PitCrewWindow(QMainWindow):
         self.controller = PitCrewController(
             store, self.event_screen, self.practice_screen,
             self.strategy_screen, self.race_screen,
-            car_screen=self.car_screen, settings_screen=None,
-            port=port, warm=warm)
+            car_screen=None, settings_screen=None,
+            port=port, warm=warm, voice_engine=voice_engine)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
@@ -854,6 +902,7 @@ class PitCrewWindow(QMainWindow):
     # Index in the stack -> (attribute, class, how to wire it up). The rail
     # indexes straight into the stack, so these are positions in SCREENS.
     LATE_SCREENS = {
+        1: ("car_screen", CarScreen, "attach_car_screen"),
         5: ("reference_screen", ReferenceScreen, None),
         6: ("settings_screen", SettingsScreen, "attach_settings_screen"),
     }
@@ -906,6 +955,7 @@ class PitCrewWindow(QMainWindow):
         pending = [i for i in sorted(self.LATE_SCREENS)
                    if getattr(self, self.LATE_SCREENS[i][0]) is None]
         if not pending:
+            self.release_speech()
             return
         index = pending[0]
         try:
@@ -918,8 +968,38 @@ class PitCrewWindow(QMainWindow):
                 "could not warm the %s screen in the background",
                 self.LATE_SCREENS[index][0], exc_info=True)
             setattr(self, self.LATE_SCREENS[index][0], None)
+            # The chain ends here, and what waits on its end must not.
+            self.release_speech()
             return
         QTimer.singleShot(0, self.warm_screens)
+
+    def after_first_paint(self, then) -> None:
+        """Run `then` on the turn after this window first draws.
+
+        With a backstop: a window that never paints - minimised at launch,
+        or no display at all - still gets `then` after
+        `FIRST_PAINT_BACKSTOP_MS`. Exactly once either way.
+        """
+        _FirstPaint(self, then)
+
+    def release_speech(self) -> None:
+        """Start the speech warm-up the launch built but held back. Once.
+
+        **Why it waits for the screens** (19 Sep 2026): run beside them, the
+        two ONNX loads and their imports roughly doubled the screens' cost -
+        Car 290 -> 410 ms, and one calendar read 40 -> 1,260 ms - so every
+        freeze after the window appeared got longer. Held until the chain
+        above ends, the screens run on a quiet machine and the loads follow
+        immediately, off this thread.
+
+        **It cannot be left unreleased.** Called from both ends of
+        `warm_screens`, from a timer in `main` as a backstop, and - failing
+        all of those - `PushToTalk` starts it itself on the first press or
+        the first session (see `_take_arrival`). Idempotent: the second and
+        later calls do nothing.
+        """
+        if self._warm is not None and ptt.begin_warm_up(self._warm):
+            diagnostics.mark("speech warm-up started")
 
     def _update_rail(self, state: dict) -> None:
         for index, name in enumerate(SCREENS):
@@ -993,6 +1073,12 @@ def main() -> int:
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(None, "Pit Crew is already running", claim.message)
         return 0
+    # **The speech engine is chosen beside the screens, not after them.**
+    # Here rather than any earlier: after the sole-instance claim, so a copy
+    # about to be refused imports nothing, and after `QApplication`, which
+    # sets up the Qt thread's COM apartment before this thread's `pythoncom`
+    # import sets up its own. See `voice.start_engine_build`.
+    voice_engine = voice.start_engine_build()
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))
     theme.apply(app)
@@ -1001,16 +1087,19 @@ def main() -> int:
     try:
         store = Store(DEFAULT_DB_PATH)
         diagnostics.mark("store open")
-        # **Started here and joined inside the controller.** The two speech
-        # models are 250 MB of ONNX and cost 2.6 s to build; ONNX releases the
-        # GIL while it does it, so they load while the screens are being made
-        # and the window appears ~880 ms sooner. Nothing is deferred - see
-        # `ptt.start_warm_up`.
+        # **Built here, started after the window has drawn, joined by
+        # nobody.** The two speech models are 250 MB of ONNX and 2.3-3.1 s
+        # to build. The controller used to join them before the window could
+        # exist; now `PushToTalk` installs them at the first press after they
+        # land (`PushToTalk._take_arrival`), and `release_speech` starts the
+        # load once the deferred screens are warm, so the two do not slow
+        # each other down. Measured 19 Sep 2026: first paint 3.4 s -> 1.15 s.
         #
         # After the sole-instance claim, deliberately: a second copy that is
         # about to be refused must not first load a quarter of a gigabyte.
-        warm = ptt.start_warm_up(settings.load(store).speech_backend)
-        window = PitCrewWindow(store, warm=warm)
+        warm = ptt.start_warm_up(settings.load(store).speech_backend,
+                                 start=False)
+        window = PitCrewWindow(store, warm=warm, voice_engine=voice_engine)
         diagnostics.mark("window built")
         window.show()
         diagnostics.mark("window shown")
@@ -1022,7 +1111,15 @@ def main() -> int:
         # is the closest honest proxy for "there is a window on the screen",
         # and it is what the 5 Sep investigation could not measure at all.
         QTimer.singleShot(0, lambda: diagnostics.mark("first idle after show"))
-        QTimer.singleShot(0, window.warm_screens)
+        # **After the first frame, not in the first turn** (19 Sep 2026).
+        # Zero-timers queued here run before Windows delivers the window's
+        # first paint, so a Car screen warmed "in the background" was 350 ms
+        # of blank window in front of the driver. `after_first_paint` holds
+        # the chain until the window has actually drawn.
+        window.after_first_paint(window.warm_screens)
+        # The backstop for `release_speech`. The chain above calls it within
+        # half a second; this is for a chain that somehow never ran.
+        QTimer.singleShot(SPEECH_BACKSTOP_MS, window.release_speech)
         if claim.message:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(None, "The previous Pit Crew is stuck",

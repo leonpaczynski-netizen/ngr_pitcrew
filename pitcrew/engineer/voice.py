@@ -1604,6 +1604,61 @@ def _best_engine():
     return pack or live
 
 
+def start_engine_build():
+    """Run `_best_engine()` on its own thread, from the top of `main`.
+
+    **Only ever the launch.** Choosing the engine imports `piper` (and with
+    it `onnxruntime`), `sounddevice` and `win32com.client`, and reads the
+    pack's manifest: ~0.3 s alone, and **1.0-1.8 s measured on the Qt
+    thread** while the speech warm-up was loading its own ONNX sessions
+    beside it - `onnxruntime`'s native import went from 35 ms to 500 ms under
+    that contention. None of it touches a device or a model: `PiperEngine`
+    defers its model to `warm()`, `Sapi5Engine` its COM object to `speak()`,
+    and the pack only parses JSON. So it can be built anywhere, and it is
+    built here, in parallel with the screens, and collected by `engine_from`.
+
+    Started after `QApplication` exists, deliberately: importing `pythoncom`
+    initialises COM on the importing thread, and the Qt thread's apartment is
+    Qt's to set up first - exactly as it was when this ran on that thread.
+
+    Returns `(outcome, thread)`. A daemon, for the reason `ptt.start_warm_up`
+    gives: `main()` can leave through its `finally` before the event loop.
+    """
+    outcome: dict = {}
+
+    def build() -> None:
+        try:
+            outcome["engine"] = _best_engine()
+        except BaseException as exc:                # noqa: BLE001
+            # `_best_engine` guards every step itself; this is the backstop,
+            # and it leaves "engine" unset so `engine_from` builds inline.
+            log("voice").error("the speech engine did not build off the Qt "
+                               "thread: %s: %s", type(exc).__name__, exc,
+                               exc_info=True)
+
+    thread = threading.Thread(target=build, name="voice-engine", daemon=True)
+    thread.start()
+    return outcome, thread
+
+
+def engine_from(build):
+    """The engine `start_engine_build` chose, or `AUTO` to choose inline.
+
+    `None` for `build` is every test, replay and bench, and they get exactly
+    what `Voice()` always did. A build that raised is not taken as an answer
+    either - it falls through to `AUTO`, so no failure here can hand `Voice`
+    a `None` the inline choice would have filled. `None` FROM the build is an
+    answer: it is `_best_engine()` saying there is no engine on this machine.
+    """
+    if build is None:
+        return AUTO
+    outcome, thread = build
+    thread.join()
+    if "engine" not in outcome:
+        return AUTO
+    return outcome["engine"]
+
+
 def can_speak(engine) -> bool:
     """Whether this object can actually make a sound, rather than merely exist.
 

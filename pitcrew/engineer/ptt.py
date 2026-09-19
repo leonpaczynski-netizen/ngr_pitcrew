@@ -30,6 +30,7 @@ import os
 import pathlib
 import queue
 import threading
+import time
 
 from pitcrew.diagnostics import log
 from pitcrew.engineer import audio_devices, gate
@@ -169,7 +170,7 @@ class PushToTalk:
     def __init__(self, *, snapshot, speak, recogniser=None, listener=None,
                  on_answer=None, matcher=None,
                  sensitivity: str = gate.DEFAULT_SENSITIVITY,
-                 toggle: bool = True, bursts=None) -> None:
+                 toggle: bool = True, bursts=None, arriving=None) -> None:
         self._snapshot = snapshot          # callable -> dict
         self._speak = speak                # callable(str)
         self._recogniser = recogniser
@@ -178,6 +179,13 @@ class PushToTalk:
         # None means literal phrase matching, which is what the closed grammar
         # always did. It is exact by construction, so it needs no gate.
         self._matcher = matcher
+        # **The launch's speech warm-up, still loading** - `(outcome, thread)`
+        # from `start_warm_up`, or None once installed and everywhere that
+        # built its speech inline. See `_take_arrival`: the window no longer
+        # waits for 250 MB of ONNX before it is shown, so the recogniser and
+        # the matcher land here after it, together, and never mid-press.
+        self._arriving = arriving
+        self._arrival_lock = threading.Lock()
         self._sensitivity = sensitivity
         self._busy = threading.Lock()
         self.last_call: str | None = None
@@ -221,7 +229,80 @@ class PushToTalk:
 
     @property
     def available(self) -> bool:
-        return self._recogniser is not None
+        """A recogniser is here, or one is still being built for us.
+
+        Still loading is not "unavailable": that word is spoken as "Speech
+        isn't available on this machine", which is a determined negative for
+        a state that has not been determined yet.
+        """
+        return self._recogniser is not None or self._arriving is not None
+
+    @property
+    def speech_ready(self) -> bool:
+        """Whether the warm-up has landed (or there never was one)."""
+        return self._take_arrival()
+
+    def _take_arrival(self) -> bool:
+        """Install the warmed recogniser and matcher if they have landed.
+
+        False while the warm-up thread is still running.
+
+        ### Why the window stopped waiting for this
+
+        The controller used to `join` the warm-up before it built this object,
+        so the window could not appear until both ONNX models had loaded -
+        2.4-3.1 s of every launch on a quiet machine, and 8.5 s of a 24 s one
+        on 19 Sep 2026, when the machine was busy and Moonshine missed its
+        five-second deadline. None of it is needed until the driver presses
+        the button inside a session, which is seconds to minutes after the
+        window is up.
+
+        ### Why this is safe
+
+        * **Both land at once, or neither.** The pair is read only once the
+          thread has set `landed`, after the matcher (see `speech_landed`),
+          so a recogniser can never be installed without the matcher the
+          gate needs - free dictation with `matcher=None` skips all five
+          stages of `gate.judge`.
+        * **A load the launch held back cannot stay held.** The launch starts
+          the thread only after the screens are warm (`app.release_speech`);
+          if nothing has started it by the first press or the first session,
+          this does.
+        * **Never mid-press.** This is called from `begin`, at the start of a
+          press, so a question is opened and closed on the same recogniser.
+        * **A press that is too early is told so, out loud.** `begin` sets
+          `gate.NOT_READY` and the driver hears "Still starting up. Ask me
+          again in a moment." - never silence, and never "Speech isn't
+          available", which would be a lie about a model that is one second
+          from ready.
+        * **Nothing new touches moonshine.** The loads are still on the one
+          warm-up thread (see `_MOONSHINE_LOAD`); this only reads what that
+          thread produced.
+        """
+        with self._arrival_lock:
+            arriving = self._arriving
+            if arriving is None:
+                return True
+            outcome, _thread = arriving
+            # A load the launch has not released yet (see `app.main`) is
+            # released now: a press, or a session opening, is the latest
+            # moment it can be allowed to start.
+            if begin_warm_up(arriving):
+                log("ptt").warning(
+                    "the speech warm-up had not been started yet - starting "
+                    "it now")
+            if not speech_landed(arriving):
+                return False
+            # Matcher first: anything that sees the new recogniser must
+            # already see the matcher that goes with it.
+            self._matcher = outcome.get("matcher")
+            self._recogniser = outcome.get("recogniser")
+            self._arriving = None
+        log("ptt").info(
+            "push to talk: speech installed - recogniser %s, matcher %s",
+            getattr(self._recogniser, "name", None) or "NONE",
+            "semantic" if self._matcher is not None else "literal")
+        return True
 
     @property
     def has_listener(self) -> bool:
@@ -264,6 +345,12 @@ class PushToTalk:
         ever puts a callable on a queue now, and the queue is what keeps two
         taps in the order he pressed them.
         """
+        if not self._take_arrival():
+            # Said in the log at the moment it matters, because the driver
+            # only finds out on his first press - and is told then.
+            log("ptt").warning(
+                "push to talk is armed with the speech models still loading "
+                "- a press before they land is answered 'still starting up'")
         if self._listener is not None:
             if self._toggle:
                 # Button-up does nothing: one tap opens, the next closes.
@@ -445,6 +532,13 @@ class PushToTalk:
     def begin(self) -> None:
         """Button down."""
         self.last_reason = None
+        if not self._take_arrival():
+            # `_open_radio` rejects on this before opening anything, and
+            # `_end` answers it in hold mode.
+            self.last_reason = gate.NOT_READY
+            log("ptt").warning("a press arrived before the speech models "
+                               "finished loading - asked him to try again")
+            return
         if self._recogniser is None:
             return
         try:
@@ -470,6 +564,12 @@ class PushToTalk:
                                  exc_info=True)
 
     def _end(self) -> None:
+        if self.last_reason == gate.NOT_READY:
+            # Hold mode: the press began before the models landed. Answered
+            # on its own terms even if they have landed since - the question
+            # was never recorded.
+            self.rejected(gate.NOT_READY)
+            return
         if self._recogniser is None:
             self._reply("Speech isn't available on this machine.", "")
             return
@@ -1506,7 +1606,7 @@ def build_within(factory, timeout_s: float, *args):
     return outcome.get("value")
 
 
-def start_warm_up(backend: str, phrases=None):
+def start_warm_up(backend: str, phrases=None, *, start: bool = True):
     """Build the recogniser and the matcher on one background thread.
 
     ### Why this exists
@@ -1528,19 +1628,22 @@ def start_warm_up(backend: str, phrases=None):
     the log. Both loads go on one thread, in order. `_MOONSHINE_LOAD` is the
     belt to this brace.
 
-    ### What it does not do
+    ### Nothing waits for it any more (19 Sep 2026)
 
-    **It does not defer anything.** The controller joins this before it builds
-    `PushToTalk`, so the object graph at the end of `__init__` is identical to
-    the one built inline - the same recogniser, the same matcher, or the same
-    `None`. Nothing arrives late, so no first press can find a half-built
-    stack. Returns `(outcome, thread)`; the outcome carries `"recogniser"` and
-    `"matcher"`, each `None` where the load failed. `None`, never a stub that
-    would answer `""` and read as a driver who said nothing.
+    The controller used to join this before it built `PushToTalk`, so the
+    window waited on both models. It now hands `(outcome, thread)` to
+    `PushToTalk(arriving=...)`, which installs the pair at the first press
+    after the thread has ended - see `PushToTalk._take_arrival` for why that
+    is safe and what a press before then hears. The object graph once it has
+    landed is identical to the one built inline: the same recogniser, the
+    same matcher, or the same `None`. Returns `(outcome, thread)`; the
+    outcome carries `"recogniser"` and `"matcher"`, each `None` where the
+    load failed. `None`, never a stub that would answer `""` and read as a
+    driver who said nothing.
     """
     outcome: dict = {}
 
-    def load() -> None:
+    def attempt() -> None:
         # `BaseException`, and logged with a traceback, because this runs
         # under `pythonw`: there is no console, and a warm thread that dies
         # quietly takes push to talk with it for the session. Both factories
@@ -1559,14 +1662,70 @@ def start_warm_up(backend: str, phrases=None):
             log("ptt").error("the semantic matcher did not load: %s: %s",
                              type(exc).__name__, exc, exc_info=True)
 
+    def load() -> None:
+        try:
+            _load()
+        finally:
+            # Read by `speech_landed`. Set in a `finally` so that nothing that
+            # happens in here can leave a press told "still starting up" for
+            # the rest of the session.
+            outcome["landed"] = True
+
+    def _load() -> None:
+        began = time.perf_counter()
+        attempt()
+        # **A barren warm-up is not an answer - here as in `speech_from`.**
+        # The window no longer joins this thread (see
+        # `PushToTalk._take_arrival`), so the second try that `speech_from`
+        # makes inline for everyone else is made here, on this thread, rather
+        # than on the Qt thread and rather than not at all.
+        if outcome.get("recogniser") is None and not _under_pytest():
+            log("ptt").warning(
+                "the warm-up produced no recogniser - trying once more")
+            attempt()
+        log("ptt").info(
+            "speech warm-up finished in %.0f ms - recogniser %s, matcher %s",
+            (time.perf_counter() - began) * 1000.0,
+            getattr(outcome.get("recogniser"), "name", None) or "NONE",
+            "semantic" if outcome.get("matcher") is not None else "literal")
+
     # Daemon, because `main()` can return through its `finally` without ever
     # reaching the event loop, and a non-daemon thread holding 250 MB of ONNX
     # would leave a windowless process alive with no way to see it. A named
     # mutex outliving a process that could not die has already cost a morning
     # here once.
     thread = threading.Thread(target=load, daemon=True, name="warm-speech")
-    thread.start()
+    if start:
+        thread.start()
     return outcome, thread
+
+
+def speech_landed(warm) -> bool:
+    """Has this warm-up finished - recogniser and matcher both decided?
+
+    `landed` is set in a `finally` at the very end of the thread, after the
+    matcher, so a `True` here means the pair is complete. A thread that has
+    ended without setting it (it cannot, short of the interpreter dying under
+    it) is treated as landed too: waiting on a dead thread would be a latch.
+    """
+    outcome, thread = warm
+    if outcome.get("landed"):
+        return True
+    return thread.ident is not None and not thread.is_alive()
+
+
+def begin_warm_up(warm) -> bool:
+    """Start a warm-up built with `start=False`, once. True if this call
+    started it; safe to call from any thread, any number of times."""
+    _outcome, thread = warm
+    with _WARM_START:
+        if thread.ident is not None:
+            return False
+        thread.start()
+    return True
+
+
+_WARM_START = threading.Lock()
 
 
 def speech_from(warm, backend: str):
