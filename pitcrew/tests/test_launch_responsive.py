@@ -474,3 +474,21 @@ def test_the_log_run_is_the_last_launch_with_that_pid(tmp_path):
         encoding="utf-8")
     lines = ab._log_run(str(tmp_path), 42)
     assert lines[0].startswith("e ") and len(lines) == 3
+
+
+def test_the_log_run_follows_a_launch_across_the_log_roll(tmp_path):
+    """The log rotates at 2 MB and a launch can straddle it: its first lines
+    in pitcrew.log.1, its speech-ready line in pitcrew.log. Read as one run,
+    or a launch that came up with speech reads as one that did not."""
+    ab = _launch_ab()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "pitcrew.log.1").write_text(
+        "a older\nb Pit Crew launching - pid: 42\nc   pid: 42\n",
+        encoding="utf-8")
+    (logs / "pitcrew.log").write_text(
+        "d startup: first paint  800 ms since process start\n"
+        "e speech warm-up finished in 1398 ms\n",
+        encoding="utf-8")
+    lines = ab._log_run(str(tmp_path), 42)
+    assert [line[0] for line in lines] == ["b", "c", "d", "e"]

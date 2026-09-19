@@ -171,10 +171,20 @@ _LOG_STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) ")
 
 
 def _log_run(root: str, pid: int) -> list[str]:
-    """This process's lines of `<root>/logs/pitcrew.log`."""
-    path = os.path.join(root, "logs", "pitcrew.log")
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        lines = handle.read().splitlines()
+    """This process's lines of `<root>/logs/pitcrew.log`.
+
+    **The log rotates at 2 MB, and a launch can straddle the roll:** its
+    first lines in `pitcrew.log.1`, the rest in `pitcrew.log` (seen 20 Sep
+    2026 - a launch that came up with speech in 2.6 s read as "no speech").
+    The rotated file is read first, then the live one, as one run.
+    """
+    lines = []
+    for name in ("pitcrew.log.1", "pitcrew.log"):
+        path = os.path.join(root, "logs", name)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines.extend(handle.read().splitlines())
     # The first line naming this pid: the early launch line where there is
     # one (`pitcrew.boot`), else the banner.
     # **The last launch with this pid, from its first line.** Windows reuses
