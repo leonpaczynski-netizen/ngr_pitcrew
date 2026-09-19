@@ -141,14 +141,20 @@ def _visible_window(pid: int):
     return found[0] if found else None
 
 
-class Pinger(threading.Thread):
+class Pinger:
     """Ping one window with WM_NULL every ~10 ms; record (sent, back) ms."""
 
     def __init__(self, hwnd, clock) -> None:
-        super().__init__(daemon=True)
         self.hwnd, self.clock = hwnd, clock
         self.pings: list[tuple[float, float, bool]] = []
         self.halt = threading.Event()
+        self._thread = threading.Thread(target=self.run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout=None) -> None:
+        self._thread.join(timeout)
 
     def run(self) -> None:
         result = ctypes.c_size_t()
