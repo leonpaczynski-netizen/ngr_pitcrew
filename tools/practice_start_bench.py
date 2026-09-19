@@ -123,7 +123,13 @@ def interleave() -> None:
                 time.sleep(0.2)
             if child.poll() is None:
                 child.kill()
-                child.wait(timeout=10)
+                try:
+                    child.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    # Measured already; a teardown that outlives a kill must
+                    # not lose the rest of the run.
+                    print(f"  (child {child.pid} still exiting after kill)",
+                          flush=True)
             got[arm] = json.loads(out.read_text(encoding="utf-8"))
         b, c = got["base"], got["change"]
         rows.append((b["live_ms"], c["live_ms"]))
