@@ -183,6 +183,104 @@ def test_the_pair_is_installed_together_or_not_at_all():
     assert talk._recogniser is real and talk._matcher is matcher
 
 
+def staged_warm_up(recogniser, matcher):
+    """A warm-up that lands in the REAL order, with the real gap.
+
+    `start_warm_up` writes `outcome["recogniser"]` when the transcriber has
+    loaded and `outcome["matcher"]` about 660 ms later, when the embedder
+    has - and only then `landed`. `held_warm_up` writes all three in one
+    instant, so no test built on it can see a recogniser that is already in
+    the outcome while its matcher is not. This one parks the thread in that
+    gap until `release` is set; `in_gap` is set once it is there.
+    """
+    in_gap, release = threading.Event(), threading.Event()
+    outcome: dict = {}
+
+    def load():
+        try:
+            outcome["recogniser"] = recogniser
+            in_gap.set()
+            release.wait(30)
+            outcome["matcher"] = matcher
+        finally:
+            outcome["landed"] = True
+
+    thread = threading.Thread(target=load, daemon=True, name="warm-speech")
+    return (outcome, thread), in_gap, release
+
+
+def _assert_nothing_installed_in_the_gap(talk, said, real):
+    """The recogniser is in the outcome and the matcher is not: nothing may
+    be installed, and a tap is told 'still starting up'."""
+    assert talk.speech_ready is False
+    assert talk._recogniser is None and talk._matcher is None
+    talk.tap()
+    assert said == [gate.spoken_reason(gate.NOT_READY)]
+    assert talk.last_reason == gate.NOT_READY
+    assert talk.recording is False
+    # Never handed a question: with `matcher=None` the gate is skipped
+    # entirely, so an ungated transcription is the failure this pins.
+    assert real.begun == 0 and real.ended == 0
+    # Still nothing installed after the press looked for it.
+    assert talk._recogniser is None and talk._matcher is None
+
+
+def test_a_recogniser_without_its_matcher_is_never_installed():
+    """Critic, round 3: the rule that the pair lands together had no test
+    that could fail, because the fake wrote both at once. Staged in the
+    real order, a press in the gap must be NOT_READY and install nothing."""
+    real, matcher = Recogniser(), Matcher()
+    warm, in_gap, release = staged_warm_up(real, matcher)
+    talk, said = talk_with(warm)
+    ptt.begin_warm_up(warm)
+    try:
+        assert in_gap.wait(10), "the staged warm-up never reached the gap"
+        assert warm[0].get("recogniser") is real      # the gap is real
+        _assert_nothing_installed_in_the_gap(talk, said, real)
+    finally:
+        release.set()
+    wait_landed(warm)
+    assert talk.speech_ready is True
+    assert talk._recogniser is real and talk._matcher is matcher
+    said.clear()
+    talk.tap()                      # open on the real pair
+    talk.tap()                      # close, transcribe, judge
+    assert matcher.asked == ["how are my tyres"]
+
+
+def test_the_real_warm_up_holds_the_pair_back_until_the_matcher_lands(
+        monkeypatch):
+    """The same gap, produced by `start_warm_up` itself: the transcriber
+    factory returns, the embedder factory blocks. This is the thread the app
+    runs, so it pins the order the product writes the outcome in, not only
+    the order a fake does."""
+    real, matcher = Recogniser(), Matcher()
+    in_gap, release = threading.Event(), threading.Event()
+
+    def matcher_for(recogniser):
+        assert recogniser is real
+        in_gap.set()
+        release.wait(30)
+        return matcher
+
+    monkeypatch.setattr(ptt, "best_recogniser_for",
+                        lambda backend, phrases=None: real)
+    monkeypatch.setattr(ptt, "matcher_for", matcher_for)
+    warm = ptt.start_warm_up("moonshine", start=False)
+    talk, said = talk_with(warm)
+    ptt.begin_warm_up(warm)
+    try:
+        assert in_gap.wait(10), "the warm-up never reached the matcher"
+        assert warm[0].get("recogniser") is real
+        assert "landed" not in warm[0]
+        _assert_nothing_installed_in_the_gap(talk, said, real)
+    finally:
+        release.set()
+    wait_landed(warm)
+    assert talk.speech_ready is True
+    assert talk._recogniser is real and talk._matcher is matcher
+
+
 def test_a_barren_landing_is_the_same_none_the_inline_build_gives():
     """Nothing loaded: exactly the un-warmed behaviour, including its words."""
     warm, release = held_warm_up(None, None)
