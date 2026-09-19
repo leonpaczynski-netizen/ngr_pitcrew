@@ -21,6 +21,13 @@ Three things are added around it:
 The window is closed `hold_ms` after the first idle turn (default 4500, long
 enough for the speech load to land on a quiet machine).
 
+**It does not run `pitcrew.boot`.** It imports `pitcrew.app` as a module,
+so the early step the shortcut's `python -m pitcrew.app` takes before the
+imports - the QApplication and the font warm-up - is not in its figures,
+and a fallback font it would have loaded shows up here as a stall. For the
+launch as the driver gets it, use `tools/launch_ab.py`, which times the
+real process from outside.
+
 `PITCREW_ALLOW_MULTIPLE=1` is set so a copy running elsewhere on the machine
 (another worktree's probe, the real app) never turns this into the 0.7 s
 wedge check or a refusal.
