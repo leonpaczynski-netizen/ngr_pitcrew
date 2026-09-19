@@ -1476,6 +1476,29 @@ def matcher_for(recogniser):
 # and that is what keeps this a lock rather than a deadlock.
 _MOONSHINE_LOAD = threading.Lock()
 
+# **One ONNX Runtime thread per moonshine session, not one per core** (19 Sep
+# 2026). `moonshine.dll` reads this variable when it builds a session
+# (`ort_maybe_force_single_thread`); without it every session gets ORT's
+# default pool - fourteen spinning threads on this machine - for models whose
+# work is far too small to share out. Measured, same machine, same clips:
+#
+# * `tools/stt_bench.py --arch TINY_STREAMING --repeat 3`: the wait after
+#   the second tap (`finalise`) 335-354 ms median and 840-896 worst with the
+#   pool; 95-120 median and 235-275 worst without. Accuracy unchanged: median
+#   word error 0% both ways, 18-23 of 30 exact against 22-23.
+# * One embedding (the semantic matcher, per question): 121-157 ms median,
+#   300-310 p90 with the pool; 117-130 and 203-266 without.
+# * The launch's two loads: 2.7-3.0 s with the pool, 1.25-1.35 s without.
+#   And with the pool, the loads made the WHOLE DESKTOP stutter - the Pit
+#   Crew window and the taskbar alike answered in 60-380 ms, every ~150 ms,
+#   for as long as the loads ran with the window up. Without it: nothing.
+#
+# `setdefault`, so a value set outside the app still wins. Set here, at
+# import, because this module is imported long before either model loads,
+# and the DLL reads it then.
+MOONSHINE_SINGLE_THREAD = "MOONSHINE_ORT_SINGLE_THREAD"
+os.environ.setdefault(MOONSHINE_SINGLE_THREAD, "1")
+
 
 def _hold_moonshine_load():
     """Take the load lock, saying so in the log if the wait was real.
