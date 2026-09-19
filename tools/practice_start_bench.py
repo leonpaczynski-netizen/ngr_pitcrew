@@ -422,10 +422,16 @@ def main() -> int:
     # the press - a slow run with it still loading is the pre-warm landing on
     # the button, not the button's own cost.
     engine = getattr(getattr(ctrl, "voice", None), "_engine", None)
-    if engine is not None and not hasattr(engine, "_voice"):
-        # The phrase pack wraps Piper; find the engine that loads a model.
-        engine = next((v for v in vars(engine).values()
-                       if hasattr(v, "_voice")), None)
+    # The phrase pack wraps a fallback pair that wraps Piper; find the engine
+    # that loads a model, a few wrappers deep.
+    layer = [engine] if engine is not None else []
+    engine = None
+    for _depth in range(4):
+        engine = next((e for e in layer if hasattr(e, "_voice")), None)
+        if engine is not None:
+            break
+        layer = [v for e in layer for v in getattr(e, "__dict__", {}).values()
+                 if hasattr(v, "__dict__")]
     voice_loaded = None if engine is None else engine._voice is not None
     press = time.perf_counter()
     _T0[0] = press

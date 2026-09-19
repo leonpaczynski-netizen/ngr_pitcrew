@@ -670,6 +670,36 @@ def test_the_launch_pre_warms_the_voice_and_the_board_once(qt_app, window,
     assert ctrl.driver_board is board
 
 
+def test_a_pre_warm_that_fires_after_the_first_press_does_nothing(
+        qt_app, window, monkeypatch):
+    """Under load the deferred screens can outlast his wait before the first
+    press (seen at 86 % machine load: nothing prefetched at the press). The
+    start has paid it all by then; the pre-warm must not then run beside the
+    session - the websocket import is a Qt-thread stutter mid-race. It still
+    counts as done, so the prefetch works after the session."""
+    import builtins
+
+    ctrl = window.controller
+    warmed: list[int] = []
+    imported: list[str] = []
+    monkeypatch.setattr(ctrl.voice, "warm", lambda: warmed.append(1))
+    real = builtins.__import__
+    monkeypatch.setattr(
+        builtins, "__import__",
+        lambda name, *a, **k: imported.append(name) or real(name, *a, **k))
+    ctrl.settings.driver_board_enabled = True
+    ctrl.session_id = 77
+    try:
+        ctrl.prewarm_for_sessions()
+    finally:
+        ctrl.session_id = None
+        monkeypatch.setattr(builtins, "__import__", real)
+    assert warmed == []
+    assert ctrl.driver_board is None
+    assert "websockets.sync.client" not in imported
+    assert ctrl._prewarmed, "the prefetch after the session would never run"
+
+
 def test_a_board_built_early_opens_where_he_left_it(qt_app, window):
     """Built at idle, placed at open - from the geometry as it is THEN."""
     ctrl = window.controller

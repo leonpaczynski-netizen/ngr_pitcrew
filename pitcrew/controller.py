@@ -1312,6 +1312,17 @@ class PitCrewController(QObject):
         if self._prewarmed:
             return
         self._prewarmed = True
+        if self.session_id is not None:
+            # **Too late: a session is already running.** On a loaded machine
+            # the deferred screens can take longer than he waits before the
+            # first press, and the start paths have then paid all of this
+            # themselves. Anything here now is work beside a live session -
+            # the websocket import alone is 25-150 ms on the Qt thread, which
+            # is a stutter mid-race. Marked done, so the prefetch still runs
+            # after the session (it is gated on this flag).
+            log("session").info("pre-warm skipped - session %s opened first",
+                                self.session_id)
+            return
         try:
             self.voice.warm()
         except Exception:                                    # noqa: BLE001
