@@ -186,3 +186,53 @@ def test_a_read_only_store_cannot_change_the_file(tmp_path):
     finally:
         store.close()
     assert path.stat().st_mtime_ns == before
+
+
+def test_no_test_can_open_the_live_database_read_write():
+    """**The guard itself, tested.** Found 19 Sep 2026: a test reaching the
+    MCP server's `Store()` upgraded the live file mid-suite. `Store()` is now
+    redirected, and a raw `sqlite3.connect` on the live file must be
+    read-only or it stops the test - whatever the path looks like."""
+    import sqlite3
+
+    import pytest
+
+    from pitcrew.store.db import DEFAULT_DB_PATH, Store
+
+    if not LIVE.exists():
+        pytest.skip("no archive on this machine")
+    before = LIVE.stat().st_mtime_ns
+
+    # A default Store lands somewhere else entirely.
+    store = Store()
+    try:
+        assert store.path.resolve() != LIVE.resolve()
+    finally:
+        store.close()
+
+    # A read-write raw open is refused, however the path is spelled - each
+    # spelling on its own, so one that slips through is named.
+    import os
+
+    native = str(LIVE.resolve())
+    spellings = {
+        "as written": str(LIVE),
+        "forward slashes": LIVE.as_posix(),
+        "lower case": native.lower(),
+    }
+    if os.name == "nt":
+        # The Windows extended-length form: two backslashes, "?", one.
+        spellings["extended-length"] = r"\\?" + "\\" + native
+        assert spellings["extended-length"].startswith("\\\\?\\C:")
+    for label, spelling in spellings.items():
+        with pytest.raises(RuntimeError, match="read-write"):
+            sqlite3.connect(spelling)
+            pytest.fail(f"the {label} spelling was not refused: {spelling!r}")
+
+    # Reading is still allowed - that is what the archive checks do.
+    conn = sqlite3.connect(f"file:{LIVE.as_posix()}?mode=ro", uri=True)
+    try:
+        assert conn.execute("select 1").fetchone() == (1,)
+    finally:
+        conn.close()
+    assert LIVE.stat().st_mtime_ns == before

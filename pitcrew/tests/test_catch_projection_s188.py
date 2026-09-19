@@ -162,7 +162,7 @@ def test_behind_the_call_says_when_he_gets_here():
 def test_behind_and_confirmed_it_carries_no_hedge():
     news = _news_with(rocky_behind(), "behind", "Rocky")
     call = news.pace_call(_state(22), 0)
-    assert call.spoken() == ("Rocky is catching, 0.9 seconds a lap. "
+    assert call.spoken() == ("Rocky is catching, 1.0 seconds a lap. "
                              "On you around lap 25.")
     assert call.confidence == MEDIUM
 
@@ -170,7 +170,7 @@ def test_behind_and_confirmed_it_carries_no_hedge():
 def test_behind_with_the_flag_first_he_will_not_get_there():
     news = _news_with(rocky_behind(), "behind", "Rocky")
     call = news.pace_call(_state(22, flag=23), 0)
-    assert call.spoken() == ("Rocky is catching, 0.9 seconds a lap. "
+    assert call.spoken() == ("Rocky is catching, 1.0 seconds a lap. "
                              "Not on you before the flag.")
     assert call.confidence == MEDIUM
 
@@ -181,12 +181,12 @@ def test_ahead_the_mirror_says_when_he_gets_to_him():
         trend.note(key, gap, subject="PUNISHED")
     news = _news_with(trend, "ahead", "PUNISHED")
     call = news.pace_call(_state(8, flag=20), 0)
-    assert call.spoken() == ("Catching PUNISHED, 1.0 seconds a lap. "
+    assert call.spoken() == ("Catching PUNISHED, 0.9 seconds a lap. "
                              "On him around lap 14.")
     assert call.confidence == MEDIUM
     call = _news_with(trend, "ahead", "PUNISHED").pace_call(
         _state(8, flag=11), 0)
-    assert call.spoken() == ("Catching PUNISHED, 1.0 seconds a lap. "
+    assert call.spoken() == ("Catching PUNISHED, 0.9 seconds a lap. "
                              "Not on him before the flag.")
 
 
@@ -257,6 +257,33 @@ def test_the_plain_pace_figure_does_not_follow_a_projection_of_the_same_car():
             news.book(call)
 
 
+def test_a_confirmed_catch_speaks_the_boards_own_figure():
+    """Rule 13, critic 19 Sep: at s188 lap 22 George said "0.9 seconds a lap"
+    off the mean of the changes while the board and push-to-talk said
+    "catching 1.0 s a lap" for the same car. Once the board is saying a rate,
+    the call says that rate - the mean still sets the lap."""
+    from pitcrew.race.gaps import trend_words
+    trend = rocky_behind()
+    call = _news_with(trend, "behind", "Rocky").pace_call(_state(22), 0)
+    found, _ = catch_projection(trend, "behind", now_key=_state(22).lap_now(),
+                                flag_key=FLAG)
+    board = trend_words("behind", found.board_rate, found.changes + 1)
+    assert board is not None
+    assert f"{abs(found.board_rate):.1f} seconds a lap" in call.spoken()
+    assert f"{found.rate:.2f} s/lap" in call.derived      # the mean, audited
+    assert f"board rate {found.board_rate:+.2f} s/lap" in call.derived
+
+
+def test_a_hud_behind_our_count_withholds_the_lap_rather_than_clamping():
+    """Rule 9: GT7's lap number behind our drop-corrected count means the
+    correction is wrong. It was `max(0, ...)`, which named a lap anyway."""
+    state = _state(22)
+    state.screen_lap = 21                  # the HUD a lap BEHIND lap_now()
+    assert state.lap_on_screen() - state.lap_now() < 0
+    assert _news_with(rocky_behind(), "behind", "Rocky").pace_call(
+        state, 0) is None
+
+
 # ---------------------------------------------------- the race as it was run
 
 def replay() -> list[tuple[int, str, str]]:
@@ -296,7 +323,7 @@ def test_session_188_hears_when_rocky_arrives_from_lap_20():
     assert about_rocky == [
         (20, "Rocky is catching, 0.9 seconds a lap. On you around lap 25. "
              "Unconfirmed.", LOW),
-        (22, "Rocky is catching, 0.9 seconds a lap. On you around lap 25.",
+        (22, "Rocky is catching, 1.0 seconds a lap. On you around lap 25.",
          MEDIUM),
     ]
 
@@ -371,90 +398,140 @@ def test_the_projection_reaches_the_export_labelled_derived(tmp_path):
 # He ran 15 laps on the set; on the final lap he fell from 0.6 s ahead in P3
 # to 17 s behind in P5.
 
-RM_RATE, RM_STINTS = 0.068, 3
+RM_RATE = 0.068
+# **Gauge readings, not stints** (critic, 19 Sep): Sardegna's RM rate rests on
+# 24 readings from two stints, and this was labelled "3 stints".
+RM_READINGS = 24
+RM_STINTS = RM_READINGS                  # the older tests' name for it
 
 
-def _rocky_stopped():
+def _rocky_stopped(seen=False):
+    """Rocky's stop at the end of his lap 14, on medium. `seen` is whether the
+    disc was caught changing as he left the lane (it read M both sides)."""
     from pitcrew.race.rival_calls import Rival
     from pitcrew.race.rivals import Stop
 
     return Rival(name="Rocky", pitted=True,
                  stop=Stop(lap=14, fuel_in_l=19.0, fuel_out_l=89.0,
-                           compound="M"))
+                           compound="M", compound_in="M",
+                           tyres_changed=True if seen else None))
 
 
-def _tyres_of(rival, *, rate=RM_RATE):
-    from pitcrew.race.rival_tyres import rival_tyres
+class _Knowledge:
+    """`Knowledge.wear_per_lap`, holding the one rate on file for RM here."""
 
-    def of(name):
-        if str(name).lower() != "rocky":
-            return None
-        return rival_tyres(rival, now_key=22, our_compound="RH",
-                           wear_rate=lambda code: ((rate, RM_STINTS)
-                                                   if code == "RM"
-                                                   else (None, 0)))
-    return of
+    def __init__(self, rate=RM_RATE):
+        self.rate = rate
+
+    def wear_per_lap(self, code, multiplier=None):
+        return (self.rate, RM_READINGS) if code == "RM" else (None, 0)
+
+
+def _race_at(lap, *, rival=None, rate=RM_RATE, side="behind"):
+    """A coordinator at `lap` of Sardegna Rd 9, Rocky filed as `rival`."""
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    co = RaceCoordinator()
+    co.state.lap = lap
+    co.state.screen_lap = lap + 1
+    co.state.laps_total = FLAG
+    co.state.tyre_compound = "RH"
+    co.state.tyre_wear_mult = "8"
+    co.knowledge = _Knowledge(rate)
+    if rival is not None:
+        co.state.rivals = {"Rocky": rival}
+    co.news._neighbour_name[side] = "Rocky"
+    return co
 
 
 def test_george_says_rockys_tyres_go_off_before_the_flag():
-    """**The call he asked for, on the race he asked it about.**"""
-    news = _news_with(rocky_behind(), "behind", "Rocky")
-    call = news.pace_call(_state(22), 0, tyres_of=_tyres_of(_rocky_stopped()))
+    """**The call he asked for, on the race he asked it about.**
+
+    Its own call now, not a clause on the catch call - which spoke only when
+    the catch CHANGED, went silent inside 1.5 s, named the car (so no clip
+    could hold it) and put the instruction fourth (critic, 19 Sep).
+    """
+    co = _race_at(22, rival=_rocky_stopped(seen=True))
+    call = co._rival_tyres_call(co.state)
     assert call is not None
-    assert call.spoken() == (
-        "Rocky is catching, 0.9 seconds a lap. On you around lap 25. "
-        "On his last stop, his tyres go off around lap 28. Keep fighting.")
-    # Rule 5: modelled, and the audit says from what - both assumptions named.
+    assert call.spoken() == ("Keep fighting. "
+                             "The car behind's tyres go off around lap 28.")
     assert "[DERIVED]" in call.derived
-    assert "[ASSUMED] his car wears the set as ours does" in call.derived
-    # No exit read on file for Rocky, so the compound is the one he arrived
-    # on, assumed kept - and the record says why that cannot be told apart.
+    assert "[READ] he left on RM" in call.derived
+    # Rule 4, and labelled as what it is: gauge readings, not stints.
+    assert f"{RM_READINGS} gauge readings" in call.derived
+    assert "x8" in call.derived                    # the multiplier, stated
+
+
+def test_an_assumed_compound_gets_the_fact_and_not_the_instruction():
+    """**"Keep fighting." only where it is earned.** With no change seen at
+    the lane exit, arriving on RM and leaving on RH looks identical to a
+    refit - and at RH's rate the cliff falls after the flag. So he hears the
+    fact, marked unconfirmed, and no instruction to defend on it."""
+    co = _race_at(22, rival=_rocky_stopped(seen=False))
+    call = co._rival_tyres_call(co.state)
+    assert call.spoken() == ("The car behind's tyres go off around lap 28. "
+                             "Unconfirmed.")
+    assert "Keep fighting" not in call.spoken()
     assert "[ASSUMED] he left on the RM he arrived on" in call.derived
-    assert "flip between two grabs" in call.derived
-    # Rule 4: the rate travels with its stint count.
-    assert "3 stints" in call.derived
 
 
-def test_with_no_stop_on_file_the_catch_call_is_unchanged():
-    """What George said that night, because the wall had nothing to go on."""
-    news = _news_with(rocky_behind(), "behind", "Rocky")
-    call = news.pace_call(_state(22), 0, tyres_of=lambda name: None)
-    assert call.spoken() == ("Rocky is catching, 0.9 seconds a lap. "
-                             "On you around lap 25.")
+def test_it_is_said_even_with_him_on_the_bumper():
+    """The catch call went quiet inside 1.5 s. This does not look at the gap
+    at all - the lap he is on the bumper is the lap it matters."""
+    co = _race_at(24, rival=_rocky_stopped(seen=True))
+    assert co._rival_tyres_call(co.state) is not None
+
+
+def test_once_heard_a_set_is_not_told_again_but_a_dropped_one_is():
+    """Booked when HEARD, like the rival stop - so a line the voice drops is
+    tried again, and one he heard is not repeated every lap."""
+    co = _race_at(22, rival=_rocky_stopped(seen=True))
+    call = co._rival_tyres_call(co.state)
+    assert co._heard_matters(call)
+    co._book(call)                                  # heard
+    assert co._rival_tyres_call(co.state) is None
+    fresh = _race_at(22, rival=_rocky_stopped(seen=True))
+    first = fresh._rival_tyres_call(fresh.state)
+    fresh._release(first)                           # dropped
+    assert fresh._rival_tyres_call(fresh.state) is not None
+
+
+def test_a_car_ahead_going_off_is_news_not_an_instruction():
+    co = _race_at(22, rival=_rocky_stopped(seen=True), side="ahead")
+    call = co._rival_tyres_call(co.state)
+    assert call.spoken() == "The car ahead's tyres go off around lap 28."
+
+
+def test_with_no_stop_on_file_nothing_is_said():
+    """What happened that night: the wall never filed his medium stop."""
+    co = _race_at(22)
+    assert co._rival_tyres_call(co.state) is None
 
 
 def test_a_set_that_lasts_past_the_flag_is_not_mentioned():
-    """A cliff after the flag changes nothing he does - so nothing is said.
-    At half our rate his set would last 26 laps from lap 14."""
-    news = _news_with(rocky_behind(), "behind", "Rocky")
-    call = news.pace_call(_state(22), 0,
-                          tyres_of=_tyres_of(_rocky_stopped(), rate=0.034))
-    assert "tyres" not in call.spoken()
+    """At half our rate his set would last 26 laps from lap 14 - past the
+    flag, so it changes nothing he does."""
+    co = _race_at(22, rival=_rocky_stopped(seen=True), rate=0.034)
+    assert co._rival_tyres_call(co.state) is None
 
 
 def test_a_cliff_already_behind_him_is_not_claimed():
-    """Past the cliff is a claim the model can no longer check against the
-    race - and "his tyres go off around lap 20" on lap 22 is a sentence
-    about the past dressed as a warning."""
     from pitcrew.race.rival_calls import Rival
     from pitcrew.race.rivals import Stop
 
-    old_set = Rival(name="Rocky", pitted=True,
-                    stop=Stop(lap=4, fuel_in_l=19.0, fuel_out_l=89.0,
-                              compound="M"))
-    news = _news_with(rocky_behind(), "behind", "Rocky")
-    call = news.pace_call(_state(22), 0, tyres_of=_tyres_of(old_set))
-    assert "tyres" not in call.spoken()
+    old = Rival(name="Rocky", pitted=True,
+                stop=Stop(lap=4, fuel_in_l=19.0, fuel_out_l=89.0,
+                          compound="M", compound_in="M", tyres_changed=True))
+    co = _race_at(22, rival=old)
+    assert co._rival_tyres_call(co.state) is None
 
 
 def test_no_rate_for_his_compound_here_means_no_claim():
     """`Knowledge.wear_per_lap` refuses a rate measured at another multiplier
-    (§5.2) and has nothing for a compound never run here. Either way the
-    projection has no rate, and George says nothing about his tyres."""
-    news = _news_with(rocky_behind(), "behind", "Rocky")
-    call = news.pace_call(_state(22), 0,
-                          tyres_of=_tyres_of(_rocky_stopped(), rate=None))
-    assert "tyres" not in call.spoken()
+    (§5.2) and has nothing for a compound never run here."""
+    co = _race_at(22, rival=_rocky_stopped(seen=True), rate=None)
+    assert co._rival_tyres_call(co.state) is None
 
 
 def test_the_projection_puts_rocky_at_the_cliff_on_lap_28():
@@ -517,8 +594,20 @@ def test_the_wall_files_the_tyre_he_left_on_not_the_one_he_came_in_on():
     as the wall did until 19 Sep - filed every compound change backwards."""
     from pitcrew.race.pit_wall import Visit
 
-    visit = Visit(driver=1, lap=14, started_s=0.0,
-                  compounds=["M"] * 18 + ["H"])     # the flip, at the exit
+    def flipped(**over):
+        """A stand on M, then the flip as he leaves: read off his own disc,
+        on the last frame his columns showed, with the fill finished, and
+        the visit closed on seeing his row back without columns."""
+        visit = Visit(driver=1, lap=14, started_s=0.0, last_s=90.0,
+                      readings=[19, 60, 89, 89],
+                      compounds=["M"] * 18 + ["H"],
+                      last_compound_l=89, last_compound_s=90.0,
+                      closed_on_absence=True)
+        for key, value in over.items():
+            setattr(visit, key, value)
+        return visit
+
+    visit = flipped()
     assert visit.arrived_on == "M"
     assert visit.left_on == "H"
     assert visit.compound == "H"
@@ -526,6 +615,24 @@ def test_the_wall_files_the_tyre_he_left_on_not_the_one_he_came_in_on():
     stop = visit.as_stop()
     assert (stop.compound, stop.compound_in, stop.tyres_changed) == (
         "H", "M", True)
+
+    # **One frame is all a flip gets, so one frame is all scenery needs**
+    # (critic, 19 Sep: 197 of 211 scenery reads on that race came back H).
+    # Each condition refuses on its own, and a refused flip files the
+    # arrival tyre with nothing claiming a change.
+    for why, over in (
+            ("closed on the silence clock - its last read was mid-stand",
+             {"closed_on_absence": False}),
+            ("not the tail - a later frame of columns had no tyre read",
+             {"last_s": 92.0}),
+            ("mid-fill - the flip frame's fuel is not the final figure",
+             {"last_compound_l": 60})):
+        refused = flipped(**over)
+        assert refused.left_on is None, why
+        stop = refused.as_stop()
+        assert (stop.compound, stop.tyres_changed) == ("M", None), why
+    # Where the digits did not read on the flip frame, that is not a refusal.
+    assert flipped(last_compound_l=None).left_on == "H"
 
     # No flip seen: a same-compound refit, or one the grab missed. The best
     # estimate is the arrival tyre, and nothing claims the tyres changed.

@@ -432,59 +432,78 @@ def test_a_silent_engineer_books_what_the_screen_showed(raced):
     assert race.state.lane.untold(race.state.lap) == []
 
 
-def test_a_box_call_the_voice_never_said_is_made_again():
-    """**The one call where being wrong costs the race.**
+def test_a_box_call_re_fires_on_its_own_without_any_release():
+    """**The premise of 9e91674 was wrong, and this pins why.**
 
-    `record()` books a kind when the call is MADE, and `next_call` will not
-    build that kind again while it is in `state.said`. So a box call the
-    voice dropped - queued behind a 10-12 s line, taken past its 8 s budget,
-    discarded as stale - was booked as said and never repeated. Measured on
-    a realistic state, the next crossing then spent the lap on a HEARTBEAT:
-
-        Lap 8. 13 laps to go. Tyre gauge when you get a straight.
-
-    while the stop he owed went unmentioned, fill and compound and all. This
-    is the Bathurst shape - a fact retired on handover, eight of ten stops
-    never said - pointed at the stop instead of at a rival's.
+    That commit said a dropped box call left the next crossing on a heartbeat
+    - "Lap 8. 13 laps to go." - and put `BOX_NOW` into the delivery protocol
+    to fix it. The heartbeat came from a test that built a FRESH `RaceState`
+    and copied `said` without `said_at`. On the real object the overdue
+    crossing already says the whole call, compound and fill included, so the
+    release fixed nothing and cost a lap of the stay-out fold.
     """
     from pitcrew.race.calls import BOX_NOW, RaceState, next_call
 
-    def state(lap):
-        made = RaceState(lap=lap, laps_total=20, stint_ends_on_lap=7,
-                         fuel_per_lap_l=3.4, fuel_capacity_l=100.0,
-                         mandatory_stops_left=1, next_compound="RS",
-                         next_tyres=True)
-        made.last_said_lap = 0
-        return made
+    state = RaceState(lap=6, laps_total=20, stint_ends_on_lap=7,
+                      fuel_per_lap_l=3.4, fuel_capacity_l=100.0,
+                      mandatory_stops_left=1, next_compound="RS",
+                      next_tyres=True)
+    state.last_said_lap = 0
+    first = next_call(state)
+    assert first.kind == BOX_NOW
+    state.record(first)                 # made - and, say, never heard
 
-    first = state(6)
-    call = next_call(first)
-    assert call.kind == BOX_NOW and "Fuel to" in call.spoken(), call.spoken()
-    first.record(call)
-    assert BOX_NOW in first.said
-
-    # Not heard. The kind comes back off the said list, and the next
-    # crossing derives the whole instruction again - fill included.
-    lost = state(7)
-    lost.said = [kind for kind in first.said if kind != BOX_NOW]
-    again = next_call(lost)
-    assert again is not None and again.kind == BOX_NOW, again
+    state.lap = 7                       # the SAME object, one lap on
+    state.last_said_lap = 0
+    again = next_call(state)
+    assert again is not None and again.kind == BOX_NOW
     assert "RS on." in again.spoken() and "Fuel to" in again.spoken()
 
-    # Left booked, he is told nothing about the stop at all.
-    kept = state(7)
-    kept.said = list(first.said)
-    silent = next_call(kept)
-    assert silent is None or silent.kind != BOX_NOW, silent
+
+def test_the_box_calls_are_not_in_the_delivery_protocol():
+    """They self-heal; the two stop reversals do not, so only they are in."""
+    from pitcrew.race.calls import (BOX_NOW, BOX_SOON, MEDIUM, STOP_BACK,
+                                    STOPS_OFF, Call)
+
+    for kind in (BOX_NOW, BOX_SOON):
+        assert not RaceCoordinator._heard_matters(
+            Call(kind, 6, "Box this lap.", "On the plan.", MEDIUM)), kind
+    for kind in (STOPS_OFF, STOP_BACK):
+        assert RaceCoordinator._heard_matters(
+            Call(kind, 6, "x.", "y.", MEDIUM)), kind
 
 
-def test_the_stop_kinds_take_the_delivery_protocol():
-    """They have to be IN FLIGHT for the release above to ever run: a call
-    that is booked on handover never gets an answer to act on."""
-    from pitcrew.race.calls import (BOX_NOW, BOX_SOON, Call, MEDIUM,
-                                    STOP_BACK, STOPS_OFF)
-    from pitcrew.race.coordinator import RaceCoordinator
+def test_an_unheard_stop_reversal_is_said_again_while_it_is_still_true():
+    """**The two calls where silence is the worst answer.** A lost "You're
+    fuelled to the flag." sends him into a stop he does not need; a lost "The
+    stop is back on." runs him out of fuel. Both are made once behind a flag
+    `record()` flips - and the release now reopens that flag."""
+    from pitcrew.race.calls import MEDIUM, STOP_BACK, STOPS_OFF, Call
 
-    for kind in (BOX_NOW, BOX_SOON, STOPS_OFF, STOP_BACK):
-        call = Call(kind, 6, "Box this lap.", "On the plan.", MEDIUM)
-        assert RaceCoordinator._heard_matters(call), kind
+    co = RaceCoordinator()
+
+    # Fuelled to the flag, and the latch still agrees: reopened.
+    co.state.stop_needed_held = False
+    co.state.stops_off_said = True
+    co.state.said.append(STOPS_OFF)
+    co._release(Call(STOPS_OFF, 8, "You're fuelled to the flag.", "", MEDIUM))
+    assert co.state.stops_off_said is False and STOPS_OFF not in co.state.said
+
+    # The stop is back on, and the latch still agrees: reopened.
+    co.state.stop_needed_held = True
+    co.state.stop_back_due = False
+    co.state.said.append(STOP_BACK)
+    co._release(Call(STOP_BACK, 9, "The stop is back on.", "", MEDIUM))
+    assert co.state.stop_back_due is True and STOP_BACK not in co.state.said
+
+
+def test_a_stop_reversal_that_is_no_longer_true_is_not_revived():
+    """The gate reopens only while the latch still says what the call said -
+    a stop retired again since must not be un-retired by a late release."""
+    from pitcrew.race.calls import MEDIUM, STOP_BACK, Call
+
+    co = RaceCoordinator()
+    co.state.stop_needed_held = False          # retired again since
+    co.state.stop_back_due = False
+    co._release(Call(STOP_BACK, 9, "The stop is back on.", "", MEDIUM))
+    assert co.state.stop_back_due is False

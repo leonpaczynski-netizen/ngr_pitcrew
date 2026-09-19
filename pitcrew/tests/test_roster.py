@@ -168,3 +168,26 @@ def test_an_unknown_id_has_no_name_rather_than_raising():
 def test_the_threshold_sits_between_the_two_measured_populations():
     """0.406 was one driver seen twice; 0.738 was the closest two drivers."""
     assert 0.406 < SAME_NAME_MAX_DIFF < 0.738
+
+
+def test_a_sighting_counts_once_per_spacing_so_the_floor_survives_a_faster_grab():
+    """Critic, 19 Sep: `MIN_SIGHTINGS` = 20 was set at a 2 s grab. At 0.5 s a
+    misread cluster held for ten seconds reached it and filed a stop as
+    "Car #6". Counted at most once per `SIGHTING_SPACING_S`, twenty
+    sightings mean forty seconds of being there at any grab rate."""
+    from pitcrew.telemetry.roster import SIGHTING_SPACING_S
+
+    roster = Roster()
+    step = SIGHTING_SPACING_S / 4                  # a 0.5 s grab
+    driver = None
+    for i in range(20):                            # ten seconds of frames
+        driver = roster.see_frame([A], now=i * step)[0]
+    assert roster.sightings(driver) == 20          # every frame still counts
+    assert roster.spaced_sightings(driver) == 5    # ...but only 5 spacings
+    assert roster.drivers(min_sightings=20, spaced=True) == []
+    assert roster.drivers(min_sightings=20) == [driver]
+    # Without a clock (the tests, an old caller), every frame counts.
+    plain = Roster()
+    for _ in range(3):
+        plain.see(A)
+    assert plain.spaced_sightings(0) == 3

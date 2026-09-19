@@ -68,18 +68,28 @@ def prediction_words(prediction) -> tuple[str, str, str]:
         # is the honest word for a margin we cannot resolve.
         # Sized to the column: the longest of these with its burn suffix is
         # 38 characters, which is what the opinion column holds unclipped.
+        # **"on the limit", not "no fuel to push"** (critic, 19 Sep). A spare
+        # inside the reading error is one we cannot resolve - the true figure
+        # could be up to twice the error - so "no fuel" asserted a zero the
+        # instrument cannot see (rule 3). "On the limit" is what the point
+        # estimate says, and it is Rocky at Sardegna exactly: 2.2 L over 15
+        # laps, holding his rate.
         if prediction.spare_readable and prediction.spare_l is not None:
             reach = f"{prediction.spare_l:.0f} L to push"
         else:
-            reach = "no fuel to push"
+            reach = "on the limit"
         return (f"{_stops(prediction.total_stops)}{maybe}",
                 f"{reach}{burn}", "reaches")
     if prediction.words == SHORT_SAVES:
         # The voice's own hedge, not a stop count: "he lifts or he stops
         # again" is what the app can stand behind, and `total_stops` is None
         # here for that reason. "LIFTS?" reads as the question it is.
+        # Shortened to fit: "short - lifts or stops again · his burn, 2
+        # stops" was 47 characters in a 38-character column, and the half it
+        # lost was the evidence count (rule 4). The headline already says he
+        # is short; the detail says what that means.
         return (f"{_stops(prediction.stops_seen)} SO FAR",
-                f"short - lifts or stops again{burn}", "plain")
+                f"lifts or stops{burn}", "plain")
     if prediction.words == NO_STOP_SEEN:
         # About the instrument, not the car: the board may simply not have
         # been read while he was in the lane.

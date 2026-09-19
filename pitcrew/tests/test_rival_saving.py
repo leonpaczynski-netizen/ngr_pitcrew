@@ -349,6 +349,23 @@ def test_positions_refresh_onto_a_rival_already_filed():
     assert next_call(race.state).kind == RIVAL_SHORT
 
 
+
+def test_a_rival_gone_from_the_fresh_board_loses_his_place():
+    """Critic, 19 Sep: a place that never expired chose "Attack." or "Keep
+    fighting." for a car no longer beside us. Missing from the fresh board
+    is an unknown place, and an unknown place asserts no side."""
+    race = a_coordinator()
+    race.note_rival_stop(_Seen(), burn_per_lap_l=BURN)
+    race.note_rival_positions({"Boxhead": 4})
+    assert race.state.rivals["Boxhead"].position == 4
+    race.note_rival_positions({})               # not re-read this crossing
+    assert race.state.rivals["Boxhead"].position is None
+    race.state.position = 5
+    call = next_call(race.state)
+    assert call.kind == RIVAL_SHORT
+    assert "Attack" not in call.spoken()
+    assert "Keep fighting" not in call.spoken()
+
 # --- the four that were ranked, registered, tested and unemittable ---------
 
 from pitcrew.strategy.model import PIT_LOSS_MEASURED  # noqa: E402

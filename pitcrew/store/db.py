@@ -159,9 +159,17 @@ class Store:
         self = cls.__new__(cls)
         self.path = Path(path)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(
-            f"file:{self.path.resolve().as_posix()}?mode=ro", uri=True,
-            check_same_thread=False)
+        # **Quoted, or `mode=ro` can fall off the end of the URI.** SQLite
+        # reads `#` as the start of a fragment and `%` as an escape, so a raw
+        # path with a `#` in it dropped `?mode=ro` entirely and opened the
+        # file READ-WRITE - creating it if absent - and one with `%41` in it
+        # opened a different file (critic, 19 Sep). The live path has neither,
+        # which is luck, not a design.
+        from urllib.parse import quote
+
+        where = quote(self.path.resolve().as_posix(), safe="/:")
+        self._conn = sqlite3.connect(f"file:{where}?mode=ro", uri=True,
+                                     check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA query_only = ON")
         # Read-side speed, as `__init__` sets it; none of these writes a byte.

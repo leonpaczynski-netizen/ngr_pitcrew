@@ -1194,7 +1194,7 @@ class RaceCoordinator:
             burn_per_lap_l=burn_per_lap_l, burn_stops=burn_stops,
             exit_is_a_bound=getattr(seen, "exit_is_a_bound", False),
             entry_is_a_bound=bool(getattr(seen, "partial", False)),
-            position=self.state.rival_positions.get(name))
+            position=self.state.rival_places_fresh.get(name))
         log("race").info(
             "rival stop filed: %s out on %s L on lap %s, burn %s L/lap from "
             "%d stop%s%s", name, seen.stop.fuel_out_l, seen.stop.lap,
@@ -1372,13 +1372,19 @@ class RaceCoordinator:
         Kept beside the rivals rather than on them because a stop's position
         is read while the car is STANDING, which is the one moment it does not
         describe where he is racing.
+
+        **`positions` is the board's FRESH places** (`POSITION_FRESH_S`), and
+        a rival missing from it loses his place rather than keeping the last
+        one: that place chose between "Attack." and "Keep fighting." for a
+        car long gone from the rows around us (critic, 19 Sep). An unknown
+        place asserts no side, which is the honest answer.
         """
-        if not positions:
-            return
-        self.state.rival_positions.update(positions)
+        self.state.rival_places_fresh = dict(positions)
+        if positions:
+            self.state.rival_positions.update(positions)
         for name, rival in self.state.rivals.items():
             where = positions.get(name)
-            if where is not None and where != rival.position:
+            if where != rival.position:
                 self.state.rivals[name] = replace(rival, position=where)
 
     def note_incident(self, *, reported: bool = False) -> None:
@@ -1490,6 +1496,10 @@ class RaceCoordinator:
         # Calls handed to the voice and not yet heard, by `id` - see
         # `_hand_out`. Rule 11: a new race hears nothing about the last one's.
         self._in_flight: dict[int, tuple] = {}
+        # Rival sets already told as going off - one tag per set, so a
+        # neighbour's tyres are said once per stop and not once per crossing.
+        # Booked when HEARD (`_book`), so a dropped one is tried again.
+        self._tyres_said: set[str] = set()
         # A place call's lane explanation, applied when it is heard.
         self._lane_use: dict[int, tuple] = {}
         # The frame each mid-lap kind was last handed out on - see
@@ -1692,8 +1702,9 @@ class RaceCoordinator:
         behind it is how a queue fills with facts that go stale together. Where
         nothing answers for the voice (a replay), the spacing alone paces them.
         """
-        from pitcrew.race.calls import (FACT, GAPS, PACE, STOPS_PICTURE,
-                                        WATCHED, _crossing_the_line)
+        from pitcrew.race.calls import (FACT, GAPS, PACE, RIVAL_TYRES,
+                                        STOPS_PICTURE, WATCHED,
+                                        _crossing_the_line)
 
         if self._packets % self.NEWS_EVERY_PACKETS:
             return None
@@ -1712,8 +1723,12 @@ class RaceCoordinator:
             (STOPS_PICTURE, lambda: self.news.picture_call(
                 state, now, required=required, required_source=source,
                 planned=planned)),
-            (PACE, lambda: self.news.pace_call(state, now, lane=state.lane,
-                                               tyres_of=self._rival_tyres)),
+            (PACE, lambda: self.news.pace_call(state, now, lane=state.lane)),
+            # A neighbour's set going off before the flag - its own call,
+            # not a clause on the catch call, which is gated on the catch
+            # CHANGING and went silent inside 1.5 s: exactly when a chaser
+            # is on the bumper (critic, 19 Sep 2026).
+            (RIVAL_TYRES, lambda: self._rival_tyres_call(state)),
             (WATCHED, lambda: self.news.watched_call(state, now)),
             (GAPS, lambda: self.news.gaps_call(state, now)),
         )
@@ -1788,13 +1803,67 @@ class RaceCoordinator:
             rival, now_key=self.state.lap_now(),
             our_compound=self.state.tyre_compound,
             wear_rate=lambda code: self.knowledge.wear_per_lap(
-                code, multiplier=multiplier))
+                code, multiplier=multiplier),
+            multiplier=multiplier)
+
+    def _rival_tyres_call(self, state):
+        """The car beside us, when his set goes off before the flag. Once per
+        set. See `race/rival_tyres.py` for everything it assumes.
+
+        **Unconditional on the gap.** The catch call this first rode on went
+        quiet inside 1.5 s; the one lap the driver most needs to hear that the
+        car on his bumper is about to fade is the lap it is on his bumper.
+        """
+        from pitcrew.race.calls import LOW, MEDIUM, RIVAL_TYRES, Call
+        from pitcrew.race.news import _flag_key, a_person
+        from pitcrew.race.rival_tyres import tyres_words
+
+        now_key = state.lap_now()
+        flag_key = _flag_key(state)
+        if flag_key is None:
+            return None
+        in_flight = {call.tag for call, _ in list(self._in_flight.values())
+                     if call.kind == RIVAL_TYRES}
+        for side in ("behind", "ahead"):
+            name = self.news.neighbour(side)
+            if a_person(name) is None:
+                continue
+            tyres = self._rival_tyres(name)
+            if tyres is None:
+                continue
+            # A cliff still AHEAD of now and at or before the flag: one
+            # already passed is a claim the model can no longer check, and
+            # one after the flag changes nothing he does.
+            if not now_key < tyres.cliff_key <= flag_key:
+                continue
+            tag = f"{RIVAL_TYRES}:{tyres.driver}:{tyres.stop_lap}"
+            if tag in self._tyres_said or tag in in_flight:
+                continue
+            screen_offset = state.lap_on_screen() - state.lap_now()
+            if screen_offset < 0:
+                # The HUD behind our corrected count - the same refusal as
+                # the catch call's, for the same reason (rule 9).
+                log("race").warning(
+                    "rival tyres: withheld - HUD lap %s behind corrected "
+                    "count %s", state.lap_on_screen(), state.lap_now())
+                return None
+            call, reason, firm = tyres_words(
+                side, tyres.cliff_lap(screen_offset), tyres.compound_seen)
+            return Call(
+                RIVAL_TYRES, state.lap, call, reason, MEDIUM if firm else LOW,
+                why_spoken=(f"{tyres.driver} {side}: "
+                            + ("compound seen changing at the lane exit"
+                               if tyres.compound_seen else
+                               "compound assumed - no change seen at the "
+                               "lane exit")),
+                derived=tyres.model(), tag=tag)
+        return None
 
     @staticmethod
     def _heard_matters(call) -> bool:
         from pitcrew.race.calls import (
-            BOX_NOW, BOX_SOON, CLOSING, POSITION, RIVAL_BOXED,
-            RIVAL_COMMITTED, RIVAL_SHORT, STOP_BACK, STOPS_OFF)
+            CLOSING, POSITION, RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT,
+            RIVAL_TYRES, STOP_BACK, STOPS_OFF)
 
         if call is None:
             return False
@@ -1803,21 +1872,12 @@ class RaceCoordinator:
         # The race news books a band, a place or a figure as what he was
         # told - so only when he was told it (`race/news.py`).
         #
-        # **And the stop, which is the call this most needed to cover.**
-        # `record()` books a kind when the call is MADE, so a box call the
-        # voice dropped - queued behind a 12 s line, taken past its 8 s
-        # budget, discarded as stale - was booked as said and never repeated
-        # in that form. The next crossing does say something, because the
-        # overdue ladder fires: "Box this lap. 1 lap overdue." With no
-        # compound and no fill. The half he acts on ("RS on. Fuel to 48
-        # litres.") was gone, and nothing anywhere said so.
-        #
-        # This is the Bathurst shape - eight of ten stops never said, because
-        # a fact was retired on handover - applied to the one call where
-        # being wrong costs the race.
+        # **And the two stop reversals**, which are made once behind a flag
+        # and so are lost for good if the voice drops them - see `_release`.
+        # The box calls are NOT here: they re-fire every lap on their own.
         return call.kind in (RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT,
-                             CLOSING, BOX_NOW, BOX_SOON, STOPS_OFF,
-                             STOP_BACK, *RaceCoordinator._news_kinds())
+                             CLOSING, STOPS_OFF, STOP_BACK, RIVAL_TYRES,
+                             *RaceCoordinator._news_kinds())
 
     def _hand_out(self, call) -> None:
         """`call` is being given to the voice: in flight, or booked now."""
@@ -1858,9 +1918,13 @@ class RaceCoordinator:
             self._release(call)
 
     def _book(self, call) -> None:
-        from pitcrew.race.calls import POSITION, RIVAL_BOXED, position_spoken
+        from pitcrew.race.calls import (POSITION, RIVAL_BOXED, RIVAL_TYRES,
+                                        position_spoken)
 
         lane = self.state.lane
+        if call.kind == RIVAL_TYRES and call.tag:
+            # Heard: this set is told, and not again.
+            self._tyres_said.add(call.tag)
         if call.kind == RIVAL_BOXED:
             lane.tell(lane.keys_in_tag(RIVAL_BOXED, call.tag))
         elif call.kind in self._news_kinds():
@@ -1886,28 +1950,38 @@ class RaceCoordinator:
             # A crossing's tagged rival fact is "said" by its tag
             # (`_worth_saying_again`); unheard, it is sayable again.
             self.state.said_tags.discard(call.tag)
-        # **An instruction nobody heard is an instruction not yet given.**
-        # `record()` appends the kind to `state.said` when the call is made,
-        # and `next_call` will not build that kind again while it is there -
-        # so a dropped box call left only the overdue ladder, which carries
-        # no compound and no fill. Taking the kind back out lets the next
-        # crossing derive the whole call again, fuel figure and all.
-        if call.kind in self._instruction_kinds():
-            try:
-                self.state.said.remove(call.kind)
-            except ValueError:
-                pass
-            log("race").warning(
-                "%s was never said - taken back off the said list so the "
-                "next crossing can make it again", call.kind)
+        # **A stop reversal nobody heard is one not yet given.** These two are
+        # made ONCE and gated by a flag `record()` flips when the call is
+        # MADE - `stops_off_said` and `stop_back_due` - so a dropped one was
+        # never built again. And they are the two where silence is the worst
+        # answer: a lost "You're fuelled to the flag." sends him into a stop
+        # he does not need, and a lost "The stop is back on." runs him out of
+        # fuel. The gate is reopened only while the latch still says what
+        # the call said, so a stop retired again since is not un-retired.
+        #
+        # **Not the box calls themselves, and they were in here by mistake.**
+        # `BOX_NOW` / `BOX_SOON` re-fire every lap on their own through
+        # `said_at` and the overdue ladder - "Box this lap. RS on. 1 lap
+        # overdue. Fuel to 45 litres." The "heartbeat instead of the stop"
+        # this was first written to fix was an artefact of a test that built
+        # a fresh `RaceState` and copied `said` without `said_at`; on the
+        # real object the overdue crossing already says the whole call.
+        # Releasing them only removed a heard BOX_NOW along with the dropped
+        # one, which delayed the stay-out fold a lap.
+        from pitcrew.race.calls import STOP_BACK, STOPS_OFF
+
+        held = self.state.stop_needed_held
+        if call.kind == STOPS_OFF and held is False:
+            self.state.stops_off_said = False
+            self.state.forget_said(STOPS_OFF)
+            log("race").warning("'fuelled to the flag' was never heard - "
+                                "reopened so the next crossing says it")
+        elif call.kind == STOP_BACK and held is True:
+            self.state.stop_back_due = True
+            self.state.forget_said(STOP_BACK)
+            log("race").warning("'the stop is back on' was never heard - "
+                                "reopened so the next crossing says it")
         self._lane_use.pop(id(call), None)
-
-    @staticmethod
-    def _instruction_kinds() -> tuple:
-        """The kinds whose whole content is an instruction about the stop."""
-        from pitcrew.race.calls import BOX_NOW, BOX_SOON, STOP_BACK, STOPS_OFF
-
-        return (BOX_NOW, BOX_SOON, STOPS_OFF, STOP_BACK)
 
     def _place_waiting_on_the_voice(self, proposal) -> bool:
         from pitcrew.race.calls import POSITION

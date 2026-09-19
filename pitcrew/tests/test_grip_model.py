@@ -17,7 +17,6 @@ the real archive that skips cleanly when it is absent.
 from __future__ import annotations
 
 import math
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -70,6 +69,28 @@ HZ = 60.0
 
 # --------------------------------------------------------------- the schema
 
+
+
+def _snapshot_of_the_archive(copied) -> None:
+    """A faithful copy of the live archive, read without writing to it.
+
+    **Not `shutil.copy`**, which copied the `.db` alone. The archive runs in
+    WAL mode, so the newest committed rows can still be in `pitcrew.db-wal`,
+    and a copy without it quietly tests yesterday's data (critic, 19 Sep; the
+    memory note on copying the DB says the same). SQLite's backup API reads
+    through the WAL, and the source is opened `mode=ro`, so the live file is
+    never opened for writing - which the suite's tripwire would refuse anyway.
+    """
+    import sqlite3
+
+    source = sqlite3.connect(
+        f"file:{Path(DEFAULT_DB_PATH).resolve().as_posix()}?mode=ro", uri=True)
+    target = sqlite3.connect(str(copied))
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
 
 def test_the_migration_is_additive_and_leaves_laps_and_their_frames_alone(
         tmp_path, event_id, store):
@@ -713,7 +734,7 @@ def test_integration_the_backfilled_archive_reproduces_the_compound_ordering(
     looking for".
     """
     copied = tmp_path / "archive.db"
-    shutil.copy(DEFAULT_DB_PATH, copied)
+    _snapshot_of_the_archive(copied)
     store = Store(copied)
     try:
         rows = store.list_grip_observations(unit_kind="LAP")
@@ -755,7 +776,7 @@ def test_integration_no_scope_speaks_a_rising_trend(tmp_path):
     construct by hand.
     """
     copied = tmp_path / "archive.db"
-    shutil.copy(DEFAULT_DB_PATH, copied)
+    _snapshot_of_the_archive(copied)
     store = Store(copied)
     try:
         rows = store.list_grip_observations(unit_kind="LAP")

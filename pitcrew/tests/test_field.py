@@ -509,7 +509,7 @@ def test_the_tablet_words_what_each_figure_is_worth():
     assert rows["K.Graebs"]["fuel"] == "8 → ≥30"
     assert rows["K.Graebs"]["prediction"] == "CAN'T TELL"
     assert rows["Close"]["prediction"] == "1 STOP SO FAR"
-    assert "lifts or stops again" in rows["Close"]["detail"]
+    assert rows["Close"]["detail"].startswith("lifts or stops")
     assert rows["YOU"]["us"] is True and rows["YOU"]["place"] == "P4"
     assert got["board"] == "board read 20 s ago" and got["board_stale"] is True
 
@@ -913,7 +913,10 @@ def test_the_tablet_says_whether_a_car_can_push_not_only_whether_it_reaches():
     assert got.words == REACHES_FLAG
     assert abs(got.spare_l - 2.2) < 0.1
     assert got.spare_readable is False          # 2.2 L inside an ~8 L error
-    assert prediction_words(got)[1].startswith("no fuel to push")
+    # "On the limit", not "no fuel to push": a spare inside the reading
+    # error is one the instrument cannot resolve, so it may not be called
+    # zero (rule 3) - and "on the limit" is what the point estimate says.
+    assert prediction_words(got)[1].startswith("on the limit")
 
     flush = Rival(name="Flush", pitted=True, burn_per_lap_l=5.0, burn_stops=2,
                   stop=Stop(lap=14, fuel_in_l=19.0, fuel_out_l=99.0))

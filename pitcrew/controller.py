@@ -3269,7 +3269,9 @@ class PitCrewController(QObject):
         wall = getattr(self, "_pit_wall", None)
         if self.race is not None and wall is not None:
             try:
-                self.race.note_rival_positions(wall.positions())
+                from pitcrew.race.pit_wall import POSITION_FRESH_S
+                self.race.note_rival_positions(
+                    wall.positions(max_age_s=POSITION_FRESH_S))
                 # **Every gap reading since the last crossing, filed and
                 # binned.** Persisted so the race can be replayed with its
                 # gaps (assessment S8: the 6 Sep race cannot be); handed to
@@ -5830,7 +5832,8 @@ class PitCrewController(QObject):
         provisional handle rather than being dropped, because the alternative
         is throwing away a stop that cannot be observed again.
         """
-        for driver_id in wall.roster.drivers(min_sightings=PIT_WALL_MIN_SIGHTINGS):
+        for driver_id in wall.roster.drivers(min_sightings=PIT_WALL_MIN_SIGHTINGS,
+                                             spaced=True):
             try:
                 name = wall.roster.name_of(driver_id)
                 if not name:

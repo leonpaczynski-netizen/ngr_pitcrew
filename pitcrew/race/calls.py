@@ -243,6 +243,11 @@ STAY_OUT_FUEL = "stay-out-fuel"
 # Only the OFFER is an instruction. A re-plan that merely notes the burn
 # against the plan's expectation is a report, and stays where reports are.
 REPLAN_OFFER = "replan-offer"
+# **A neighbour's set going off before the flag** - `race/rival_tyres.py`.
+# The driver, 19 Sep 2026: "Rocky is catching but based on his last stop his
+# tyres will be off the cliff in the last lap so keep fighting." Said once
+# per set, mid-lap, about the car directly behind or ahead.
+RIVAL_TYRES = "rival-tyres"
 # **What is going on in the race around him, volunteered** (the driver, 14 Sep
 # 2026, after Bathurst Rd7: *"want more comms from him about what is going on
 # in the race"*; `docs/ENGINEER-TARGET-STATE_2026-08-29.md` D7 as amended).
@@ -941,6 +946,9 @@ class RaceState:
     # because a stop's position is read while the car is STANDING - the one
     # moment it does not describe where he is racing.
     rival_positions: dict = field(default_factory=dict)
+    # The last crossing's FRESH board places only - what a rival's side is
+    # read from. `rival_positions` above accumulates and is never pruned.
+    rival_places_fresh: dict = field(default_factory=dict)
     # **The two gap trends the board reader keeps**, refreshed each lap. Held
     # as objects rather than numbers because `closing_call` needs the run
     # length behind the rate: a trend is only worth saying after

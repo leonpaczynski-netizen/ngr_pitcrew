@@ -389,6 +389,8 @@ def _kind_classes() -> dict[str, int]:
             calls.RIVAL_SHORT, calls.CLOSING,
             # The race around him (D7, 14 Sep 2026) - `race/news.py`.
             calls.STOPS_PICTURE, calls.PACE, calls.WATCHED, calls.GAPS,
+            # A neighbour's tyres going off (`race/rival_tyres.py`).
+            calls.RIVAL_TYRES,
             # A HUD warning going away (`race/hud_alerts.py`): news.
             calls.CONTACT_CLEAR, calls.WATER_DRY)
     # **Contact and water appearing are EVENTS**, said as they happen: ahead

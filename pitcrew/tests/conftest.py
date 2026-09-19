@@ -142,20 +142,60 @@ def _no_live_database(monkeypatch, tmp_path):
     `sqlite3` directly and is untouched by this - it is the one test meant to
     look at it, and it cannot write.
     """
+    import os
+    import sqlite3
     from pathlib import Path
+    from urllib.parse import unquote
 
     from pitcrew.store import db as db_module
 
     live = Path(db_module.DEFAULT_DB_PATH).resolve()
     throwaway = tmp_path / "not-the-live.db"
     real_init = db_module.Store.__init__
+    real_connect = sqlite3.connect
+
+    def is_live(where) -> bool:
+        """Is `where` the live file - by IDENTITY, not by spelling.
+
+        Comparing resolved spellings missed the Windows extended-length form
+        and the localhost admin-share form, which both name the same file
+        (critic, 19 Sep). `samefile` does not care how a path is written. It
+        needs the file to exist, so a path that does not falls back to
+        comparing resolved spellings.
+        """
+        try:
+            target = Path(where)
+            if target.exists() and live.exists():
+                return os.path.samefile(target, live)
+            return target.resolve() == live
+        except (OSError, ValueError, TypeError):
+            return False
 
     def guarded(self, path=None, *args, **kwargs):
-        target = live if path is None else Path(path).resolve()
-        return real_init(self, throwaway if target == live else path,
+        target = db_module.DEFAULT_DB_PATH if path is None else path
+        return real_init(self, throwaway if is_live(target) else path,
                          *args, **kwargs)
 
+    def tripwire(database, *args, **kwargs):
+        """**A raw `sqlite3.connect` on the live file must be read-only.**
+
+        The `Store` wrap does not see code that connects directly. Reading is
+        allowed - five tests check real data that way, through `mode=ro` - and
+        anything else stops the test dead rather than touching his races.
+        """
+        where, readonly = database, False
+        if kwargs.get("uri") and str(database).startswith("file:"):
+            body, _, query = str(database)[5:].partition("?")
+            where, readonly = unquote(body), "mode=ro" in query
+        if not readonly and is_live(where):
+            raise RuntimeError(
+                f"a test opened the live database read-write: {database!r}. "
+                f"Open it with `?mode=ro` or `Store.read_only()`.")
+        return real_connect(database, *args, **kwargs)
+
     monkeypatch.setattr(db_module.Store, "__init__", guarded)
+    monkeypatch.setattr(sqlite3, "connect", tripwire)
+    monkeypatch.setattr(db_module.sqlite3, "connect", tripwire)
     monkeypatch.setenv("PITCREW_DB", str(throwaway))
 
 

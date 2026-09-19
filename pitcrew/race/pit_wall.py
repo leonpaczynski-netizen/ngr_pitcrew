@@ -84,6 +84,14 @@ CLOSE_AFTER_CLEAN_FRAMES = 3
 # exactly what it was.
 CLOSE_AFTER_CLEAN_S = 4.0
 
+# **How long a board place stays true after its row was last read.** A car
+# near enough to race - `rival_calls.NEARBY_PLACES` either side - sits on the
+# visible board every frame, so a place not re-read in this long belongs to a
+# car that has left the rows around us, and the place it last held says
+# nothing about which side of us he is now (critic, 19 Sep: "Attack." or
+# "Keep fighting." was chosen off a place that never expired).
+POSITION_FRESH_S = 30.0
+
 # ...and a stop nobody has seen either way for this long is over. A car can
 # leave the visible top eight while standing - `race/profile.py` has the
 # measured account of why that is the normal case rather than the exception -
@@ -108,6 +116,13 @@ MIN_WATCHED_S = 15.0
 # misread. See `Roster.drivers`.
 MIN_SIGHTINGS = 20
 
+# **A tyre read must come from THIS visit's own disc** - same x, same size,
+# within this many pixels. On Sardegna Rd 9 every one of 1,681 real discs sat
+# at x 290-294 (rivals) or 373-377 (ours), 26-29 by 27-30 px, and none of 96
+# scenery "discs" that reached a pit row matched both (critic, 19 Sep 2026).
+# The disc a visit is held to is the one on its first frame whose FUEL read.
+DISC_ANCHOR_PX = 2
+
 # ...and the compound letter needs this many agreeing frames. One frame is not
 # a vote, and the tyre a rival fitted is a fact about his whole remaining race.
 MIN_COMPOUND_READS = 2
@@ -125,6 +140,16 @@ class Visit:
     # True where the car was already showing columns the first time this
     # watcher managed to read the board - so the fill may have begun unseen.
     partial: bool = False
+    # `(x0, width, height)` of this visit's disc, fixed on the first frame
+    # whose fuel read - see `DISC_ANCHOR_PX`. No compound is counted before.
+    disc_at: tuple | None = None
+    # The fuel read on the frame of the LAST compound read, and when it was
+    # taken - what `left_on` checks a flip against.
+    last_compound_l: int | None = None
+    last_compound_s: float | None = None
+    # Set by `_close` only when his row came back WITHOUT columns - the one
+    # close whose last frame is the lane exit, where the disc flips.
+    closed_on_absence: bool = False
 
     @property
     def entry_l(self) -> int | None:
@@ -186,14 +211,35 @@ class Visit:
 
     @property
     def left_on(self) -> str | None:
-        """The last compound read, as he left the lane, or `None`.
+        """The compound read as he left the lane, or `None`.
 
         **One frame by the nature of the signal**, so there is no vote here:
-        the disc flips as the car exits, and at the old 2 s grab it was
-        usually missed entirely. What stands behind a single read is the
-        reader itself, which refuses where colour and glyph disagree.
+        the disc flips as the car exits and is on screen for 0.25-0.35 s
+        (measured at 60 fps, Sardegna Rd 9) - one 0.5 s grab at most. The
+        reader alone cannot stand behind one frame: its glyph bank holds only
+        "S", so M, H, W and I are colour alone, and 197 of 211 scenery reads
+        on that race came back H. So a single read is the tyre he left on
+        only where all of this holds (critic, 19 Sep 2026):
+
+        * it came from this visit's own disc (`DISC_ANCHOR_PX`, at the read);
+        * it is the TAIL - taken on the last frame his columns were seen;
+        * the visit closed on ABSENCE, his row back without columns. A visit
+          closed on the silence clock or at the flag ended mid-stand, and its
+          last read is the arrival disc, not the flip;
+        * where the fuel read on that frame, it is the fill's final figure -
+          a flip mid-fill is not the exit.
+
+        Anything short of that is `None`: "no change seen", which is never
+        "no change".
         """
-        return self.compounds[-1] if self.compounds else None
+        if not self.compounds or not self.closed_on_absence:
+            return None
+        if self.last_compound_s is None or self.last_compound_s != self.last_s:
+            return None
+        if (self.last_compound_l is not None
+                and self.last_compound_l != self.exit_l):
+            return None
+        return self.compounds[-1]
 
     @property
     def compound_changed(self) -> bool | None:
@@ -356,6 +402,10 @@ class PitWall:
         # showed him out of the lane. What `Entered.ahead_at_entry` is from.
         self._clean_place: dict[int, tuple[int, int | None]] = {}
         self._position: dict[int, int] = {}
+        # When each `_position` was last read - see `POSITION_FRESH_S`.
+        self._position_at: dict[int, float] = {}
+        # The screen row each driver was last read on - see the absence rule.
+        self._row_y: dict[int, int] = {}
         self._pitted: set[int] = set()
         self._stops: list[Seen] = []
         # The two intervals GT7 publishes either side of us, per lap. Kept as
@@ -384,7 +434,10 @@ class PitWall:
                        "gaps": 0, "pit_cols": 0, "own_driver": 0, "fuel_read": 0,
                        # A visit the absence rule closed while its tank was
                        # still rising - see `Visit.rising_when_last_read`.
-                       "closed_mid_rise": 0}
+                       "closed_mid_rise": 0,
+                       # A tyre read on his row from a disc that is not his
+                       # visit's own - scenery, see `DISC_ANCHOR_PX`.
+                       "disc_off_anchor": 0}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -451,7 +504,8 @@ class PitWall:
         if (self._on_enter is None or driver in self._announced
                 or not self._is_a_stop(visit)
                 or (own is not None and driver == own)
-                or self._roster.sightings(driver) < self._min_sightings):
+                or self._roster.spaced_sightings(driver)
+                < self._min_sightings):
             return
         name = self._name_or_mint(driver)
         if not name:
@@ -504,6 +558,8 @@ class PitWall:
         self._seen_clean.clear()
         self._clean_place.clear()
         self._position.clear()
+        self._position_at.clear()
+        self._row_y.clear()
         self._pitted.clear()
         # **Or every driver's entry is announced once per APP RUN.** Rule 11:
         # anything cached across a session boundary needs an explicit reset,
@@ -525,8 +581,13 @@ class PitWall:
     def stops(self) -> list[Seen]:
         return list(self._stops)
 
-    def positions(self) -> dict[str, int]:
+    def positions(self, *, max_age_s: float | None = None,
+                  now: float | None = None) -> dict[str, int]:
         """Board position per named driver, best effort.
+
+        `max_age_s` leaves out a place not re-read in that long - the race
+        asks with `POSITION_FRESH_S`. Without it every place ever read is
+        returned, which is what the per-lap archive files.
 
         **Snapshotted before it is walked.** `_position` is written on the
         sampler's worker thread and read on the Qt one, so iterating it live
@@ -536,7 +597,12 @@ class PitWall:
         happen - the worst kind of failure, because nothing says it failed.
         """
         out = {}
+        clock = time.monotonic() if now is None else now
+        read_at = dict(self._position_at)
         for driver, place in list(self._position.items()):
+            if max_age_s is not None and clock - read_at.get(
+                    driver, float("-inf")) > max_age_s:
+                continue
             name = self._roster.name_of(driver)
             if name:
                 out[name] = place
@@ -579,13 +645,16 @@ class PitWall:
         counts = getattr(self._roster, "counts", None) or {}
         return ("pit-wall: %d frames -> ladder %d -> own row %d -> rows %d "
                 "-> any named %d -> our row %d -> gaps %d -> pit columns %d "
-                "-> fuel read %d | %d driver%s placed, %d stop%s filed | "
+                "-> fuel read %d | %d driver%s placed, %d stop%s filed, "
+                "%d closed mid-rise, %d off-disc tyre read%s | "
                 "roster rows matched %d, founded %d, contested %d" % (
                     self._frames, s["ladder"], s["own_row"], s["rows"],
                     s["named"], s["own_driver"], s["gaps"], s["pit_cols"],
                     s["fuel_read"],
                     len(self._position), "" if len(self._position) == 1 else "s",
                     len(self._stops), "" if len(self._stops) == 1 else "s",
+                    s["closed_mid_rise"], s["disc_off_anchor"],
+                    "" if s["disc_off_anchor"] == 1 else "s",
                     counts.get("matched", 0), counts.get("founded", 0),
                     counts.get("contested", 0)))
 
@@ -622,16 +691,21 @@ class PitWall:
         frame_rows: list[tuple[int, int | None]] = []
         # **The whole board at once**, so no two rows of one frame can come
         # back as one driver - see `Roster.see_frame`.
-        resolved = self._roster.see_frame([row.name for row in rows])
+        resolved = self._roster.see_frame([row.name for row in rows],
+                                          now=now)
         own_row_place = next((place for place, row in enumerate(rows, start=1)
                               if row.is_own), None)
+        unread_ys: list[int] = []
         for place, (row, driver) in enumerate(zip(rows, resolved), start=1):
             frame_rows.append((place, driver))
             if driver is None:
+                unread_ys.append(row.y)
                 continue
             ids[row.y] = driver
+            self._row_y[driver] = row.y
             identified.add(driver)
             self._position[driver] = place
+            self._position_at[driver] = now
 
         # **Before the pit rows, because the entry call needs it.** It was
         # computed only for the gaps, below, which is after every announcement
@@ -683,13 +757,6 @@ class PitWall:
                 visit = Visit(driver=driver, lap=lap, started_s=now,
                               partial=driver not in self._seen_clean)
                 self._visits[driver] = visit
-                # The OPEN is logged too, so a stop that is dropped later has
-                # a beginning in the log to be read against. Before this, a
-                # visit could open, fragment and vanish with no trace that it
-                # had ever been seen.
-                _log.info("pit-wall: %s in the lane on lap %s%s",
-                          self._roster.name_of(driver) or f"driver {driver}",
-                          lap, " (joined mid-fill)" if visit.partial else "")
             visit.last_s = now
             x0, y0, x1, y1 = pit.fuel_box
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
@@ -698,9 +765,26 @@ class PitWall:
                 visit.readings.append(litres)
             self._announce_entry(driver, visit, lap, own)
             dx0, dy0, dx1, dy1 = pit.disc
-            code = read_compound(frame[dy0:dy1 + 1, dx0:dx1 + 1])
-            if code:
-                visit.compounds.append(code)
+            shape = (dx0, dx1 - dx0 + 1, dy1 - dy0 + 1)
+            if visit.disc_at is None and litres is not None:
+                visit.disc_at = shape
+                # **The OPEN is logged, on the first frame a fuel figure
+                # backs it.** Logged on the first disc it said "in the lane"
+                # 228 times in a race of 17 stops - scenery (critic, 19 Sep).
+                # Logged at all so a stop dropped later has a beginning.
+                _log.info("pit-wall: %s (driver %d) in the lane on lap %s%s",
+                          self._roster.name_of(driver) or "unnamed", driver,
+                          lap, " (joined mid-fill)" if visit.partial else "")
+            if visit.disc_at is not None:
+                if all(abs(a - b) <= DISC_ANCHOR_PX
+                       for a, b in zip(shape, visit.disc_at)):
+                    code = read_compound(frame[dy0:dy1 + 1, dx0:dx1 + 1])
+                    if code:
+                        visit.compounds.append(code)
+                        visit.last_compound_l = litres
+                        visit.last_compound_s = now
+                else:
+                    self._stage["disc_off_anchor"] += 1
 
         # **The gaps are noted AFTER the rows are identified**, so each trend
         # knows whose gap it is holding. A trend that does not know that
@@ -749,32 +833,33 @@ class PitWall:
             if driver in in_lane:
                 continue
             if driver not in identified:
-                # He was not on the board this frame, so this frame says
-                # nothing about whether he is standing in his box.
+                # He was not identified this frame, so this frame says
+                # nothing about whether he is standing in his box. **Where
+                # the row he was last read on did not read, it may still be
+                # him in his box - so the run breaks.** It used to be skipped
+                # with the count kept, and one washed-out frame, five seconds
+                # of a crew hiding the names and two more closed a 19 -> 58 L
+                # fill mid-stand on 1 s of real absence (critic, 19 Sep,
+                # `interleave.py`). Only HIS row: breaking on any unread row
+                # was tried and, replayed over Sardegna Rd 9, held two real
+                # stops open 53 s and 90+ s past the exit - unread rows are
+                # everywhere. Off the visible board, the count stands.
+                last_y = self._row_y.get(driver)
+                if last_y is not None and any(
+                        abs(y - last_y) <= ROW_MATCH_TOL for y in unread_ys):
+                    self._absent[driver] = 0
+                    self._absent_since.pop(driver, None)
                 continue
             self._absent[driver] = self._absent.get(driver, 0) + 1
             since = self._absent_since.setdefault(driver, now)
             if (self._absent[driver] >= CLOSE_AFTER_CLEAN_FRAMES
                     and now - since >= CLOSE_AFTER_CLEAN_S):
-                visit = self._visits.get(driver)
-                if visit is not None and visit.rising_when_last_read:
-                    # Counted and said, not prevented - see
-                    # `Visit.rising_when_last_read` for why the readings
-                    # alone cannot decide this. The exit is already filed as
-                    # a lower bound (`stale=True`), which is honest; this is
-                    # the tally that says how often that bound is a fill cut
-                    # short rather than a car that left.
-                    self._stage["closed_mid_rise"] += 1
-                    _log.info(
-                        "pit-wall: %s closed on absence with the tank still "
-                        "rising (%s L at the last read) - exit filed as a "
-                        "lower bound",
-                        self._roster.name_of(driver) or f"driver {driver}",
-                        visit.readings[-1])
                 # **Closed on the clock, not on seeing him leave.** The exit
                 # figure is therefore the highest reading anyone got, which is
-                # a lower bound on the fill rather than the fill.
-                done = self._close(driver, stale=True)
+                # a lower bound on the fill rather than the fill. It is the
+                # only close whose last frame is the lane exit, though, so the
+                # only one `Visit.left_on` may read a flip from.
+                done = self._close(driver, stale=True, on_absence=True)
                 if done is not None:
                     closed.append(done)
         return closed + self._close_stale(now)
@@ -861,7 +946,8 @@ class PitWall:
             return False
         return max(0.0, visit.last_s - visit.started_s) >= MIN_WATCHED_S
 
-    def _close(self, driver: int, *, stale: bool = False) -> Seen | None:
+    def _close(self, driver: int, *, stale: bool = False,
+               on_absence: bool = False) -> Seen | None:
         # **Per VISIT.** Keyed per driver for the session, a two-stop rival's
         # second entry - the one that decides the end of the race - was silent.
         self._announced.discard(driver)
@@ -929,10 +1015,12 @@ class PitWall:
         # four being two-reading fragments that had founded clusters of their
         # own - and each took a driver handle with it, so the book would have
         # carried four people who never existed into the next race.
-        if self._roster.sightings(driver) < self._min_sightings:
+        # Counted at most once per `roster.SIGHTING_SPACING_S`, so the floor
+        # means the same at a 0.5 s grab as at the 2 s it was set at.
+        if self._roster.spaced_sightings(driver) < self._min_sightings:
             _log.info("pit-wall: a stop from a cluster seen only %d times is "
                       "not filed - that is a misread, not a driver",
-                      self._roster.sightings(driver))
+                      self._roster.spaced_sightings(driver))
             return None
         watched = max(0.0, visit.last_s - visit.started_s)
         if watched < MIN_WATCHED_S:
@@ -949,16 +1037,34 @@ class PitWall:
         # 19 L out on two readings - a fragment of a stop that really ran to
         # 83 L. Filed, because he did stop and that is a fact worth keeping,
         # but kept out of anything that computes a rate.
+        visit.closed_on_absence = on_absence
+        if stale and visit.rising_when_last_read:
+            # Counted and said, not prevented - see
+            # `Visit.rising_when_last_read` for why the readings alone cannot
+            # decide this. Counted HERE, where a stop is actually filed and
+            # on every stale close - the absence rule's and the silence
+            # clock's - and reported in `health()` (critic, 19 Sep: it was
+            # counted on absence only, including closes that filed nothing,
+            # and printed nowhere).
+            self._stage["closed_mid_rise"] += 1
+            _log.info("pit-wall: %s (driver %d) closed %s with the tank still "
+                      "rising (%s L at the last read) - exit filed as a lower "
+                      "bound", name, driver,
+                      "on absence" if on_absence else "on the clock",
+                      visit.readings[-1])
         stop = visit.as_stop()
         no_fill = (stop.litres is not None and stop.litres <= 0)
         seen = Seen(driver=name, driver_id=driver,
                     stop=stop, reads=len(visit.readings),
-                    compound_reads=len(visit.compounds),
+                    # Rule 4: the count behind `stop.compound`. A change seen
+                    # at the exit rests on ONE frame, not on the vote.
+                    compound_reads=(1 if visit.compound_changed
+                                    else len(visit.compounds)),
                     watched_s=watched, partial=visit.partial or no_fill,
                     exit_is_a_bound=bool(stale))
         self._stops.append(seen)
-        _log.info("pit-wall: %s stopped - in %s L, out %s L, %d reads over "
-                  "%.0f s%s", seen.driver or f"driver {driver}",
+        _log.info("pit-wall: %s (driver %d) stopped - in %s L, out %s L, %d "
+                  "reads over %.0f s%s", seen.driver or "unnamed", driver,
                   visit.entry_l, visit.exit_l, seen.reads, seen.watched_s,
                   " (joined mid-fill)" if seen.partial else "")
         if self._on_stop is not None:
@@ -980,4 +1086,4 @@ class PitWall:
             min_sightings = self._min_sightings
         return [(d, self._roster.name_of(d) or "")
                 for d in list(self._roster.drivers(
-                    min_sightings=min_sightings))]
+                    min_sightings=min_sightings, spaced=True))]

@@ -128,6 +128,16 @@ NAME_SHAPE = (64, 16)
 # night was NOT this threshold: see `PitWall._neighbour`.
 SAME_NAME_MAX_DIFF = 0.58
 
+# **A sighting counts toward "is this a driver" at most once in this long.**
+# Every sighting floor in the pit wall (`MIN_SIGHTINGS` = 20) was set when the
+# board was grabbed every 2 s, so twenty meant forty seconds of being there.
+# At a 0.5 s grab it means ten, and a misread cluster that held for ten
+# seconds filed a stop as "Car #6" off TommyTbone's readings (critic, 19 Sep
+# 2026, Sardegna Rd 9 replayed at 0.5 s). Counted on the clock, the floor
+# keeps its meaning whatever the grab rate. `seen` still counts every frame,
+# because it weights the exemplar and that should use every read.
+SIGHTING_SPACING_S = 2.0
+
 # How far a row's y may sit from a pit disc's y and still be the same row.
 ROW_MATCH_TOL = 8
 
@@ -337,7 +347,8 @@ class Roster:
         for label, bits in (seed or {}).items():
             array = np.asarray(bits, dtype=bool)
             self._groups.append({"bits": array, "sum": array.astype(float),
-                                 "seen": 1, "label": label})
+                                 "seen": 1, "spaced": 1, "spaced_at": None,
+                                 "label": label})
 
     def _resolve(self, index: int) -> int:
         # Under the lock: `see()` rewrites `_alias` on the sampler thread
@@ -388,6 +399,7 @@ class Roster:
                 keep, drop = other, index
             winner, loser = self._groups[keep], self._groups[drop]
             winner["seen"] += loser["seen"]
+            winner["spaced"] = winner.get("spaced", 0) + loser.get("spaced", 0)
             winner["sum"] = winner["sum"] + loser["sum"]
             winner["bits"] = (winner["sum"] / winner["seen"]) > 0.5
             winner["label"] = winner["label"] or loser["label"]
@@ -412,7 +424,8 @@ class Roster:
         """
         return self.see_frame([bits])[0]
 
-    def see_frame(self, bitmaps) -> list[int | None]:
+    def see_frame(self, bitmaps, *,
+                  now: float | None = None) -> list[int | None]:
         """Every row of ONE frame, resolved together: a driver id per row.
 
         **Two rows of one frame are two cars**, so no id is handed to two of
@@ -464,12 +477,18 @@ class Roster:
                 if choice is None:
                     self._groups.append({"bits": rows[r],
                                          "sum": rows[r].astype(float),
-                                         "seen": 1, "label": None})
+                                         "seen": 1, "spaced": 1,
+                                         "spaced_at": now, "label": None})
                     choice = len(self._groups) - 1
                     self.counts["founded"] += 1
                 else:
                     group = self._groups[choice]
                     group["seen"] += 1
+                    last = group.get("spaced_at")
+                    if (now is None or last is None
+                            or now - last >= SIGHTING_SPACING_S):
+                        group["spaced"] = group.get("spaced", 0) + 1
+                        group["spaced_at"] = now
                     group["sum"] = group["sum"] + rows[r]
                     group["bits"] = (group["sum"] / group["seen"]) > 0.5
                     self.counts["matched"] += 1
@@ -516,7 +535,15 @@ class Roster:
                 return 0
             return self._groups[self._resolve(driver_id)]["seen"]
 
-    def drivers(self, min_sightings: int = 1) -> list[int]:
+    def spaced_sightings(self, driver_id: int) -> int:
+        """Sightings at most one per `SIGHTING_SPACING_S` - see there."""
+        with self._lock:
+            if driver_id is None or not 0 <= driver_id < len(self._groups):
+                return 0
+            return self._groups[self._resolve(driver_id)].get("spaced", 0)
+
+    def drivers(self, min_sightings: int = 1, *,
+                spaced: bool = False) -> list[int]:
         """The ids that are actually drivers, commonest first.
 
         **A driver appears on nearly every frame; a bad read appears once.** The
@@ -531,8 +558,9 @@ class Roster:
         """
         with self._lock:
             live = [i for i in range(len(self._groups)) if i not in self._alias]
+            key = "spaced" if spaced else "seen"
             return sorted((i for i in live
-                           if self._groups[i]["seen"] >= min_sightings),
+                           if self._groups[i].get(key, 0) >= min_sightings),
                           key=lambda i: -self._groups[i]["seen"])
 
     def exemplar_of(self, driver_id: int):

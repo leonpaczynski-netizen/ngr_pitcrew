@@ -476,6 +476,7 @@ def test_the_entry_says_whether_he_was_ahead_of_us_when_he_went_in():
     seen = []
     wall = a_watching_wall(seen)
     wall._roster.sightings = lambda driver: 99
+    wall._roster.spaced_sightings = lambda driver: 99
     # driver -> (his place, our place) the last time he was seen out.
     wall._clean_place = {11: (2, 5), 12: (7, 5), 13: (3, None)}
     for driver, litres in ((11, 20), (12, 30), (13, 40)):
@@ -717,3 +718,49 @@ def test_at_the_old_grab_rate_the_close_is_exactly_what_it_was():
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
         closed += wall.see(a_frame(), now=clock.tick())
     assert closed, "three frames at 2 s is still a departure"
+
+
+def test_a_place_not_read_again_goes_stale():
+    """Critic, 19 Sep: `_position` never expired, so a car long gone from the
+    rows around us kept the place that chose "Attack." or "Keep fighting."
+    for him. The race asks for fresh places only."""
+    from pitcrew.race.pit_wall import POSITION_FRESH_S
+
+    first = PitWall()
+    first.see(a_frame(), now=100.0)
+    ids = first.roster.drivers(min_sightings=1)
+    first.roster.label(ids[0], "Rocky")
+    wall = PitWall(Roster(seed=first.roster.exemplars()))
+    wall.see(a_frame(), now=100.0)
+    assert "Rocky" in wall.positions(max_age_s=POSITION_FRESH_S, now=110.0)
+    later = 100.0 + POSITION_FRESH_S + 1
+    assert "Rocky" not in wall.positions(max_age_s=POSITION_FRESH_S, now=later)
+    # The archive's unfiltered view keeps every place it ever read.
+    assert "Rocky" in wall.positions()
+
+
+def test_a_run_of_absent_frames_is_broken_by_a_frame_his_name_did_not_read():
+    """Critic, 19 Sep (`interleave.py`): frames where his name did not read
+    were skipped with the absent count KEPT, so absences either side of a
+    spell of hidden names added up and closed a fill mid-stand. A frame that
+    cannot see him now restarts the run."""
+    from pitcrew.race.pit_wall import PitWall
+
+    wall = PitWall()
+    wall._visits[7] = Visit(driver=7, lap=3, started_s=0.0,
+                            readings=[19, 58], last_s=20.0)
+    wall._absent[7] = CLOSE_AFTER_CLEAN_FRAMES - 1
+    wall._absent_since[7] = 0.0
+    wall._row_y[7] = 5000                  # last read far off this board
+    # Unread rows elsewhere say nothing about him either.
+    wall.see(a_frame(names=False), now=29.0)
+    assert wall._absent[7] == CLOSE_AFTER_CLEAN_FRAMES - 1
+    # Every row read and he is not among them: off the visible board, which
+    # is the normal case just after an exit. The run stands.
+    wall.see(a_frame(), now=30.0)
+    assert wall._absent[7] == CLOSE_AFTER_CLEAN_FRAMES - 1
+    # A frame whose names did not read, one on the row he was last read on:
+    # that may be him, still in his box.
+    wall._row_y[7] = TOP                   # the first row's centre
+    wall.see(a_frame(names=False), now=31.0)
+    assert wall._absent.get(7, 0) == 0

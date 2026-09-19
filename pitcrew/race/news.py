@@ -316,31 +316,6 @@ def catch_reason(side: str, lap: int, before_flag: bool) -> str:
     return f"Not on {whom} before the flag."
 
 
-# The sentence in front of a rival's cliff lap - one clip, the lap after it
-# played from the number words the pack already holds.
-TYRES_GO_OFF = "On his last stop, his tyres go off around lap"
-KEEP_FIGHTING = "Keep fighting."
-
-
-def catch_tyres_clause(side: str, cliff_lap: int) -> str:
-    """When the chasing car's set goes off, as our model sees it.
-
-    The driver, 19 Sep 2026: *"Rocky is catching but based on his last stop
-    his tyres will be off the cliff in the last lap so keep fighting."*
-
-    **"On his last stop" is the provenance, said in his terms** (rule 5).
-    It names exactly what the figure rests on - the lap the wall saw him
-    stop - and "go off around" is a projection by its grammar, never a
-    reading. The full model and its two assumptions ride in `Call.derived`.
-
-    "Keep fighting." only for a car BEHIND: it is the instruction that
-    follows from a chaser whose tyres give out before the flag. A car ahead
-    going off is simply news - there is nothing to hold.
-    """
-    clause = f"{TYRES_GO_OFF} {cliff_lap}."
-    return f"{clause} {KEEP_FIGHTING}" if side == "behind" else clause
-
-
 def if_they_stop(required: int) -> str:
     """The assumption behind "effectively", said with it (rule 5)."""
     if required == 1:
@@ -1066,8 +1041,16 @@ class RaceNews:
                 self._gap_lap = lap_key
         return self._offer(call, book)
 
-    def pace_call(self, state, now: int, *, lane=None,
-                  tyres_of=None) -> Call | None:
+    def neighbour(self, side: str) -> str | None:
+        """The name of the car directly `side` of us on the board, or None.
+
+        Read under the lock the wall's thread writes it under. Used by the
+        tyre call, which is about the car beside us rather than about a gap.
+        """
+        with self._lock:
+            return self._neighbour_name.get(side)
+
+    def pace_call(self, state, now: int, *, lane=None) -> Call | None:
         """A pace difference to a neighbour that beat the noise. See
         `pace_verdict` for the test.
 
@@ -1111,19 +1094,8 @@ class RaceNews:
                 trend, side, now_key=now_key, flag_key=_flag_key(state),
                 dirty_keys=frozenset(dirty | his))
             if found is not None:
-                # **His set, as our model sees it** - see `rival_tyres`. Asked
-                # by NAME, because the rival record is filed by name and the
-                # catch subject is a board handle; an unnamed car has no stop
-                # on file to project from.
-                tyres = None
-                if tyres_of is not None and a_person(name) is not None:
-                    try:
-                        tyres = tyres_of(name)
-                    except Exception:               # noqa: BLE001
-                        tyres = None
                 call = self._catch_call(state, found, name, said_catch.get(side),
-                                        jumpy.get(subject), now_key,
-                                        tyres=tyres)
+                                        jumpy.get(subject), now_key)
                 if call is not None:
                     return call
                 continue
@@ -1168,7 +1140,7 @@ class RaceNews:
 
     def _catch_call(self, state, found: CatchProjection, name: str | None,
                     said: tuple | None, jumpy: str | None,
-                    now_key: int, tyres=None) -> Call | None:
+                    now_key: int) -> Call | None:
         """The projection as a line, when it is news.
 
         **News is a change the driver would drive differently for**, and
@@ -1186,12 +1158,21 @@ class RaceNews:
         `Call.spoken` ends it "Unconfirmed." (§5.5).
         """
         side = found.side
-        screen_offset = max(0, state.lap_on_screen() - state.lap_now())
+        screen_offset = state.lap_on_screen() - state.lap_now()
+        if screen_offset < 0:
+            # GT7's HUD behind our drop-corrected count: the correction is
+            # the wrong reference, and "around lap N" off it would name a lap
+            # he cannot see. Not clamped to 0 - that is rule 9.
+            log("race").warning(
+                "news: catch call withheld - HUD lap %s is behind the "
+                "corrected count %s", state.lap_on_screen(), state.lap_now())
+            return None
         lap = found.catch_lap(screen_offset)
         doubts = []
         if not found.sure:
             doubts.append("the range straddles the flag")
-        if trend_words(side, found.board_rate, found.changes + 1) is None:
+        board_says = trend_words(side, found.board_rate, found.changes + 1)
+        if board_says is None:
             doubts.append("the board's own rule still reads steady")
         if a_person(name) is None:
             doubts.append("unnamed car")
@@ -1210,27 +1191,24 @@ class RaceNews:
             confirmed = confidence == MEDIUM and said_confidence == LOW
             if not (flipped or moved or confirmed) or said_key == now_key:
                 return None
-        reason = catch_reason(side, lap, before)
-        derived = catch_model(found, screen_offset=screen_offset)
-        # **His tyres, when they go before the flag** - the half of this call
-        # he asked for as critical. Only a cliff still AHEAD of now and at or
-        # before the flag is news: one already passed is a claim the model
-        # can no longer check, and one after the flag changes nothing he does.
-        if (tyres is not None and now_key < tyres.cliff_key
-                and tyres.cliff_key <= found.flag_key):
-            reason = (f"{reason} "
-                      f"{catch_tyres_clause(side, tyres.cliff_lap(screen_offset))}")
-            derived = f"{derived}; {tyres.model()}"
+        # **The figure he hears is the board's whenever the board is saying
+        # one**: the board and push-to-talk said "catching 1.0 s a lap" off
+        # `closing_s_per_lap` while this said "0.9" off the mean of the same
+        # changes, same car, same lap (critic, 19 Sep) - two rates for one
+        # car is rule 13. While the board still reads steady it shows no
+        # figure to contradict, and the mean - the rate the lap is projected
+        # from - is said with the hedge above. Both are in `derived`.
+        spoken_rate = found.board_rate if board_says is not None else found.rate
         call = Call(
-            PACE, state.lap, pace_sentence(side, name, found.rate),
-            reason, confidence,
+            PACE, state.lap, pace_sentence(side, name, spoken_rate),
+            catch_reason(side, lap, before), confidence,
             why_spoken=("catch projection: "
                         + ("; ".join(doubts) if doubts else
                            "range sure, board agrees, named car")),
-            derived=derived,
+            derived=catch_model(found, screen_offset=screen_offset),
             tag=f"{PACE}:{side}:{found.subject}:catch")
         entry = (found.subject, before, lap, confidence, now_key)
-        pace_entry = (found.subject, True, round(found.rate, 1), now_key)
+        pace_entry = (found.subject, True, round(spoken_rate, 1), now_key)
 
         def book(side=side, entry=entry, pace_entry=pace_entry):
             with self._lock:

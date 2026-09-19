@@ -68,6 +68,13 @@ class RivalTyres:
     samples: int            # the stints behind that rate (rule 4)
     worn_now: float         # rate x laps on the set, modelled
     cliff_key: float        # the completed-lap key where he reaches the cliff
+    # The lap the wall filed his stop on - the key of this set, so the call
+    # about it is made once per set and not once per crossing.
+    stop_lap: int = 0
+    # The race's tyre-wear multiplier the rate was looked up at, or None where
+    # the race names none - said in the model, because §5.2 is only honoured
+    # where both sides of the comparison are known.
+    multiplier: str | None = None
     # True where the disc was SEEN to change as he left the lane, so the
     # compound is a reading; False where it is the arrival tyre assumed kept.
     compound_seen: bool = False
@@ -82,14 +89,26 @@ class RivalTyres:
         return math.floor(self.cliff_key) + int(screen_offset)
 
     def model(self) -> str:
-        """The whole assumption, for `Call.derived` and the audit afterwards."""
+        """The whole assumption, for `Call.derived` and the audit afterwards.
+
+        **"readings", not "stints".** `Knowledge.wear_per_lap`'s count is the
+        gauge readings behind the rate - Sardegna's RM rests on 24 of them
+        from two stints - and this said "24 stints", overstating the evidence
+        twelvefold (rule 4).
+        """
+        mult = (f"x{self.multiplier}" if self.multiplier
+                else "a multiplier the race does not name [ASSUMED]")
         return (f"[DERIVED] {self.driver}'s {self.compound}: "
                 f"{self.laps_on_set:.0f} laps on the set since his stop, "
                 f"x our {self.compound} rate {self.rate:.3f} worn/lap "
-                f"({self.samples} stint{'' if self.samples == 1 else 's'}) = "
+                f"({self.samples} gauge reading"
+                f"{'' if self.samples == 1 else 's'}, at {mult}) = "
                 f"{self.worn_now:.0%} now, the cliff ({CLIFF_WORN:.0%}) at "
-                f"lap key {self.cliff_key:.1f}. [ASSUMED] his car wears the "
-                f"set as ours does; "
+                f"lap key {self.cliff_key:.1f}. [ASSUMED] linear at the "
+                f"briefed rate - where the fitted wear speeds up late the "
+                f"cliff comes sooner than this; [ASSUMED] his car wears the "
+                f"set as ours does; [ASSUMED] he fitted a fresh set at this "
+                f"stop; "
                 + (f"[READ] he left on {self.compound} - the disc changed as "
                    f"he exited the lane" if self.compound_seen else
                    f"[ASSUMED] he left on the {self.compound} he arrived on - "
@@ -122,7 +141,7 @@ def full_code(letter: str | None, our_compound: str | None) -> str | None:
 
 
 def rival_tyres(rival, *, now_key: int | None, our_compound: str | None,
-                wear_rate) -> RivalTyres | None:
+                wear_rate, multiplier: str | None = None) -> RivalTyres | None:
     """`rival`'s set as our model sees it, or None where it cannot be said.
 
     `wear_rate(compound) -> (rate, samples)` is `Knowledge.wear_per_lap` with
@@ -155,4 +174,42 @@ def rival_tyres(rival, *, now_key: int | None, our_compound: str | None,
         samples=int(samples or 0),
         worn_now=float(rate) * laps_on_set,
         cliff_key=float(stop.lap) + CLIFF_WORN / float(rate),
-        compound_seen=bool(getattr(stop, "tyres_changed", None)))
+        compound_seen=bool(getattr(stop, "tyres_changed", None)),
+        stop_lap=int(stop.lap),
+        multiplier=None if multiplier is None else str(multiplier))
+
+
+# ---------------------------------------------------------------- the words
+#
+# **Its own call, unnamed, and short** (after the critic pass of 19 Sep). It
+# first rode on the catch call, which (a) speaks only when the catch CHANGES,
+# so a stop filed after the catch was confirmed was never mentioned, and it
+# went silent inside 1.5 s - exactly when the car is on the bumper; (b) names
+# the car, so no clip can hold it and the line was synthesised live; and (c)
+# was already long, which put the instruction fourth. "The car behind" is
+# true at the moment it is said and plays from the pack.
+
+CAR_BEHIND = "The car behind's tyres go off around lap"
+CAR_AHEAD = "The car ahead's tyres go off around lap"
+KEEP_FIGHTING = "Keep fighting."
+
+
+def tyres_words(side: str, cliff_lap: int, seen: bool) -> tuple[str, str, bool]:
+    """`(call, reason, firm)` for a neighbour's set going off.
+
+    **"Keep fighting." only where it is earned** - a car BEHIND, and his
+    compound SEEN changing as he left the lane. It is an instruction to hold a
+    place against a car that will fade, and on an assumed compound the fade
+    can be a lap or more wrong: arriving on RM and leaving on RH, the RM rate
+    puts the cliff before the flag and the RH rate after it. Where the
+    compound is assumed he gets the fact alone, and `firm` False makes the
+    call LOW, which `Call.spoken` ends "Unconfirmed." (§5.5).
+
+    A car AHEAD going off is news with nothing to hold, so it is never an
+    instruction.
+    """
+    head = CAR_BEHIND if side == "behind" else CAR_AHEAD
+    fact = f"{head} {cliff_lap}."
+    if side == "behind" and seen:
+        return KEEP_FIGHTING, fact, True
+    return fact, "", seen
