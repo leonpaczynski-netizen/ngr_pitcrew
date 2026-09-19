@@ -491,6 +491,9 @@ def test_a_crossing_failure_still_stands_the_session_down():
     assert sampler.stood_down
 
 
+WAIT_UNDER_LOAD_S = 15.0
+
+
 def test_a_fresh_set_cuts_the_series():
     """The gauge only goes backwards for one reason, and a slope fitted across
     a tyre change describes neither set."""
@@ -499,13 +502,17 @@ def test_a_fresh_set_cuts_the_series():
     source = FakeSource((worn, None))
     sampler = LiveWearSampler(source, lambda lap, wear: None, interval_s=0.02)
     sampler.start()
+    # The deadlines are how long a LOADED machine may take, not how long this
+    # should take: each wait ends the moment its condition holds (~50 ms
+    # alone). At 2 s it failed once under the full suite with one reading of
+    # the two it wanted - the sampler thread starved, not the logic wrong.
     try:
-        deadline = time.time() + 2.0
+        deadline = time.time() + WAIT_UNDER_LOAD_S
         while time.time() < deadline and len(sampler.series) < 2:
             time.sleep(0.01)
         assert len(sampler.series) >= 2
         source.results = [(fresh, None)]
-        deadline = time.time() + 2.0
+        deadline = time.time() + WAIT_UNDER_LOAD_S
         # Cut on the SECOND fresh reading (7 Sep 2026): the series restarts
         # with both of them, never with one.
         while time.time() < deadline and not (

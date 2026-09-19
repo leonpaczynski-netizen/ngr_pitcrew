@@ -430,14 +430,41 @@ def analyse(model: CornerModel, laps: list[tuple[CountedLap, int]],
 
 # ------------------------------------------------------------- store binding
 
-def from_store(store, event_id: int, *, session_ids=None) -> Debrief | None:
+class DebriefCancelled(Exception):
+    """`from_store` was stood down part-way - see its `cancelled`."""
+
+
+class _Cancellable:
+    """The store, refusing every call once `cancelled()` is true. The decode
+    of each lap goes through a store call, so a stand-down takes effect
+    within one lap's decode (~70 ms)."""
+
+    def __init__(self, store, cancelled) -> None:
+        self._store, self._cancelled = store, cancelled
+
+    def __getattr__(self, name):
+        if self._cancelled():
+            raise DebriefCancelled(name)
+        return getattr(self._store, name)
+
+
+def from_store(store, event_id: int, *, session_ids=None,
+               cancelled=None) -> Debrief | None:
     """Build the debrief for an event's practice running.
 
     Returns None where there is no corner model for the circuit — which is
     honest, and is what happened at Daytona until one was built on 1 Sep. The
     pace and fuel halves would still compute, but a debrief whose corner half
     is silently absent reads as "nothing to say about your driving".
+
+    `cancelled`, if given, is asked before every store call and before the
+    corner analysis; once it answers True this raises `DebriefCancelled`.
+    The app stands the debrief down when the next session opens - it decodes
+    every practice lap (12.5 s of 18 s on a 176-lap event), and its answer
+    belongs to the run that closed.
     """
+    if cancelled is not None:
+        store = _Cancellable(store, cancelled)
     from pitcrew.analysis.resolve import circuit_key
     from pitcrew.analysis.runs import (
         REASON_IN_LAP,
@@ -523,6 +550,8 @@ def from_store(store, event_id: int, *, session_ids=None) -> Debrief | None:
                        silences=("No lap survived the excursion filter, so "
                                  "there is nothing to say about any corner.",))
 
+    if cancelled is not None and cancelled():
+        raise DebriefCancelled("before the corner analysis")
     debrief = analyse(model, pairs, census=census, pace=pace, burn=burn)
     if teleported:
         debrief = Debrief(

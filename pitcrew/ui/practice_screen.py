@@ -1022,6 +1022,9 @@ class PracticeScreen(QWidget):
         super().__init__(parent)
         self._rows: list[LapRow] = []
         self._row_widgets: list[RackRow] = []
+        # Copies of the rows and bests the rack was last drawn from, or None
+        # before the first draw - see `_drawn_as`.
+        self._drawn: tuple[list[LapRow], dict] | None = None
         self._rendered_ends: set[int] = set()
         # The event's tank, for the fuel-implausibility floor. None until the
         # controller has an event; `fuel_implausible_laps` accepts that and
@@ -1508,13 +1511,18 @@ class PracticeScreen(QWidget):
         rows the widgets hold (`repaint_rows` exists because of it), and a
         live object would always equal itself however stale the widget is. A
         lap appended since, an edit, or a changed best, and it rebuilds.
+
+        `rows == previous` is its own case: the live rows were changed in
+        place since the draw and the fresh read still equals the drawn copy -
+        the change was never stored. A skip would keep those live objects,
+        and with them a value the store does not have, so it rebuilds.
         """
-        drawn = getattr(self, "_drawn", None)
+        drawn = self._drawn
         if drawn is None:
             return False
         rows, bests = drawn
         return (rows == self._rows and rows == previous
-                and bests == getattr(self, "_personal_bests", {}))
+                and bests == self._personal_bests)
 
     def set_fuel_capacity(self, capacity: float | None) -> None:
         """The tank this event ran, which the implausibility floor needs.
@@ -1853,7 +1861,7 @@ class PracticeScreen(QWidget):
         self.rack_layout.addStretch(1)
         # What was just drawn, as copies - see `_drawn_as`.
         self._drawn = ([replace(row) for row in self._rows],
-                       dict(getattr(self, "_personal_bests", {})))
+                       dict(self._personal_bests))
         # No restore here, and no timer either. The rack does not know its own
         # height yet: the old rows are only destroyed when the event loop next
         # turns, and the layout collapses to nothing on the way through. A

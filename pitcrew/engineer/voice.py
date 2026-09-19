@@ -1126,7 +1126,7 @@ class PiperEngine:
         claimed, and the driver hears nothing.
         """
         self._load()
-        if getattr(self, "_warmed", False):
+        if self._warmed:
             return
         for _samples, _rate in self.synthesise(WARM_LINE):
             pass

@@ -144,6 +144,39 @@ CONNECT_TIMEOUT_S = 4.0
 # network, not a kernel, and keeps the full `CONNECT_TIMEOUT_S`.
 OBS_LOOPBACK_ANSWER_S = 0.25
 _LOOPBACK = {"127.0.0.1": "AF_INET", "::1": "AF_INET6"}
+# **Why the refusal is slow, and the switch that makes it immediate.** The
+# two seconds are Windows re-sending the SYN after the loopback RST - two
+# retransmissions at 0.5 s and 1 s, then the refusal. `SIO_TCP_INITIAL_RTO`
+# with `TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS` (Win10 1703+, ws2ipdef.h)
+# turns those re-sends off for this one socket, so a closed port is refused
+# on the first RST: 15 ms measured, against 2,014-2,027 ms without it and
+# 250 ms for the timeout alone. A listening OBS answers the first SYN, so it
+# never needed a re-send. The timeout stays as the backstop wherever the
+# ioctl is refused (an older Windows, not Windows).
+_SIO_TCP_INITIAL_RTO = 0x98000011          # _WSAIOW(IOC_VENDOR, 17)
+_RTO_UNSPECIFIED_RTT = 0xFFFF              # keep the system's initial RTO
+_RTO_NO_SYN_RETRANSMISSIONS = 0xFE
+
+
+def _refuse_on_first_rst(sock) -> bool:
+    """Turn off SYN re-sends on `sock` (Windows). True if it took."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _InitialRto(ctypes.Structure):     # TCP_INITIAL_RTO_PARAMETERS
+            _fields_ = [("Rtt", ctypes.c_ushort),
+                        ("MaxSynRetransmissions", ctypes.c_ubyte)]
+
+        params = _InitialRto(_RTO_UNSPECIFIED_RTT, _RTO_NO_SYN_RETRANSMISSIONS)
+        returned = wintypes.DWORD(0)
+        return ctypes.windll.ws2_32.WSAIoctl(
+            ctypes.c_size_t(sock.fileno()),
+            wintypes.DWORD(_SIO_TCP_INITIAL_RTO),
+            ctypes.byref(params), ctypes.sizeof(params), None, 0,
+            ctypes.byref(returned), None, None) == 0
+    except Exception:                                        # noqa: BLE001
+        return False
 
 
 def _loopback_socket(host: str, port: int, *,
@@ -156,15 +189,19 @@ def _loopback_socket(host: str, port: int, *,
     family = _LOOPBACK.get((host or "").strip())
     if family is None:
         return None, None
+    nobody = (f"nothing is listening on {host}:{port} - OBS is not running, "
+              f"or its WebSocket server is switched off")
     sock = socket.socket(getattr(socket, family), socket.SOCK_STREAM)
+    _refuse_on_first_rst(sock)
     sock.settimeout(answer_s)
     try:
         sock.connect((host.strip(), int(port)))
     except (socket.timeout, TimeoutError):
         sock.close()
-        return None, (f"nothing is listening on {host}:{port} - OBS is not "
-                      f"running, or its WebSocket server is switched off "
-                      f"(no answer in {answer_s:g}s on loopback)")
+        return None, f"{nobody} (no answer in {answer_s:g}s on loopback)"
+    except ConnectionRefusedError:
+        sock.close()
+        return None, f"{nobody} (refused on loopback)"
     except OSError as exc:
         sock.close()
         return None, f"{type(exc).__name__}: {exc}"
@@ -1212,16 +1249,20 @@ class ObsSource:
 
     def _connected(self, work):
         """Open, authenticate, run `work(request)`, close. Never raises."""
-        try:
-            from websockets.sync.client import connect
-        except ImportError:
-            return None, "the websockets package is not installed"
         # The handshake first, bounded - see `OBS_LOOPBACK_ANSWER_S`. The
         # socket it opens is the one the websocket then runs over, so a
         # listening OBS sees one connection, not a probe and then another.
+        # And before the import: with OBS closed the answer is known without
+        # the websockets package ever being loaded (25-150 ms cold).
         sock, why = _loopback_socket(self.host, self.port)
         if why is not None:
             return None, why
+        try:
+            from websockets.sync.client import connect
+        except ImportError:
+            if sock is not None:
+                sock.close()
+            return None, "the websockets package is not installed"
         try:
             with connect(f"ws://{self.host}:{self.port}", sock=sock,
                          open_timeout=CONNECT_TIMEOUT_S,

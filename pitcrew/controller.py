@@ -1189,12 +1189,25 @@ class PitCrewController(QObject):
         self.store.seed_range_records(catalogs.range_seed_records())
         self.bridge.apply_settings(self.settings)
         self.voice.tune(**self.settings.voice_tuning())
+        # The launch pre-warm has run (`prewarm_for_sessions`), and the frame
+        # prefetch it and every stop and event load start - see
+        # `_prefetch_event_frames`. Both before the first event load below,
+        # which asks for a prefetch.
+        self._prewarmed = False
+        self._frame_prefetch = None
+        # Set to stand the running practice debrief down - see
+        # `_stand_down_debrief`.
+        self._debrief_stop: threading.Event | None = None
 
         # **The glance-up board above the game, and the tick that keeps its
         # countdown honest.** Everything else on it moves on a lap crossing;
         # the release countdown moves at one litre a second and there are no
         # crossings during a stop, so it needs a clock of its own.
         self.driver_board = None
+        # Whether the board has been placed and shown once - it can be built
+        # hidden at idle by `prewarm_for_sessions`, and is placed at its
+        # first open either way (`_open_driver_board`).
+        self._board_ever_shown = False
         # Failed pushes, consecutive and total. See `_push_driver_board`: one
         # bad frame is not a broken board, and this instrument has already
         # been lost for a whole race to a single transient. Both are reset by
@@ -1296,7 +1309,7 @@ class PitCrewController(QObject):
         hidden now costs nothing later. Both are exactly what the start paths
         would have built - nothing here reads session state (rule 11).
         """
-        if self.__dict__.get("_prewarmed"):
+        if self._prewarmed:
             return
         self._prewarmed = True
         try:
@@ -1309,7 +1322,37 @@ class PitCrewController(QObject):
             except Exception:                                # noqa: BLE001
                 log("ui").warning("could not pre-build the driver board",
                                   exc_info=True)
+        # The OBS client's import, not a connection: 25-150 ms cold, and the
+        # first thing a start with OBS running would otherwise pay inside the
+        # gauge pre-flight the Qt thread is joined on. With OBS closed the
+        # loopback probe answers before it is needed at all.
+        try:
+            import websockets.sync.client  # noqa: F401
+        except ImportError:
+            pass
         self._prefetch_event_frames()
+
+    def _stand_down_debrief(self) -> None:
+        """A session has just opened: the last run's debrief, if it is still
+        being built, stops at its next lap. Its answer would not be said now
+        anyway (`_on_debriefed`, rule 11), and building it decodes every
+        practice lap of the event - 18 s on event 1's 176 laps - beside the
+        new session's listener, coach and voice. Only here, once the session
+        row exists: a start refused before this keeps its debrief."""
+        stop = self._debrief_stop
+        if stop is not None and not stop.is_set():
+            stop.set()
+        self._debrief_stop = None
+
+    def _stand_down_prefetch(self) -> None:
+        """A session is starting: no decode of the prefetch's may run beside
+        it. It finishes the blob in hand and stops; the start asks for what
+        it needs itself, and waits for that one blob rather than decode it
+        twice (`store/frame_memo`)."""
+        running = self._frame_prefetch
+        if running is not None and running.is_alive():
+            running.cancel()
+            log("session").info("stood the frame prefetch down for the start")
 
     # --------------------------------------------------------------- catalog
 
@@ -1768,12 +1811,12 @@ class PitCrewController(QObject):
         this itself once the window is up - the first-paint load must not
         start a decode beside the rest of the launch.
         """
-        if self.session_id is not None or not self.__dict__.get("_prewarmed"):
+        if self.session_id is not None or not self._prewarmed:
             return
         event = self.active_event()
         if event is None:
             return
-        running = self.__dict__.get("_frame_prefetch")
+        running = self._frame_prefetch
         if running is not None and running.is_alive():
             # One at a time. A switch while one runs is caught by the next
             # load or stop; the button decodes whatever this did not reach.
@@ -2690,6 +2733,7 @@ class PitCrewController(QObject):
             practice_intent=intent,
             game_version=self.settings.game_version)
         self.session_kind = "practice"
+        self._stand_down_debrief()
         # **The tyre he said is fitted**, from the Practice screen. It tags the
         # session's laps until its first pit lap and locks the board's bests.
         self._started_compound = self.practice.starting_compound()
@@ -3094,6 +3138,7 @@ class PitCrewController(QObject):
 
 
     def start_practice(self) -> None:
+        self._stand_down_prefetch()
         # Starting one session over another left the first with no `ended_at`
         # and its listener running: SO_REUSEADDR lets the second UDP bind
         # succeed, and on Windows the *first* socket keeps the datagrams, so
@@ -3112,6 +3157,8 @@ class PitCrewController(QObject):
                 "Not started - set the OBS projector up and start again.",
                 warn=True)
             self.practice.set_recording(False)
+            # Not starting after all: the prefetch stood down may carry on.
+            self._prefetch_event_frames()
             return
         if self.open_practice_session() is None:
             self.practice.set_status(
@@ -3120,10 +3167,18 @@ class PitCrewController(QObject):
             self.practice.set_recording(False)
             return
 
-        # **After the session exists, before the first lap can land.** The
-        # zero has to be stamped against a session row, and it has to be
-        # stamped before anything is recorded against it, or the first laps
-        # sit outside the capture the index says contains them.
+        # **After the session exists.** The zero is stamped against a session
+        # row, so the row comes first. It is no longer stamped before this
+        # returns: `start_video` asks OBS on a worker and files the zero when
+        # OBS confirms (up to `VIDEO_START_WAIT_S`), while the listener below
+        # is already running. Nothing the index had is lost by that: the zero
+        # is still the moment OBS confirmed, and `video_index.build` places a
+        # crossing up to `CLOCK_SLACK_S` (2 s) before it at second zero and
+        # leaves out one earlier than that - a moment the capture does not
+        # contain. When this call was synchronous the listener only started
+        # AFTER OBS confirmed, so a crossing inside that window was not
+        # recorded at all; now it is recorded as a lap, and only its place in
+        # the video is (correctly) missing.
         self._start_video()
         self._new_hud_session()
 
@@ -3254,11 +3309,20 @@ class PitCrewController(QObject):
         if event is None:
             return
         event_id = event["id"]
+        stop = threading.Event()
+        self._debrief_stop = stop
 
         def work() -> None:
+            from pitcrew.analysis.debrief import DebriefCancelled
             try:
                 from pitcrew.analysis.debrief import from_store
-                debrief = from_store(self.store, event_id)
+                debrief = from_store(self.store, event_id,
+                                     cancelled=stop.is_set)
+            except DebriefCancelled:
+                log("session").info("debrief of event %s stood down - a "
+                                    "session opened before it was built",
+                                    event_id)
+                return
             except Exception:
                 # A debrief that cannot be built is not worth taking the app
                 # down for, and it happens for an honest reason: no corner
@@ -3282,6 +3346,18 @@ class PitCrewController(QObject):
 
         lines = spoken_lines(debrief)
         if not lines:
+            return
+        if self.session_id is not None:
+            # **Built for the run that closed, landing in the one that
+            # opened** (rule 11). The debrief is only ever started once a
+            # session has closed, and on a big event it takes 2.5-9.4 s - a
+            # Start pressed inside that is now a fast button, so the old
+            # run's findings would be spoken over the new run's coach and
+            # written over its status line. Kept in the log, where it can
+            # still be read.
+            log("session").info("debrief of the previous run, not said - "
+                                "session %s has opened since: %s",
+                                self.session_id, " | ".join(lines))
             return
         # The debrief is a sequence too, and the same eviction took the front
         # of it - post-session, so cheaper, but no more correct.
@@ -5075,6 +5151,7 @@ class PitCrewController(QObject):
 
     def start_race(self) -> bool:
         """Arm the race. Nothing fires until the car actually goes green."""
+        self._stand_down_prefetch()
         # **The model loads while the rest of arming happens.** `warm()`
         # returns immediately - it spawns a thread - so putting it just
         # before the brief bought almost nothing: the brief queued a few
@@ -5113,6 +5190,9 @@ class PitCrewController(QObject):
         def refuse(why: str) -> bool:
             self.race_screen.set_status(why, warn=True)
             log("race").warning("start race refused: %s", why)
+            # Not arming after all: the prefetch stood down at the top may
+            # carry on (it only runs with no session open).
+            self._prefetch_event_frames()
             return False
 
         event = self.active_event()
@@ -5353,6 +5433,7 @@ class PitCrewController(QObject):
             event["id"], "race",
             rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
+        self._stand_down_debrief()
         self._tell_settings_about_the_session()
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
@@ -6598,8 +6679,7 @@ class PitCrewController(QObject):
         # test file.
         self._board_failures = 0
         self._board_failures_total = 0
-        if self.driver_board is None or not self.__dict__.get(
-                "_board_ever_shown"):
+        if self.driver_board is None or not self._board_ever_shown:
             # Built hidden at idle by `prewarm_for_sessions` where it could
             # be; placed HERE either way, from the geometry as it is now, so
             # a board built early still opens where he last left it.

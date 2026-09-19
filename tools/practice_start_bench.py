@@ -60,6 +60,16 @@ def parse() -> argparse.Namespace:
     p.add_argument("--pairs", type=int, default=6)
     p.add_argument("--second", action="store_true",
                    help="time the second start of the launch, not the first")
+    p.add_argument("--gap", type=float, default=None,
+                   help="with --second: seconds from the stop to the timed "
+                        "press (default --settle). The last 0.3 s of it is "
+                        "the CPU-load sample")
+    p.add_argument("--first-session", type=float, default=2.0,
+                   help="with --second: how long the untimed session runs")
+    p.add_argument("--cold-memo", action="store_true",
+                   help="with --second: forget the frame memo just before "
+                        "the stop, as if the session had written new laps - "
+                        "so the stop's prefetch has real decoding to do")
     p.add_argument("--event", type=int, default=None,
                    help="switch to this event before settling")
     p.add_argument("--no-voice-warm", action="store_true",
@@ -345,12 +355,19 @@ def main() -> int:
         # SECOND session of the launch - what every start after the first
         # one of an evening costs.
         window.practice_screen.record_button.click()
-        pump_until = time.perf_counter() + 2.0
+        pump_until = time.perf_counter() + ARGS.first_session
         while time.perf_counter() < pump_until:
             app.processEvents()
             time.sleep(0.005)
+        if ARGS.cold_memo:
+            try:
+                from pitcrew.store import frame_memo
+                frame_memo.clear()
+            except ImportError:          # the base commit has no memo
+                pass
         ctrl.stop_practice()
-        pump_until = time.perf_counter() + ARGS.settle
+        gap = ARGS.settle if ARGS.gap is None else ARGS.gap
+        pump_until = time.perf_counter() + max(0.0, gap - 0.3)
         while time.perf_counter() < pump_until:
             app.processEvents()
             time.sleep(0.005)
@@ -394,6 +411,13 @@ def main() -> int:
         profiler = cProfile.Profile()
 
     cpu = _cpu_load()
+    try:
+        from pitcrew.store import frame_memo
+        memo_before = frame_memo.stats()
+    except ImportError:
+        frame_memo, memo_before = None, None
+    running = ctrl.__dict__.get("_frame_prefetch")
+    prefetch_running = bool(running is not None and running.is_alive())
     press = time.perf_counter()
     _T0[0] = press
     if ARGS.dump_at:
@@ -460,6 +484,9 @@ def main() -> int:
         "event_id": (ctrl.active_event() or {}).get("id") if hasattr(
             ctrl.active_event() or {}, "get") else None,
         "rack_rows": len(ctrl.practice.rows()),
+        "prefetch_running_at_press": prefetch_running,
+        "memo_before": memo_before,
+        "memo_after": frame_memo.stats() if frame_memo else None,
     }
     del first_idle
 

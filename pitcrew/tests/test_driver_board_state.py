@@ -827,6 +827,10 @@ def _board_harness(fail_for: int):
 
     app = PitCrewController.__new__(PitCrewController)
     app.driver_board = _Board(fail_for)
+    # The production shape of a board that exists: opened (and placed) once
+    # already. `__init__` sets it False; the pre-warm can build a board that
+    # has not been shown yet, and the first open places that one.
+    app._board_ever_shown = True
     app._board_failures = 0
     app._board_failures_total = 0
     app._board_timer = _Timer()

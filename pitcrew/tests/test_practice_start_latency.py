@@ -109,16 +109,72 @@ def _closed_loopback_port() -> int:
     return port
 
 
-def test_a_closed_obs_is_known_in_a_quarter_second_not_two():
-    """Windows retries a SYN to a closed loopback port and refuses ~2.0 s
-    later; a listening socket answers in microseconds."""
-    obs = hud.ObsSource("127.0.0.1", _closed_loopback_port(), "")
+class _SilentSocket:
+    """A loopback socket nobody answers: records what it was told, then
+    fails its connect the way the caller says."""
+    made: list = []
+
+    def __init__(self, family, kind, fail):
+        self.family, self.kind, self.fail = family, kind, fail
+        self.timeouts: list = []
+        self.connected_to = None
+        self.closed = False
+        _SilentSocket.made.append(self)
+
+    def settimeout(self, value):
+        self.timeouts.append(value)
+
+    def fileno(self):
+        return -1
+
+    def connect(self, address):
+        self.connected_to = address
+        raise self.fail
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize("fail", [socket.timeout("timed out"),
+                                  ConnectionRefusedError(10061, "refused")])
+def test_a_closed_obs_is_answered_by_the_bounded_probe(monkeypatch, fail):
+    """Windows re-sends a SYN to a closed loopback port and refuses ~2.0 s
+    later (measured 2,014-2,027 ms). Every OBS question goes through the
+    probe, with `OBS_LOOPBACK_ANSWER_S` set BEFORE the connect, and a silent
+    or refusing port ends the question there: no websocket, not even its
+    import. Asserted on the mechanism, not on a clock - a loaded machine
+    moves a clock, and did (1.48 s under the full suite)."""
+    _SilentSocket.made = []
+    monkeypatch.setattr(socket, "socket",
+                        lambda family, kind: _SilentSocket(family, kind, fail))
+    # Importing the websocket client now would raise ImportError, and the
+    # answer would say "not installed" instead.
+    monkeypatch.setitem(sys.modules, "websockets.sync.client", None)
+    obs = hud.ObsSource("127.0.0.1", 4455, "")
     for ask in (obs.recording, obs.start_recording, obs.grab):
-        started = time.perf_counter()
         got, why = ask()
-        assert time.perf_counter() - started < 1.0
         assert got is None
-        assert "nothing is listening" in why
+        assert "nothing is listening on 127.0.0.1:4455" in why, why
+    assert len(_SilentSocket.made) == 3
+    for made in _SilentSocket.made:
+        assert made.timeouts[:1] == [hud.OBS_LOOPBACK_ANSWER_S]
+        assert made.connected_to == ("127.0.0.1", 4455)
+        assert made.closed
+
+
+@pytest.mark.skipif(not WINDOWS, reason="a Windows TCP stack behaviour")
+def test_a_closed_loopback_port_is_refused_not_waited_out():
+    """The two seconds are SYN re-sends after the loopback RST; the probe
+    turns them off (`SIO_TCP_INITIAL_RTO`), so a closed port takes the
+    REFUSED branch - not the 0.25 s timeout, which is only its backstop."""
+    probe = socket.socket()
+    try:
+        assert hud._refuse_on_first_rst(probe), "the ioctl did not take"
+    finally:
+        probe.close()
+    sock, why = hud._loopback_socket("127.0.0.1", _closed_loopback_port())
+    assert sock is None
+    assert "(refused on loopback)" in why, why
 
 
 def test_the_probe_hands_over_a_connected_socket_to_a_listening_obs():
@@ -262,11 +318,11 @@ def test_a_start_that_lands_after_the_close_stops_itself(monkeypatch):
 def test_the_throwaway_synthesis_runs_once_per_process():
     """Every session start calls `warm()`; only the first has anything to
     warm. The rest are a cached load and nothing else."""
+    pytest.importorskip("piper")
     from pitcrew.engineer.voice import PiperEngine
 
-    engine = PiperEngine.__new__(PiperEngine)
-    engine._voice = object()
-    engine._load_lock = threading.Lock()
+    engine = PiperEngine("not-loaded.onnx")
+    engine._voice = object()               # as if loaded: nothing is read
     runs: list[str] = []
     engine.synthesise = lambda text: (runs.append(text) or iter(()))
     engine.warm()
@@ -340,6 +396,125 @@ def test_new_bytes_for_a_lap_are_worked_out_again(store, event_id):
     store._conn.commit()
     after = reference_lap(store, event_id)
     assert after.total_m == pytest.approx(before.total_m * 1.2, rel=0.02)
+
+
+def _frames_lap(store, event_id):
+    session = store.start_session(event_id, "practice")
+    return store.add_lap(session, _a_lap(1, 10_000),
+                         frames=_recorded_frames(seconds=2.0))
+
+
+def test_two_askers_of_the_same_bytes_decode_them_once(store, event_id):
+    """A prefetch still decoding when the start asks for the same lap: the
+    start waits for that answer rather than decode it beside the prefetch."""
+    from pitcrew.store import frame_memo
+
+    frame_memo.clear()
+    lap_id = _frames_lap(store, event_id)
+    inside, release = threading.Event(), threading.Event()
+    computed: list[str] = []
+
+    def slow(stored):
+        computed.append(threading.current_thread().name)
+        inside.set()
+        release.wait(5.0)
+        return ("means", len(stored["frames"]))
+
+    got: dict = {}
+    first = threading.Thread(
+        target=lambda: got.update(
+            a=frame_memo.derived(store, lap_id, "k", slow)),
+        name="prefetch-like")
+    first.start()
+    assert inside.wait(5.0)
+    second = threading.Thread(
+        target=lambda: got.update(
+            b=frame_memo.derived(store, lap_id, "k", slow)),
+        name="button-like")
+    second.start()
+    deadline = time.monotonic() + 5.0
+    while frame_memo.stats()["waits"] < 1 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert frame_memo.stats()["waits"] == 1, "the second asker did not wait"
+    release.set()
+    first.join(5.0)
+    second.join(5.0)
+    assert computed == ["prefetch-like"], "the same bytes were decoded twice"
+    assert got["a"] == got["b"]
+
+
+def test_a_failed_first_asker_leaves_the_second_to_work_it_out(
+        store, event_id):
+    from pitcrew.store import frame_memo
+
+    frame_memo.clear()
+    lap_id = _frames_lap(store, event_id)
+    inside, release = threading.Event(), threading.Event()
+
+    def broken(stored):
+        inside.set()
+        release.wait(5.0)
+        raise RuntimeError("a bad blob")
+
+    errors: list = []
+
+    def first():
+        try:
+            frame_memo.derived(store, lap_id, "k", broken)
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=first)
+    thread.start()
+    assert inside.wait(5.0)
+    got: list = []
+    waiter = threading.Thread(target=lambda: got.append(
+        frame_memo.derived(store, lap_id, "k", lambda stored: "worked")))
+    waiter.start()
+    deadline = time.monotonic() + 5.0
+    while frame_memo.stats()["waits"] < 1 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    release.set()
+    thread.join(5.0)
+    waiter.join(5.0)
+    assert errors and got == ["worked"]
+
+
+def test_a_stood_down_prefetch_stops_before_its_next_decode(store, event_id):
+    """The session start stands the prefetch down: the blob in hand is
+    finished and filed, nothing after it is decoded."""
+    from pitcrew.store import frame_memo
+
+    frame_memo.clear()
+    session = store.start_session(event_id, "practice")
+    laps = [store.add_lap(session, _a_lap(n, 10_000 + n),
+                          frames=_recorded_frames(seconds=2.0))
+            for n in (1, 2, 3)]
+    inside, release = threading.Event(), threading.Event()
+    decoded: list[int] = []
+
+    def compute(lap_id):
+        def run(stored):
+            decoded.append(lap_id)
+            inside.set()
+            release.wait(5.0)
+            return lap_id
+        return run
+
+    def work():
+        for lap_id in laps:
+            frame_memo.derived(store, lap_id, "k", compute(lap_id))
+
+    running = frame_memo.prefetch(work, name="test")
+    assert inside.wait(5.0)
+    running.cancel()
+    release.set()
+    running.join(5.0)
+    assert not running.is_alive()
+    assert decoded == [laps[0]]
+    # The one in hand was filed: the next asker finds it.
+    assert frame_memo.derived(store, laps[0], "k",
+                              lambda stored: "again") == laps[0]
 
 
 def test_a_lap_without_frames_is_not_an_answer(store, event_id):
@@ -426,6 +601,20 @@ def test_a_row_mutated_under_the_widgets_still_redraws(practice_screen,
     fresh[1].compound = "RH"
     practice_screen.set_laps(fresh)
     assert rebuilds == [1]
+
+
+def test_a_change_never_stored_is_not_kept_on_the_rack(practice_screen,
+                                                       monkeypatch):
+    """The live rows were changed in place and the fresh read is what was
+    drawn - the change never reached the store. Skipping would keep the live
+    objects, and with them a compound the store does not have."""
+    practice_screen.set_laps(_rows())
+    practice_screen._rows[1].compound = "RH"      # in place, never stored
+    rebuilds = _count_rebuilds(practice_screen, monkeypatch)
+    practice_screen.set_laps(_rows())             # the store: still RM
+    assert rebuilds == [1]
+    assert practice_screen._rows[1].compound == "RM"
+    assert practice_screen._row_widgets[1].row.compound == "RM"
 
 
 def test_new_personal_bests_still_redraw(practice_screen, monkeypatch):
@@ -523,6 +712,66 @@ def test_the_frame_prefetch_waits_for_the_pre_warm_and_never_runs_in_a_session(
     assert started == [f"event-{event_id}"]
 
 
+class _RunningPrefetch:
+    def __init__(self):
+        self.cancelled = 0
+
+    def is_alive(self):
+        return True
+
+    def cancel(self):
+        self.cancelled += 1
+
+
+@pytest.mark.parametrize("start", ["start_practice", "start_race"])
+def test_a_session_start_stands_the_prefetch_down_first(qt_app, window,
+                                                        monkeypatch, start):
+    """Before the pre-flight, before anything else: whatever the start does
+    next, no prefetch decode runs beside it."""
+    ctrl = window.controller
+    running = _RunningPrefetch()
+    ctrl._frame_prefetch = running
+    seen: list[int] = []
+
+    def refuse(what):
+        seen.append(running.cancelled)
+        return False
+
+    monkeypatch.setattr(ctrl, "gauge_preflight_ok", refuse)
+    resumed: list[int] = []
+    monkeypatch.setattr(ctrl, "_prefetch_event_frames",
+                        lambda: resumed.append(1))
+    try:
+        getattr(ctrl, start)()
+    finally:
+        ctrl._frame_prefetch = None
+    assert running.cancelled == 1
+    assert seen in ([], [1]), "the pre-flight ran beside a live prefetch"
+    # Refused, so nothing opened: the prefetch is let carry on.
+    assert resumed == [1]
+
+
+def test_the_pre_warm_imports_the_obs_client(qt_app, window, monkeypatch):
+    """The import, not a connection - so the first pre-flight of a launch
+    with OBS running does not pay it inside the Qt-joined worker."""
+    import builtins
+
+    ctrl = window.controller
+    monkeypatch.setattr(ctrl.voice, "warm", lambda: None)
+    ctrl.settings.driver_board_enabled = False
+    imported: list[str] = []
+    real = builtins.__import__
+
+    def record(name, *a, **k):
+        imported.append(name)
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", record)
+    ctrl.prewarm_for_sessions()
+    monkeypatch.setattr(builtins, "__import__", real)
+    assert "websockets.sync.client" in imported
+
+
 # --------------------------------------------- the qualifying fuel call
 
 def test_the_fuel_call_is_worked_out_off_the_button_and_still_said(
@@ -567,3 +816,84 @@ def test_a_fuel_call_for_a_closed_session_is_not_said(qt_app, window,
     ctrl._on_quali_fuel_said(41, "Qualifying fuel: 17 litres.")
     ctrl.session_id = None
     assert said == []
+
+
+# ------------------------------------- the last run's debrief, in the next run
+
+def _a_debrief():
+    from pitcrew.analysis.debrief import Burn, Census, Debrief, Pace
+
+    return Debrief(
+        census=Census(recorded=16, out_laps=3, in_laps=0, excluded=0,
+                      excursions=2, analysed=11),
+        pace=Pace(n=13, median_ms=106_042, best_ms=104_306, sd_ms=2083.0),
+        burn=Burn(n=13, median_l=7.55, sd_l=0.27),
+        scatter=(), gears=(), correlations=(), silences=())
+
+
+def test_a_debrief_landing_in_the_next_session_is_not_said(qt_app, window,
+                                                           monkeypatch):
+    """Rule 11. The debrief starts when a run closes and takes 2.5-9.4 s on a
+    big event; with the button now answering in ~0.1 s a new run can open
+    inside that. Its findings are not spoken over the new run's coach, nor
+    written over its status."""
+    ctrl = window.controller
+    said: list = []
+    monkeypatch.setattr(ctrl.voice, "say_all",
+                        lambda lines, *a, **k: said.extend(lines))
+    ctrl._engineer_speaks = True
+    ctrl.practice.set_status("Listening on 33740.")
+    ctrl.session_id = 43
+    try:
+        ctrl._on_debriefed(_a_debrief())
+    finally:
+        ctrl.session_id = None
+    assert said == []
+    assert ctrl.practice.status_text() == "Listening on 33740."
+    # With no session open it is still said and shown, as before.
+    ctrl._on_debriefed(_a_debrief())
+    assert any("11 laps analysed" in line for line in said)
+    assert "11 laps analysed" in ctrl.practice.status_text()
+
+
+def test_a_debrief_can_be_stood_down():
+    """Every store call of the build goes through the stand-down check, so it
+    stops within one lap's decode."""
+    from pitcrew.analysis.debrief import DebriefCancelled, from_store
+
+    class _Store:
+        def get_event(self, event_id):
+            raise AssertionError("asked the store after the stand-down")
+
+    with pytest.raises(DebriefCancelled):
+        from_store(_Store(), 1, cancelled=lambda: True)
+
+
+def test_opening_a_session_stands_the_last_debrief_down(qt_app, window, store,
+                                                        event_id):
+    ctrl = window.controller
+    store.set_state("active_event_id", event_id)
+    ctrl.load_active_event()
+    stop = threading.Event()
+    ctrl._debrief_stop = stop
+    try:
+        assert ctrl.open_practice_session() is not None
+        assert stop.is_set(), "the last run's debrief went on decoding"
+        assert ctrl._debrief_stop is None
+    finally:
+        if ctrl.session_id is not None:
+            store.end_session(ctrl.session_id)
+        ctrl.session_id = None
+        ctrl.session_kind = None
+
+
+def test_a_refused_start_keeps_the_last_debrief(qt_app, window, monkeypatch):
+    """Refused before the session row exists: nothing opened, so the debrief
+    of the run he just stopped is still built and said."""
+    ctrl = window.controller
+    stop = threading.Event()
+    ctrl._debrief_stop = stop
+    monkeypatch.setattr(ctrl, "gauge_preflight_ok", lambda what: False)
+    ctrl.start_practice()
+    assert not stop.is_set()
+    ctrl._debrief_stop = None

@@ -758,8 +758,12 @@ class HudSession:
         handler, with the window frozen - and 2.0 s of refused connect on
         every start with OBS closed. The zero is still stamped at the moment
         OBS says it is recording, so what it means is unchanged; it simply
-        does not hold the session hostage while it waits. A lap cannot land
-        before it matters - the first crossing is an out-lap away.
+        does not hold the session hostage while it waits. No indexed crossing
+        is lost: synchronously, the listener only started after OBS
+        confirmed, so no crossing inside the wait was recorded at all. Now one
+        is recorded as a lap, and `video_index.build` places it at second zero
+        if it fell within `CLOCK_SLACK_S` (2 s) of the zero, or leaves it out
+        of the video if earlier - a moment the capture does not contain.
 
         Silent on every failure. A recording is a convenience and a session is
         not, so nothing here may stop one opening.

@@ -364,6 +364,11 @@ def _stub_controller(answer: bool):
     # than AttributeError - so `start_race`'s first line, which now asks
     # whether the race on the board is over, fell over on the stub alone.
     app.race = None
+    # The same, for what every start now stands down first (and a refused
+    # start lets resume) - the frame prefetch and the last run's debrief.
+    app._prewarmed = False
+    app._frame_prefetch = None
+    app._debrief_stop = None
     app.hud = _session(source=_Source(why="no program projector open"))
     app.confirm_without_gauge = lambda what, check: answer
     app.practice = _Screen()
