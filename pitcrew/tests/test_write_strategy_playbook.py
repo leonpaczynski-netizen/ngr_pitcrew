@@ -116,6 +116,9 @@ def test_the_race_screen_announces_itself_and_the_controller_listens():
     controller = (root / "controller.py").read_text(encoding="utf-8")
     assert "shown = pyqtSignal()" in screen
     assert "def showEvent" in screen
-    assert "self.race_screen.shown.connect(self.refresh_plan)" in controller
+    # Wired by `attach_race_screen` from its slot table since round 4 (the
+    # Race screen may be built after the first frame);
+    # test_lazy_race_screens.py checks it is connected exactly once.
+    assert '("shown", self.refresh_plan)' in controller
     assert "def refresh_plan" in controller
     assert "def _poll_plan" in controller

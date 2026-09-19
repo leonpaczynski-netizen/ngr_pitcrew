@@ -42,7 +42,7 @@ from pitcrew.analysis.runs import (
     flag_opening_lap,
     fuel_implausible_laps,
 )
-from pitcrew.diagnostics import log
+from pitcrew.diagnostics import log, timed_step
 from pitcrew.engineer.ptt import (
     PushToTalk,
     best_listener,
@@ -975,6 +975,63 @@ class TelemetryBridge(QObject):
         return True
 
 
+# How long the first fill waits for the launch's calendar read before it
+# reads the calendar itself. The read takes 18-80 ms; it was begun ~300 ms
+# earlier, so this is a bound, not an expected wait.
+CALENDAR_WAIT_S = 0.5
+
+
+def read_calendar(me, stored) -> list:
+    """The league calendar for driver `me` against the app's `stored`
+    events: `hub.calendar.upcoming` over a Hub opened and closed here. Its
+    own SQLite connection, so it may run on any thread."""
+    from pitcrew.hub.calendar import upcoming
+    from pitcrew.hub.read import Hub
+
+    hub = Hub()
+    try:
+        if not hub.available:
+            return []
+        return upcoming(hub, me=me, stored_events=stored)
+    finally:
+        hub.close()
+
+
+def start_calendar_read(store):
+    """Read the league calendar on its own thread, from the launch.
+
+    **Why** (round 4, 20 Sep 2026): the first fill, which runs before the
+    window's first frame, spent 30-80 ms of its 35-85 in this one read - an
+    external SQLite file with a 3.7 MB write-ahead log, opened cold. Begun
+    beside the window build, it is done before the fill asks. The fill takes
+    it only against the same driver name and stored events it was read with
+    (`_take_calendar_read`), and reads it again itself otherwise.
+
+    The modules are imported here, on the caller's thread, so the worker
+    imports nothing. Returns `(outcome, thread)`; `outcome` gains `key` and
+    `proposals`, or nothing if the read raised (logged).
+    """
+    import pitcrew.hub.calendar  # noqa: F401 - imported before the thread
+    import pitcrew.hub.read  # noqa: F401
+
+    outcome: dict = {}
+
+    def read() -> None:
+        try:
+            me = store.driver_name()
+            stored = store.list_events()
+            proposals = read_calendar(me, stored)
+            outcome["key"] = (me, stored)
+            outcome["proposals"] = proposals
+        except Exception:                           # noqa: BLE001
+            log("pitcrew").exception(
+                "the launch's calendar read failed - the first fill reads it")
+
+    thread = threading.Thread(target=read, name="calendar-read", daemon=True)
+    thread.start()
+    return outcome, thread
+
+
 class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
@@ -996,18 +1053,37 @@ class PitCrewController(QObject):
     # (message: str, warn: bool) — the same shape as `practice.set_status` so
     # the Event screen can use the same display path as the practice screen.
     rig_only_status = pyqtSignal(str, bool)
+    # The launch's speech engine has been chosen, or is past its limit and
+    # reported not loaded - emitted on the voice thread when either happens
+    # after the window was built. See `Voice(arriving=)`.
+    voice_engine_changed = pyqtSignal()
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
                  car_screen=None, settings_screen=None,
                  port: int | None = None, voice=None, warm=None,
+                 voice_engine=None, defer_strip: bool = False,
+                 screen_builder=None, calendar=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
         self.event_screen = event_screen
-        self.practice = practice_screen
-        self.strategy = strategy_screen
-        self.race_screen = race_screen
+        # **Practice, Strategy and Race may be built after the first frame**
+        # (round 4). The window passes None for them and `screen_builder`,
+        # which makes one on demand - see `_lazy_screen`: any read of
+        # `self.practice`, `self.strategy` or `self.race_screen` builds and
+        # attaches the screen first, so no code path in this class can find
+        # one missing. Tests, replays and the bench pass real screens and no
+        # builder, exactly as before.
+        self._screen_builder = screen_builder
+        self._practice = None
+        self._strategy = None
+        self._race_screen = None
+        # The screen objects whose signals are connected - see `_wire_screen`.
+        self._practice_wired_to = None
+        self._strategy_wired_to = None
+        self._race_wired_to = None
+        self._race_picker_wired_to = None
         self.car_screen = car_screen
         self.settings_screen = settings_screen
         # An exclusion reason the driver gave mid-lap, waiting for
@@ -1026,14 +1102,27 @@ class PitCrewController(QObject):
         # The screen-filling notice, anchored to whichever screen the practice
         # page is on. None where there is no Qt widget to anchor to, which is
         # every controller test and every capture replay - the recording path
-        # has to stay drivable headless.
-        self._banner = (Banner(practice_screen)
-                        if isinstance(practice_screen, QWidget) else None)
+        # has to stay drivable headless. Made by `attach_practice_screen`.
+        self._banner = None
         # An explicit port wins - the tests bind their own - but otherwise the
         # setting is the source of truth, not a constant in this file.
         self._port_override = port
         self.port = port if port is not None else self.settings.udp_port
-        self.voice = voice if voice is not None else Voice()
+        # `voice_engine` is the launch's `voice.start_engine_build`, begun
+        # beside the screens. **Not joined here** (19 Sep 2026): this is the
+        # Qt thread building the window, and the join had no limit. If the
+        # build is done, `Voice` takes it as `engine_from` always did; if not,
+        # the voice thread collects it and lines queue until it lands. None
+        # (every test, replay and bench) is exactly what `Voice()` always did.
+        self.voice_engine_changed.connect(self._on_voice_engine_changed)
+        if voice is not None:
+            self.voice = voice
+        elif voice_engine is not None:
+            self.voice = Voice(arriving=voice_engine,
+                               on_landed=self.voice_engine_changed.emit,
+                               on_overdue=self.voice_engine_changed.emit)
+        else:
+            self.voice = Voice()
         self.race: RaceCoordinator | None = None
         self.race_run_id: int | None = None
         self._race_inputs = None
@@ -1064,11 +1153,19 @@ class PitCrewController(QObject):
         # there is no distance, so the whole five-stage gate was skipped on the
         # one path that needs it. Only free dictation needs it; SAPI's closed
         # grammar is exact by construction.
-        # `warm` is the launch's background load, joined here. It is None
-        # everywhere else - tests, replay, the bench - and `speech_from` then
-        # builds exactly what this line used to build inline, which is why
-        # there is no second code path to keep in step.
-        recogniser, matcher = speech_from(warm, self.settings.speech_backend)
+        # `warm` is the launch's background load. **It is NOT joined here**
+        # any more: that join held the window back for 2.4-3.1 s of every
+        # launch, and 8.5 s of a busy one. `PushToTalk` installs the pair at
+        # the first press after it lands - see `PushToTalk._take_arrival`.
+        # `warm` is None everywhere else - tests, replay, the bench - and
+        # `speech_from` then builds exactly what this line used to build
+        # inline, which is why there is no second code path to keep in step.
+        if warm is not None:
+            recogniser, matcher, arriving = None, None, warm
+        else:
+            recogniser, matcher = speech_from(None,
+                                              self.settings.speech_backend)
+            arriving = None
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
             speak=self.voice.say,
@@ -1077,7 +1174,8 @@ class PitCrewController(QObject):
             on_answer=self._on_ptt_answer,
             matcher=matcher,
             sensitivity=self.settings.speech_sensitivity,
-            toggle=self.settings.ptt_toggle)
+            toggle=self.settings.ptt_toggle,
+            arriving=arriving)
         self._plans: list = []
         self._inputs = None
         self._plans_event_id: int | None = None
@@ -1129,7 +1227,8 @@ class PitCrewController(QObject):
             settings=lambda: self.settings,
             settings_screen=lambda: self.settings_screen, bridge=self.bridge,
             voice=self.voice, rig=self.rig,
-            listener=lambda: self.listener, practice=self.practice,
+            listener=lambda: self.listener,
+            practice=lambda: self.practice,
             confirm_audio=lambda: self._confirm_audio,
             parse_errors=lambda: self._parse_errors,
             rig_only=lambda: self._rig_only_mode)
@@ -1152,8 +1251,11 @@ class PitCrewController(QObject):
         self._filed_calls: dict = {}
         self._filed_session: int | None = None
 
-        # Set once, so an attach that runs twice does not connect twice.
-        self._settings_wired = False
+        # **The screen whose signals are connected, not a flag for the
+        # process.** A bool latched: an attach that raised after wiring left
+        # it True, and the replacement screen the rail built next was never
+        # connected - Save did nothing, silently. See `_wire_screen`.
+        self._settings_wired_to = None
         # **The tyre split's per-lap history, and it is reset per session.**
         # See CLAUDE.md rule 11: state that outlives a session gets read as
         # though it belongs to this one, and this app has already opened a
@@ -1195,42 +1297,20 @@ class PitCrewController(QObject):
         # silently skipped.
         if hasattr(self.event_screen, "wire_rig_only"):
             self.event_screen.wire_rig_only(self)
-        self.practice.recording_toggled.connect(self._on_recording_toggled)
-        self.practice.lap_changed.connect(self._on_lap_changed)
-        self.practice.export_requested.connect(self._on_export)
-        self.practice.practice_mode_changed.connect(self._on_practice_mode)
-        self.practice.practice_intent_changed.connect(
-            self._on_practice_intent)
-        self.practice.coach_speaks_changed.connect(self._on_coach_speaks)
-        self.practice.debrief_requested.connect(self.read_the_stint)
-        if self.strategy is not None:
-            self.strategy.build_requested.connect(self.build_strategy)
-            self.strategy.qualifying_requested.connect(
-                self.plan_qualifying)
-            self.strategy.approve_requested.connect(self.approve_strategy)
-            self.strategy.approve_loaded_requested.connect(
-                self.approve_stored_strategy)
-        if self.race_screen is not None:
-            self.race_screen.start_requested.connect(self.start_race)
-            self.race_screen.shown.connect(self.refresh_plan)
-            self.race_screen.replan_accepted.connect(
-                lambda: self._resolve_replan(accepted=True))
-            self.race_screen.replan_declined.connect(
-                lambda: self._resolve_replan(accepted=False))
-            self.race_screen.stop_requested.connect(self.stop_race)
-            # **His own choice of plan re-asks whether it will arm** (critic
-            # 2, pass 4): choosing "No plan" left "The approved plan will not
-            # arm" up about a plan he had just set aside. The screen's own
-            # slot runs first - it is connected in the screen's constructor -
-            # so `use_plan()` has already moved when this asks.
-            picker = getattr(self.race_screen, "plan_picker", None)
-            if picker is not None:
-                picker.activated.connect(
-                    lambda _index: self._refresh_race_options(
-                        self.active_event()))
+        # Practice, Strategy and Race are wired by their attach methods, the
+        # same whether the screen came in here or is built after the first
+        # frame. Here, before the first fill, an attach only wires.
+        if practice_screen is not None:
+            self.attach_practice_screen(practice_screen)
+        if strategy_screen is not None:
+            self.attach_strategy_screen(strategy_screen)
+        if race_screen is not None:
+            self.attach_race_screen(race_screen)
+        # The Car screen that is wired, like `_settings_wired_to`.
+        self._car_wired_to = None
+        self._car_groups: list = []
         if self.car_screen is not None:
-            self.car_screen.car_changed.connect(self.load_car)
-            self.car_screen.saved.connect(self.save_ranges)
+            self._wire_car_screen(self.car_screen)
         if self.settings_screen is not None:
             self.attach_settings_screen(self.settings_screen)
 
@@ -1267,7 +1347,15 @@ class PitCrewController(QObject):
         self._strip_composer = StripComposer()
         self._strip_was_live = False
         self._strip_failures = 0
-        self._start_strip()
+        # **Held back until the window has drawn, when the window asks**
+        # (19 Sep 2026): binding the server and composing both idle pages
+        # was 20-150 ms straight on the path to the first frame, for a page
+        # nobody can have open yet. The window's launch chain calls
+        # `start_deferred_strip` after the first paint; everyone else gets
+        # it here, as before.
+        self._strip_deferred = defer_strip
+        if not defer_strip:
+            self._start_strip()
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -1288,6 +1376,12 @@ class PitCrewController(QObject):
         self._plan_watch.timeout.connect(self._poll_plan)
         self._plan_watch.start()
 
+        # See `hub_proposals`: a calendar memo that exists only inside
+        # `_first_paint_work`.
+        self._hub_memo: dict | None = None
+        # The launch's calendar read, begun beside the window build
+        # (`start_calendar_read`). Taken once, by the first fill.
+        self._calendar_read = calendar
         self.refresh_catalogs()
         # **Scheduled, not called.** See `_first_paint_work`: this is ~130 ms
         # of widget filling that the window does not need in order to appear.
@@ -1314,10 +1408,22 @@ class PitCrewController(QObject):
         if self._first_paint_done:
             return
         self._first_paint_done = True
-        # Before the load, not after: this decides which event the load shows.
-        self.open_on_next_round()
-        self.load_active_event()
-        self._close_orphaned_sessions()
+        # One calendar read for the three questions below - see
+        # `hub_proposals`. Scoped to this call and dropped in the `finally`.
+        # Seeded from the launch's own read when it finished in time.
+        self._hub_memo = self._take_calendar_read()
+        with timed_step("the first fill"):
+            try:
+                # Before the load, not after: this decides which event the
+                # load shows.
+                with timed_step("  the calendar's next round"):
+                    self.open_on_next_round()
+                with timed_step("  the active event's load"):
+                    self.load_active_event()
+            finally:
+                self._hub_memo = None
+            with timed_step("  the orphaned-session sweep"):
+                self._close_orphaned_sessions()
 
     # --------------------------------------------------------------- catalog
 
@@ -1363,27 +1469,265 @@ class PitCrewController(QObject):
         objects by hand is the shape of a reset with no caller, and the five
         buttons it would silently disable are the pre-race checks.
         """
-        if self.settings_screen is screen and self._settings_wired:
+        if self.settings_screen is screen and self._settings_wired_to is screen:
             return
         self.settings_screen = screen
+        self._settings_wired_to = self._wire_screen(
+            self._settings_wired_to, screen, self._settings_slots())
         if screen is None:
             return
-        if not self._settings_wired:
-            screen.saved.connect(self.save_settings)
-            screen.test_beep_requested.connect(self.test_beep)
-            screen.test_voice_requested.connect(self.test_voice)
-            screen.test_haptics_requested.connect(self.test_haptics)
-            screen.test_feed_requested.connect(self.test_feed)
-            screen.test_gauge_requested.connect(self.test_gauge)
-            screen.capture_toggled.connect(self.toggle_capture)
-            screen.listen_toggled.connect(self.probe_button)
-            self._settings_wired = True
         screen.load(self.settings)
         screen.show_capabilities(speech=self.voice.engine_name,
                                  hook=self.ptt.has_listener)
         # Built lazily, so it can arrive mid-session and would otherwise
         # think nothing was running.
         self._tell_settings_about_the_session()
+
+    def _settings_slots(self) -> tuple:
+        return (("saved", self.save_settings),
+                ("test_beep_requested", self.test_beep),
+                ("test_voice_requested", self.test_voice),
+                ("test_haptics_requested", self.test_haptics),
+                ("test_feed_requested", self.test_feed),
+                ("test_gauge_requested", self.test_gauge),
+                ("capture_toggled", self.toggle_capture),
+                ("listen_toggled", self.probe_button))
+
+    def _car_slots(self) -> tuple:
+        return (("car_changed", self.load_car),
+                ("saved", self.save_ranges))
+
+    @staticmethod
+    def _wire_screen(wired_to, screen, slots):
+        """Connect `screen`'s signals, once per screen; returns what is wired.
+
+        **Keyed on the screen object, never on a flag for the process.** The
+        flag this replaced was set before the attach finished, so an attach
+        that raised afterwards (`load_car`, `screen.load`) left it latched on:
+        the next screen the rail built for the same slot was never connected,
+        and its Save wrote nothing with no trace anywhere (critic, 19 Sep
+        2026). Now a different screen is always wired, the one it replaces is
+        disconnected first - a discarded screen must not keep writing - and
+        the same screen is never wired twice, which is the doubled-`connect`
+        the flag was there to prevent: every Save firing twice for the life
+        of the process.
+        """
+        if wired_to is screen:
+            return screen
+        if wired_to is not None:
+            for name, slot in slots:
+                try:
+                    getattr(wired_to, name).disconnect(slot)
+                except (TypeError, RuntimeError):
+                    # Never connected, or its C++ half is already gone -
+                    # either way it can no longer reach the slot.
+                    pass
+        if screen is None:
+            return None
+        for name, slot in slots:
+            getattr(screen, name).connect(slot)
+        return screen
+
+    def _on_voice_engine_changed(self) -> None:
+        """The speech engine arrived after the window, or is past its limit:
+        Settings said "loading", so it is told what actually loaded - or that
+        nothing has. The RACE board reads `voice.health()` every refresh."""
+        screen = self.settings_screen
+        if screen is not None:
+            screen.show_capabilities(speech=self.voice.engine_name,
+                                     hook=self.ptt.has_listener)
+
+    def _wire_car_screen(self, screen) -> None:
+        """Connect the Car screen's two signals, once per screen."""
+        self._car_wired_to = self._wire_screen(
+            self._car_wired_to, screen, self._car_slots())
+
+    # --------------------------------------- Practice, Strategy and Race
+    #
+    # **Built after the window's first frame since round 4 (19 Sep 2026).**
+    # None of the three is visible at launch; together they were 57-95 ms of
+    # widget building, their share of `show()`, and the Practice fill's
+    # compound-pace read, all on the path to the first frame. The guarantee
+    # that replaces "built before anything can happen" is `_lazy_screen`:
+    # every read of `self.practice`, `self.strategy` or `self.race_screen`
+    # builds the screen and attaches it first. A session or a race can only
+    # be armed through code that reads one of them (the Start buttons are on
+    # them), so none can be armed against a screen that is not there.
+
+    def _lazy_screen(self, attr: str, attach):
+        # Read from the instance dict: on a QObject whose `__init__` never ran
+        # (tests build stubs that way) a missing attribute raises
+        # RuntimeError, not AttributeError, so `getattr(..., None)` would not
+        # fall back.
+        own = vars(self)
+        screen = own.get(attr)
+        builder = own.get("_screen_builder")
+        if screen is None and builder is not None:
+            # **Never a widget off the Qt thread.** Building a QWidget on a
+            # worker is a native crash, not an exception - the whole app,
+            # mid-race. No worker reads these today (they talk to the Qt
+            # thread through `bridge` signals); this is so a future one that
+            # does gets a loud None and a log line, never a dead process.
+            if threading.current_thread() is not threading.main_thread():
+                log("pitcrew").error(
+                    "%s read on thread %r before it was built - it is only "
+                    "ever built on the Qt thread; returning None",
+                    attr.lstrip("_"), threading.current_thread().name)
+                return None
+            made = builder(attr.lstrip("_"))
+            if vars(self).get(attr) is None:
+                attach(made)
+            screen = vars(self).get(attr)
+        return screen
+
+    @property
+    def practice(self):
+        return self._lazy_screen("_practice", self.attach_practice_screen)
+
+    @practice.setter
+    def practice(self, screen) -> None:
+        self._practice = screen
+
+    @property
+    def strategy(self):
+        return self._lazy_screen("_strategy", self.attach_strategy_screen)
+
+    @strategy.setter
+    def strategy(self, screen) -> None:
+        self._strategy = screen
+
+    @property
+    def race_screen(self):
+        return self._lazy_screen("_race_screen", self.attach_race_screen)
+
+    @race_screen.setter
+    def race_screen(self, screen) -> None:
+        self._race_screen = screen
+
+    def _practice_slots(self) -> tuple:
+        return (("recording_toggled", self._on_recording_toggled),
+                ("lap_changed", self._on_lap_changed),
+                ("export_requested", self._on_export),
+                ("practice_mode_changed", self._on_practice_mode),
+                ("practice_intent_changed", self._on_practice_intent),
+                ("coach_speaks_changed", self._on_coach_speaks),
+                ("debrief_requested", self.read_the_stint))
+
+    def _strategy_slots(self) -> tuple:
+        return (("build_requested", self.build_strategy),
+                ("qualifying_requested", self.plan_qualifying),
+                ("approve_requested", self.approve_strategy),
+                ("approve_loaded_requested", self.approve_stored_strategy))
+
+    def _race_slots(self) -> tuple:
+        return (("start_requested", self.start_race),
+                ("shown", self.refresh_plan),
+                ("replan_accepted", self._accept_replan),
+                ("replan_declined", self._decline_replan),
+                ("stop_requested", self.stop_race))
+
+    def _accept_replan(self) -> None:
+        self._resolve_replan(accepted=True)
+
+    def _decline_replan(self) -> None:
+        self._resolve_replan(accepted=False)
+
+    def _on_plan_picked(self, _index=None) -> None:
+        # **His own choice of plan re-asks whether it will arm** (critic 2,
+        # pass 4): choosing "No plan" left "The approved plan will not arm"
+        # up about a plan he had just set aside. The screen's own slot runs
+        # first - it is connected in the screen's constructor - so
+        # `use_plan()` has already moved when this asks.
+        self._refresh_race_options(self.active_event())
+
+    def _filled_since_launch(self) -> bool:
+        """Whether the first fill has run - so a screen attached now missed
+        it and has to be brought up to date by its attach."""
+        return bool(getattr(self, "_first_paint_done", False))
+
+    def attach_practice_screen(self, screen) -> None:
+        """Wire the Practice screen and, after the first fill, fill it.
+
+        Idempotent for the same screen; a different one is wired and the
+        one it replaces disconnected (`_wire_screen`).
+        """
+        if self._practice is screen and self._practice_wired_to is screen:
+            return
+        self._practice = screen
+        self._practice_wired_to = self._wire_screen(
+            self._practice_wired_to, screen, self._practice_slots())
+        self._banner = (Banner(screen) if isinstance(screen, QWidget)
+                        else None)
+        if screen is None or not self._filled_since_launch():
+            return
+        self._fill_practice(self.active_event())
+
+    def attach_strategy_screen(self, screen) -> None:
+        """Wire the Strategy screen. Nothing is pushed into it at launch -
+        it fills when he builds or loads a plan."""
+        if self._strategy is screen and self._strategy_wired_to is screen:
+            return
+        self._strategy = screen
+        self._strategy_wired_to = self._wire_screen(
+            self._strategy_wired_to, screen, self._strategy_slots())
+
+    def attach_race_screen(self, screen) -> None:
+        """Wire the Race screen and, after the first fill, show it the
+        approved plan - what `load_active_event` would have pushed."""
+        if self._race_screen is screen and self._race_wired_to is screen:
+            return
+        self._race_screen = screen
+        self._race_wired_to = self._wire_screen(
+            self._race_wired_to, screen, self._race_slots())
+        picker = getattr(screen, "plan_picker", None)
+        self._race_picker_wired_to = self._wire_screen(
+            self._race_picker_wired_to, picker,
+            (("activated", self._on_plan_picked),))
+        if screen is None or not self._filled_since_launch():
+            return
+        self._refresh_race_options(self.active_event())
+
+    def _fill_practice(self, event) -> None:
+        """What the Practice screen shows for the active event, when idle.
+
+        Part of `load_active_event`, and the whole of what
+        `attach_practice_screen` does for a screen built after the first
+        fill. **Does not build the screen**: one not built yet is filled by
+        its attach, from the same store.
+        """
+        practice = self._practice
+        if practice is None:
+            return
+        if event is None:
+            practice.set_status(
+                "No event yet. Create one on the Event screen first.",
+                warn=True)
+            return
+        practice.set_laps(self._rows_for_event(event["id"]))
+        self._refresh_compound_pace(event["id"])
+        practice.set_status(self._idle_status(event))
+
+    def attach_car_screen(self, screen) -> None:
+        """Wire the Car screen, whenever it turns up.
+
+        Built after the window is shown since 19 Sep 2026 (see
+        `app.PitCrewWindow`), so everything the eager path pushed into it at
+        launch is pushed here instead: the car catalogue `refresh_catalogs`
+        already built, and the active event's car that `load_active_event`
+        would have shown. **Idempotent**, for the reason
+        `attach_settings_screen` gives: a doubled `connect` fires every Save
+        twice for the life of the process.
+        """
+        if self.car_screen is screen and self._car_wired_to is screen:
+            return
+        self.car_screen = screen
+        self._wire_car_screen(screen)
+        if screen is None:
+            return
+        screen.set_car_groups(self._car_groups)
+        event = self.active_event()
+        if event and event.get("car_name"):
+            self.load_car(event["car_name"])
 
     def refresh_catalogs(self) -> None:
         """Shipped names, plus anything added straight to the store.
@@ -1405,6 +1749,9 @@ class PitCrewController(QObject):
             groups.append(("Added", tuple(sorted(extra))))
             nested.append(("Added", {"Added": tuple(sorted(extra))}))
         self.event_screen.set_catalogs(tracks, nested)
+        # Kept for a Car screen that is built after this runs - see
+        # `attach_car_screen`.
+        self._car_groups = groups
         if self.car_screen is not None:
             self.car_screen.set_car_groups(groups)
 
@@ -1418,26 +1765,58 @@ class PitCrewController(QObject):
         machine that is not his; the app raced for months without it and every
         screen behind this one has to go on working when it is not there.
 
-        Not cached. It is a handful of indexed reads against a local SQLite
-        file, and a cache here would be state that outlives a session - the
-        exact class of defect that had a race judging its fresh tyres against
-        practice's worn ones.
+        Not cached across calls. It is a handful of indexed reads against a
+        local SQLite file, and a cache here would be state that outlives a
+        session - the exact class of defect that had a race judging its fresh
+        tyres against practice's worn ones.
+
+        **With one exception, scoped to a single synchronous call:**
+        `_first_paint_work` asked this three times in a row - the calendar,
+        then the active round's regulations, then the picker - at ~30 ms
+        each, all of it in front of the window's first frame. Inside that
+        call only, `_hub_memo` hands back the same answer while the driver
+        name and the stored events it was read against are unchanged; a
+        round linked or created in between changes the events and is read
+        afresh. The memo is `None` everywhere else, and dropped in a
+        `finally`.
         """
         try:
-            from pitcrew.hub.calendar import upcoming
-            from pitcrew.hub.read import Hub
-
-            hub = Hub()
-            try:
-                if not hub.available:
-                    return []
-                return upcoming(hub, me=self.store.driver_name(),
-                                stored_events=self.store.list_events())
-            finally:
-                hub.close()
+            me = self.store.driver_name()
+            stored = self.store.list_events()
+            memo = self._hub_memo
+            if memo is not None and memo.get("key") == (me, stored):
+                return list(memo["proposals"])
+            proposals = read_calendar(me, stored)
+            if memo is not None:
+                memo["key"] = (me, stored)
+                memo["proposals"] = list(proposals)
+            return proposals
         except Exception:
             log("pitcrew").exception("the league calendar could not be read")
             return []
+
+    def _take_calendar_read(self) -> dict:
+        """The first fill's memo, seeded from the launch's calendar read.
+
+        **Only ever a seed, never an answer on its own.** It carries the key
+        it was read against - the driver's hub name and the stored events -
+        and `hub_proposals` uses it only while those are unchanged, exactly
+        as it uses its own memo. A read not finished within
+        `CALENDAR_WAIT_S`, or one that failed, is dropped and the calendar is
+        read here as it always was: the wait is bounded, and the answer never
+        depends on the thread.
+        """
+        read, self._calendar_read = self._calendar_read, None
+        if read is None:
+            return {}
+        outcome, thread = read
+        thread.join(CALENDAR_WAIT_S)
+        if thread.is_alive() or "proposals" not in outcome:
+            log("pitcrew").info(
+                "the launch's calendar read was not ready - reading it now")
+            return {}
+        return {"key": outcome["key"],
+                "proposals": list(outcome["proposals"])}
 
     def _proposal(self, round_id):
         """One proposal by its hub round id, or `None`."""
@@ -1641,8 +2020,12 @@ class PitCrewController(QObject):
         Offering "Approved plan" with none approved is a control that cannot
         do what it says, on a screen whose subtitle would be saying the
         opposite two inches away.
+
+        **Does not build the Race screen** (round 4): one not built yet is
+        brought up to date by `attach_race_screen`, from the store, which is
+        all this reads. That is what keeps it off the launch's first fill.
         """
-        if self.race_screen is None:
+        if self._race_screen is None:
             return
         approved = (self.store.get_approved_strategy(event["id"])
                     if event else None)
@@ -1735,9 +2118,7 @@ class PitCrewController(QObject):
         # only route back to one that does exist.
         self._refresh_event_picker(event["id"] if event else None)
         if event is None:
-            self.practice.set_status(
-                "No event yet. Create one on the Event screen first.",
-                warn=True)
+            self._fill_practice(None)
             # The Engineer's premise plate is the screen's whole argument -
             # the division between what the app knows and what only he does,
             # visible before anything is generated. It returned early here and
@@ -1753,9 +2134,7 @@ class PitCrewController(QObject):
         # Save wrote that stale copy back over it.
         event, proposal, applied = self._apply_hub_regulations(event)
         self.event_screen.load(event)
-        self.practice.set_laps(self._rows_for_event(event["id"]))
-        self._refresh_compound_pace(event["id"])
-        self.practice.set_status(self._idle_status(event))
+        self._fill_practice(event)
         self._refresh_race_options(event)
         self.refresh_nav_state()
         if self.car_screen is not None and event["car_name"]:
@@ -3369,7 +3748,13 @@ class PitCrewController(QObject):
         path stays drivable headless - which is what the controller tests
         do, and what a capture replay does.
         """
-        if not self.settings.banner_enabled or self._banner is None:
+        if not self.settings.banner_enabled:
+            return
+        if self._banner is None and self._practice is None:
+            # Its anchor is built after the first frame; a notice before
+            # that builds it rather than going nowhere.
+            self.practice  # noqa: B018 - the read builds and attaches it
+        if self._banner is None:
             return
         self._banner.announce(headline, subtitle, warn=warn)
 
@@ -6761,6 +7146,19 @@ class PitCrewController(QObject):
             self.strip = server
             self._strip_idle()
 
+    def start_deferred_strip(self) -> None:
+        """Start the strip `defer_strip` held back. Once; a no-op otherwise.
+
+        A strip already up - a Settings save got there first - is left alone.
+        """
+        # Plain attributes: both are set in `__init__`, and a default here
+        # would hide one that went missing.
+        if not self._strip_deferred:
+            return
+        self._strip_deferred = False
+        if self.strip is None:
+            self._start_strip()
+
     def _stop_strip(self) -> None:
         strip, self.strip = self.__dict__.get("strip"), None
         if strip is not None:
@@ -8787,6 +9185,8 @@ class PitCrewController(QObject):
         return path
 
     def shutdown(self) -> None:
+        # A strip still held back is never started on the way out.
+        self._strip_deferred = False
         # **The orphan sweep, if the event loop never got to it.** It is
         # deferred to first paint now, and `main()` can return through its
         # `finally` without ever reaching `app.exec()` - so without this, the

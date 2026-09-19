@@ -79,20 +79,31 @@ class Bench:
         self.bridge = bridge
         self.voice = voice
         self.rig = rig
-        self.practice = practice
+        # **A reader, or the screen itself** (round 4): the Practice screen is
+        # built after the window's first frame, and this object is built
+        # before it. A reader is a callable with no `set_status` - a screen
+        # (or a test's stand-in for one) always has that.
+        self._practice = (practice if callable(practice)
+                          and not hasattr(practice, "set_status")
+                          else (lambda: practice))
         # **Whether the controller is in rig-only (Free Run) mode.** The
         # health line gates one branch on this: `recorder.lost_packets` does
         # not update while the recorder is idle, so a stale count from a prior
         # practice run must not trigger a warning mid-Free-Run.
         self._rig_only = rig_only if callable(rig_only) else (lambda: False)
         # **The target for health status messages.** In a practice or race
-        # session this is `practice.set_status`; during rig-only mode the
-        # controller swaps it to its own `_emit_rig_only_status` so the Event
-        # screen receives the messages instead. The controller restores it in
-        # `stop_rig_only` before any session can open over the top.
-        self._status_target = (practice.set_status
-                               if practice is not None
-                               else (lambda *a, **kw: None))
+        # session this is the Practice screen's `set_status`; during rig-only
+        # mode the controller swaps it to its own `_emit_rig_only_status` so
+        # the Event screen receives the messages instead. The controller
+        # restores it in `stop_rig_only` before any session can open over the
+        # top.
+        #
+        # **Routed through `_practice_status` while no screen exists yet.**
+        # The Practice screen is built after the window's first frame, so
+        # binding `practice.set_status` here would bind to whatever was in
+        # place before it - which is nothing - and every health line of the
+        # session would go into a sink that could never be replaced.
+        self._status_target = self._practice_status
         # **A reader returning the checker, not the checker.** Tests rebind
         # `controller._confirm_audio` after construction to ask a different
         # question - a stubbed tone, or a build agent with no audio hardware -
@@ -105,17 +116,28 @@ class Bench:
         self._button_probe = None
         self._health_ticks = 0
 
+    def _practice_status(self, *args, **kwargs) -> None:
+        """Write a health line to whichever Practice screen exists now.
+
+        The screen is resolved on every call, not captured, because it is
+        built after the window's first frame - see `_practice` above.
+        """
+        screen = self.practice
+        if screen is None:
+            return
+        screen.set_status(*args, **kwargs)
+
     def restore_status_target(self) -> None:
         """Restore the health-message route to the practice screen.
 
         Called by `stop_rig_only` so that the next practice session receives
-        bench messages again. Safe when `practice` is ``None`` — the
-        anonymous sink from ``__init__`` is restored instead, matching the
-        guard that ``__init__`` itself uses.
+        bench messages again. Safe when `practice` is ``None`` — the route
+        that resolves the screen on each call is restored instead, so a
+        screen built later still receives its lines.
         """
-        self._status_target = (self.practice.set_status
-                               if self.practice is not None
-                               else (lambda *a, **kw: None))
+        screen = self.practice
+        self._status_target = (screen.set_status if screen is not None
+                               else self._practice_status)
 
     @property
     def settings(self):
@@ -132,6 +154,16 @@ class Bench:
 
     def listener(self):
         return self._listener()
+
+    @property
+    def practice(self):
+        """The Practice screen as it is now - built on first use by the
+        controller's reader, so a line for it is never written into nothing."""
+        return self._practice()
+
+    @practice.setter
+    def practice(self, screen) -> None:
+        self._practice = lambda: screen
 
     def parse_errors(self) -> int:
         return self._parse_errors()

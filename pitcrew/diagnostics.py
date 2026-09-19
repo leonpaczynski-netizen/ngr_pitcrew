@@ -235,6 +235,107 @@ def mark(phase: str) -> None:
                         phase, elapsed * 1000.0)
 
 
+# A launch step slower than this is written to the log as a WARNING with its
+# time. A quiet launch builds the whole window in ~0.3 s and no one step
+# takes over 0.12 s, so a second is a fault, not a slow machine.
+SLOW_STEP_S = 1.0
+
+
+class timed_step:
+    """`with timed_step("EventScreen"):` - WARN if the body is slow.
+
+    **Why this exists** (19 Sep 2026): one launch under load spent 17.7 s
+    building the Event screen, and the log said nothing at all between "store
+    open" and "window built" - a repeat on race day would have left no trace
+    of where.
+
+    **Every step is written, at INFO, and a slow one at WARNING** (round 4).
+    Silent-when-fast left the log unable to say where a normal launch's time
+    goes, so the waterfall had to be rebuilt by hand each time it was asked.
+    A dozen lines per launch, into a log that already takes hundreds.
+    """
+
+    def __init__(self, name: str, warn_after_s: float | None = None) -> None:
+        self.name = name
+        self.warn_after_s = warn_after_s
+        self.took_s = 0.0
+
+    def __enter__(self):
+        self._began = time.perf_counter()
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        self.took_s = time.perf_counter() - self._began
+        limit = SLOW_STEP_S if self.warn_after_s is None else self.warn_after_s
+        if self.took_s >= limit:
+            log("startup").warning(
+                "slow launch step: %s took %.0f ms (warns over %.0f ms)",
+                self.name, self.took_s * 1000.0, limit * 1000.0)
+        else:
+            log("startup").info("launch step: %-24s %6.1f ms",
+                                self.name, self.took_s * 1000.0)
+        return False
+
+
+class LaunchWatchdog:
+    """Writes where the Qt thread is if the first frame is late.
+
+    A daemon thread that waits on an event. If the window has not drawn its
+    first frame `every_s` after this was armed, it logs the Qt thread's
+    Python stack as a WARNING, and again every `every_s`, at most `dumps`
+    times. A stall inside Qt shows as the Python line that called into it -
+    which widget, which call. `disarm()` at the first frame (and on the way
+    out) ends it. Nothing here touches Qt; it only reads frames and logs.
+    """
+
+    def __init__(self, every_s: float = 3.0, dumps: int = 5) -> None:
+        self._done = threading.Event()
+        self._every_s = every_s
+        self._dumps = dumps
+        self._target = threading.current_thread().ident
+        self._began = time.perf_counter()
+        self.fired = 0
+        threading.Thread(target=self._run, name="launch-watchdog",
+                         daemon=True).start()
+
+    def disarm(self) -> None:
+        self._done.set()
+
+    def _run(self) -> None:
+        import traceback
+
+        for _ in range(self._dumps):
+            if self._done.wait(self._every_s):
+                return
+            frame = sys._current_frames().get(self._target)
+            if frame is None:
+                return                  # the thread it watched has ended
+            stack = "".join(traceback.format_stack(frame))
+            self.fired += 1
+            log("startup").warning(
+                "the launch has not drawn its first frame after %.1f s - "
+                "the Qt thread is here:\n%s",
+                time.perf_counter() - self._began, stack.rstrip())
+
+
+_WATCHDOG: LaunchWatchdog | None = None
+
+
+def watch_launch(every_s: float = 3.0, dumps: int = 5) -> LaunchWatchdog:
+    """Arm the launch watchdog, from the Qt thread. Once per process."""
+    global _WATCHDOG
+    if _WATCHDOG is None:
+        _WATCHDOG = LaunchWatchdog(every_s, dumps)
+    return _WATCHDOG
+
+
+def launch_drawn() -> None:
+    """The first frame is up (or the launch is over): stand the watchdog
+    down. Safe to call any number of times, armed or not."""
+    if _WATCHDOG is not None:
+        _WATCHDOG.disarm()
+
+
 def banner(**facts) -> None:
     """One line per run, so a log covering three sessions can be told apart."""
     logger = log()

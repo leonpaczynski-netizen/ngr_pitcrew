@@ -209,7 +209,15 @@ class Store:
         """
         self._conn.execute("PRAGMA foreign_keys = OFF")
         try:
-            self._upgrade()
+            upgraded = self._upgrade()
+            # **Checked after an upgrade, which is the only time keys are
+            # off** (round 4): every other write in the app runs with
+            # `foreign_keys = ON`, so a file already at this version cannot
+            # have gained a dangling reference since it was last checked. The
+            # check scans every keyed table - 10-13 ms of every launch on the
+            # driver's 600 MB file, measured 20 Sep 2026 - for nothing.
+            if not upgraded:
+                return
             broken = self._conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:
                 raise RuntimeError(
@@ -218,7 +226,9 @@ class Store:
         finally:
             self._conn.execute("PRAGMA foreign_keys = ON")
 
-    def _upgrade(self) -> None:
+    def _upgrade(self) -> bool:
+        """Bring the file to `SCHEMA_VERSION`. True if anything was changed
+        with foreign keys off - a migration, a new file, or an added column."""
         with self._write() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
@@ -227,11 +237,13 @@ class Store:
                     f"v{SCHEMA_VERSION}. Point at a different file or migrate."
                 )
             conn.executescript(DDL)
+            added = False
             for table, columns in ADDED_COLUMNS.items():
                 existing = {row["name"] for row in
                             conn.execute(f"PRAGMA table_info({table})")}
                 for name, kind in columns:
                     if name not in existing:
+                        added = True
                         conn.execute(
                             f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
@@ -243,7 +255,10 @@ class Store:
                 log("store").info("migrated %s to v%s (%s)",
                                   self.path, target, label)
 
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            if version != SCHEMA_VERSION:
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        # A column added with keys off counts too: it may carry a reference.
+        return version < SCHEMA_VERSION or added
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:

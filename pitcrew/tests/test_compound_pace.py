@@ -309,8 +309,13 @@ def test_the_screen_is_refreshed_after_a_mark_is_written_not_before():
 
 
 def test_every_rack_load_refreshes_the_plate():
-    for name in ("load_active_event", "_on_lap_completed"):
+    for name in ("_fill_practice", "_on_lap_completed"):
         assert _calls(_method(name), "_refresh_compound_pace"), name
+    # The event load fills the Practice screen through `_fill_practice`
+    # since round 4, which is also what a Practice screen built after the
+    # first frame is filled by (`attach_practice_screen`).
+    assert _calls(_method("load_active_event"), "_fill_practice")
+    assert _calls(_method("attach_practice_screen"), "_fill_practice")
 
 
 def test_a_failed_read_empties_the_plate_and_never_raises():

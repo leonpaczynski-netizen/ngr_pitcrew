@@ -245,7 +245,7 @@ build — and two one-off scripts, which is what `draw_bathurst_map` and
 `probe_extended_packet`, `gap_bank`, `board_bench`, `build_race_fixture`,
 `build_hud_alert_fixture`, `extract_race_comms_fixture`, `extract_board_identity_fixture`,
 `extract_reference`, `draw_bathurst_map`,
-`schema_audit`, `wiring_audit`.
+`schema_audit`, `wiring_audit`, `launch_probe`, `launch_ab`.
 
 **`draw_bathurst_map` is to be left alone, not merely skipped.** It opens
 `Store()` and `data/pitcrew.db` at module scope, with one session number

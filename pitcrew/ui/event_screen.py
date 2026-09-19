@@ -261,18 +261,27 @@ class EventScreen(QWidget):
     # ------------------------------------------------------------------ build
 
     def _build(self) -> None:
+        # **Containers before contents** (19 Sep 2026). Under the app-wide
+        # style sheet every label carries its own sheet, and moving a
+        # finished subtree under a new parent re-polishes all of them again,
+        # once per level. The plates used to be built, then moved into the
+        # rack, the rack into its scroller, the scroller into the column and
+        # the column into the page - four more polishes of every label on
+        # the first screen, on the path to the window. Now the scroller is
+        # in the page before a plate exists, and each plate moves once.
         page = QVBoxLayout(self)
         page.setContentsMargins(30, 26, 30, 0)
         page.setSpacing(theme.GAP_WIDE)
 
-        page.addLayout(self._header())
-
-        page.addWidget(self._left_column(), 1)
-
+        header = QHBoxLayout()
+        page.addLayout(header)
+        holder = QWidget()
+        page.addWidget(holder, 1)
         page.addWidget(self._footer())
+        self._header(header)
+        self._left_column(holder)
 
-    def _header(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    def _header(self, row: QHBoxLayout) -> QHBoxLayout:
         row.setSpacing(theme.GAP_WIDE)
 
         column = QVBoxLayout()
@@ -539,8 +548,7 @@ class EventScreen(QWidget):
 
     # ----------------------------------------------------------- left column
 
-    def _left_column(self) -> QWidget:
-        holder = QWidget()
+    def _left_column(self, holder: QWidget) -> QWidget:
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(theme.GAP_WIDE)
@@ -553,20 +561,19 @@ class EventScreen(QWidget):
         # being reachable.
         scroller.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        column.addWidget(scroller, 1)
 
         inner = QWidget()
         stack = QVBoxLayout(inner)
         stack.setContentsMargins(0, 0, 4, 0)
         stack.setSpacing(theme.GAP_WIDE)
+        scroller.setWidget(inner)
         stack.addWidget(self._identity_plate())
         stack.addWidget(self._format_plate())
         stack.addWidget(self._regulations_plate())
         stack.addWidget(self._compounds_plate())
         stack.addWidget(self._context_plate())
         stack.addStretch(1)
-        scroller.setWidget(inner)
-
-        column.addWidget(scroller, 1)
         return holder
 
     def _identity_plate(self) -> Plate:
