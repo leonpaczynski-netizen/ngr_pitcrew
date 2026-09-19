@@ -407,7 +407,10 @@ def test_george_says_rockys_tyres_go_off_before_the_flag():
     # Rule 5: modelled, and the audit says from what - both assumptions named.
     assert "[DERIVED]" in call.derived
     assert "[ASSUMED] his car wears the set as ours does" in call.derived
-    assert "ARRIVED on" in call.derived
+    # No exit read on file for Rocky, so the compound is the one he arrived
+    # on, assumed kept - and the record says why that cannot be told apart.
+    assert "[ASSUMED] he left on the RM he arrived on" in call.derived
+    assert "flip between two grabs" in call.derived
     # Rule 4: the rate travels with its stint count.
     assert "3 stints" in call.derived
 
@@ -485,3 +488,48 @@ def test_a_stop_filed_ahead_of_now_is_not_a_negative_set():
 
     assert rival_tyres(_rocky_stopped(), now_key=10, our_compound="RH",
                        wear_rate=lambda code: (RM_RATE, RM_STINTS)) is None
+
+
+def test_a_compound_change_seen_at_the_lane_exit_is_a_reading():
+    """**The disc changes only as the car exits the pit lane** (the driver,
+    19 Sep 2026). So the last read is the tyre he fitted, and where it
+    differs from the one he arrived on the change was SEEN - no assumption
+    about his compound is left in the call."""
+    from pitcrew.race.rival_calls import Rival
+    from pitcrew.race.rival_tyres import rival_tyres
+    from pitcrew.race.rivals import Stop
+
+    changed = Rival(name="Rocky", pitted=True,
+                    stop=Stop(lap=14, fuel_in_l=19.0, fuel_out_l=89.0,
+                              compound="H", compound_in="M",
+                              tyres_changed=True))
+    got = rival_tyres(changed, now_key=22, our_compound="RH",
+                      wear_rate=lambda code: (0.04, 2) if code == "RH"
+                      else (None, 0))
+    assert got.compound == "RH" and got.compound_seen is True
+    assert "[READ] he left on RH" in got.model()
+    assert "arrived on" not in got.model()
+
+
+def test_the_wall_files_the_tyre_he_left_on_not_the_one_he_came_in_on():
+    """A vote across the stop is the ARRIVAL tyre: the disc shows it for the
+    whole stand and flips for a frame or two as he goes. Filing the vote -
+    as the wall did until 19 Sep - filed every compound change backwards."""
+    from pitcrew.race.pit_wall import Visit
+
+    visit = Visit(driver=1, lap=14, started_s=0.0,
+                  compounds=["M"] * 18 + ["H"])     # the flip, at the exit
+    assert visit.arrived_on == "M"
+    assert visit.left_on == "H"
+    assert visit.compound == "H"
+    assert visit.compound_changed is True
+    stop = visit.as_stop()
+    assert (stop.compound, stop.compound_in, stop.tyres_changed) == (
+        "H", "M", True)
+
+    # No flip seen: a same-compound refit, or one the grab missed. The best
+    # estimate is the arrival tyre, and nothing claims the tyres changed.
+    same = Visit(driver=1, lap=14, started_s=0.0, compounds=["M"] * 19)
+    stop = same.as_stop()
+    assert (stop.compound, stop.compound_in) == ("M", "M")
+    assert stop.tyres_changed is None

@@ -122,6 +122,43 @@ def _no_real_hub(request, monkeypatch, tmp_path):
     monkeypatch.setattr(hub_read, "DEFAULT_PATH", tmp_path / "no-hub.db")
 
 
+@pytest.fixture(autouse=True)
+def _no_live_database(monkeypatch, tmp_path):
+    """No test opens the database his races are recorded in.
+
+    **Found 19 Sep 2026 because a test did.** A schema column was added to
+    `ADDED_COLUMNS` and the live file gained it mid-suite - written at
+    10:00:27 while the run ended at 10:00:37, with nothing but the suite
+    running. `Store()` defaults to `DEFAULT_DB_PATH`, the MCP server's
+    `_store()` opens it whenever `PITCREW_DB` is unset, and of the nineteen
+    test files that reach those paths two set it. A migration is harmless; the
+    same route carries any test that WRITES a strategy, a measurement or a
+    verdict, straight into the file holding every race he has run.
+
+    Redirected rather than refused, because the paths that default to the
+    live file are the app's own and dozens of tests reach them for good
+    reasons. What matters is that the target is never his data. The
+    read-only schema check (`test_schema_drift`) opens the live file through
+    `sqlite3` directly and is untouched by this - it is the one test meant to
+    look at it, and it cannot write.
+    """
+    from pathlib import Path
+
+    from pitcrew.store import db as db_module
+
+    live = Path(db_module.DEFAULT_DB_PATH).resolve()
+    throwaway = tmp_path / "not-the-live.db"
+    real_init = db_module.Store.__init__
+
+    def guarded(self, path=None, *args, **kwargs):
+        target = live if path is None else Path(path).resolve()
+        return real_init(self, throwaway if target == live else path,
+                         *args, **kwargs)
+
+    monkeypatch.setattr(db_module.Store, "__init__", guarded)
+    monkeypatch.setenv("PITCREW_DB", str(throwaway))
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

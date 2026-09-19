@@ -74,7 +74,8 @@ def record(store, session_id, seen, *, laps_total=None,
         fuel_in_l=stop.fuel_in_l, fuel_out_l=stop.fuel_out_l,
         compound=stop.compound, assumed_start_l=assumed_start_l,
         reads=seen.reads, compound_reads=seen.compound_reads,
-        watched_s=seen.watched_s, partial=seen.partial)
+        watched_s=seen.watched_s, partial=seen.partial,
+        compound_in=getattr(stop, "compound_in", None))
 
 
 def _circuit_of(row) -> str | None:

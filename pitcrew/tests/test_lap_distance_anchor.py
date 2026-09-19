@@ -13,6 +13,8 @@ a lap that no scale factor rescues.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dataclasses import dataclass, field, replace
@@ -146,7 +148,12 @@ def test_every_anchored_lap_measures_the_circuit(event_id):
     from pitcrew.export.build import event_lap_inputs
     from pitcrew.store.db import Store
 
-    store = Store()
+    # **Read-only**, and nothing else is: this checks real data against the
+    # live archive, and `Store()` would have upgraded the file to read it.
+    from pitcrew.store.db import DEFAULT_DB_PATH
+    if not Path(DEFAULT_DB_PATH).exists():
+        pytest.skip("no archive on this machine")
+    store = Store.read_only()
     try:
         event = store.get_event(event_id)
         length = distance.circuit_length(store, event)

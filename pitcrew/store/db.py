@@ -138,6 +138,38 @@ class Store:
         self._conn.execute("PRAGMA mmap_size = 268435456")   # 256 MB
         self._init_schema()
 
+    @classmethod
+    def read_only(cls, path: str | Path = DEFAULT_DB_PATH) -> "Store":
+        """A store that can read the file and cannot change it. At all.
+
+        **`Store()` is never read-only, whatever the caller meant.** Its
+        constructor sets the journal mode and runs `_init_schema`, which
+        creates tables, adds `ADDED_COLUMNS` and runs `MIGRATIONS` - so every
+        "just reading the archive" open was a write. Found 19 Sep 2026: two
+        tests that check real data against the live file added a new column to
+        it mid-suite, because opening it to read was opening it to upgrade.
+
+        This skips all of that. The connection is SQLite's own read-only
+        mode, through a URI, and `query_only` on top of it - so a caller that
+        reaches for a write method gets an error rather than a change. It does
+        not copy the file, because a copy of a WAL database without its -wal
+        loses the most recent rows. A column the live file lacks is absent
+        here too; that is the honest answer, not something to paper over.
+        """
+        self = cls.__new__(cls)
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(
+            f"file:{self.path.resolve().as_posix()}?mode=ro", uri=True,
+            check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA query_only = ON")
+        # Read-side speed, as `__init__` sets it; none of these writes a byte.
+        self._conn.execute("PRAGMA cache_size = -65536")
+        self._conn.execute("PRAGMA temp_store = MEMORY")
+        self._conn.execute("PRAGMA mmap_size = 268435456")
+        return self
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
@@ -1512,7 +1544,8 @@ class Store:
                           assumed_start_l: float | None = None,
                           reads: int = 0, compound_reads: int = 0,
                           watched_s: float | None = None,
-                          partial: bool = False) -> int:
+                          partial: bool = False,
+                          compound_in: str | None = None) -> int:
         """File one observed stop.
 
         Nullable throughout, deliberately: these come from reading a screen and
@@ -1527,12 +1560,14 @@ class Store:
             cur = conn.execute(
                 """INSERT INTO rival_stops
                        (session_id, driver, lap, laps_total, fuel_in_l,
-                        fuel_out_l, compound, assumed_start_l, reads,
-                        compound_reads, watched_s, partial, recorded_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        fuel_out_l, compound, compound_in, assumed_start_l,
+                        reads, compound_reads, watched_s, partial,
+                        recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, driver, lap, laps_total, fuel_in_l, fuel_out_l,
-                 compound, assumed_start_l, int(reads), int(compound_reads),
-                 watched_s, 1 if partial else 0, _now()))
+                 compound, compound_in, assumed_start_l, int(reads),
+                 int(compound_reads), watched_s, 1 if partial else 0,
+                 _now()))
             return int(cur.lastrowid)
 
     def record_gap_reads(self, session_id: int | None, samples) -> int:

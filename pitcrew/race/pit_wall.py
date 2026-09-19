@@ -72,6 +72,18 @@ _log = log(__name__)
 # the driver himself into four apiece, with burn rates to match.
 CLOSE_AFTER_CLEAN_FRAMES = 3
 
+# ...and for at least this long. **A frame count is not a duration, and the
+# grab rate is his to change.** Three frames was tuned at the 2 s grab this ran
+# at - about 4 to 6 s of a car visibly out of his box. At the 0.5 s grab he
+# moved to on 19 Sep 2026 (so the disc's flip at the lane exit is caught) the
+# same three frames are 1.5 s, and a pit crew washing a disc out behind the
+# translucent HUD for under two seconds would close a stop in the middle of
+# its fill. Both have to hold: the frames stop one bad read closing a visit,
+# the seconds stop a fast grab doing it three times in a second and a half.
+# 4.0 is what three frames span at 2 s, so behaviour at the old rate is
+# exactly what it was.
+CLOSE_AFTER_CLEAN_S = 4.0
+
 # ...and a stop nobody has seen either way for this long is over. A car can
 # leave the visible top eight while standing - `race/profile.py` has the
 # measured account of why that is the normal case rather than the exception -
@@ -147,7 +159,54 @@ class Visit:
 
     @property
     def compound(self) -> str | None:
-        """The letter agreed on across this stop, or `None`.
+        """The tyre he LEFT on - our best reading of it - or `None`.
+
+        **The disc on GT7's timing totem changes only as the car exits the
+        pit lane** (the driver, 19 Sep 2026). While he stands it shows the
+        tyres he ARRIVED on, whatever the crew fits. So the vote across the
+        stop - `arrived_on` - is the stint he just FINISHED, and the tyre he
+        leaves on is the LAST read, taken as he goes.
+
+        This used to file the vote, so every car that changed compound was
+        filed with the tyres it came in on. It matched our own stop at
+        Sardegna Rd 9 exactly: we fitted RH and the disc read M from entry to
+        the last frame watched.
+
+        Where the last read differs from the vote, the change was SEEN and
+        this is the tyre he left on. Where it does not, he either refitted
+        the same compound or the flip landed between two grabs; this returns
+        the arrival compound as the best estimate and `compound_changed` is
+        None, so nothing downstream reads "same tyre" as a fact.
+        """
+        arrived = self.arrived_on
+        left = self.left_on
+        if left is not None and arrived is not None and left != arrived:
+            return left
+        return arrived
+
+    @property
+    def left_on(self) -> str | None:
+        """The last compound read, as he left the lane, or `None`.
+
+        **One frame by the nature of the signal**, so there is no vote here:
+        the disc flips as the car exits, and at the old 2 s grab it was
+        usually missed entirely. What stands behind a single read is the
+        reader itself, which refuses where colour and glyph disagree.
+        """
+        return self.compounds[-1] if self.compounds else None
+
+    @property
+    def compound_changed(self) -> bool | None:
+        """True where the disc was SEEN to change as he left. None otherwise -
+        a refit of the same set and a flip the grab missed look identical."""
+        arrived, left = self.arrived_on, self.left_on
+        if arrived is not None and left is not None and left != arrived:
+            return True
+        return None
+
+    @property
+    def arrived_on(self) -> str | None:
+        """The letter agreed on across this stop - the tyres he came IN on.
 
         **A tie refuses, and it used to be decided by hash order.** Measured
         across eight values of PYTHONHASHSEED, `max(set(...), key=count)` on
@@ -174,6 +233,13 @@ class Visit:
     def as_stop(self) -> Stop:
         return Stop(lap=self.lap,
                     compound=self.compound,
+                    compound_in=self.arrived_on,
+                    # **Set for a rival at last.** `tyres_changed` has existed
+                    # on `Stop` and been None for every rival ever filed; a
+                    # compound change seen at the lane exit PROVES it. No
+                    # change seen proves nothing - a same-compound refit is
+                    # invisible on the disc - so that stays None (rule 3).
+                    tyres_changed=True if self.compound_changed else None,
                     fuel_in_l=(float(self.entry_l)
                                if self.entry_l is not None else None),
                     fuel_out_l=(float(self.exit_l)
@@ -279,6 +345,9 @@ class PitWall:
         self._on_board = on_board
         self._visits: dict[int, Visit] = {}
         self._absent: dict[int, int] = {}
+        # When each driver's current run of absent frames began - see
+        # `CLOSE_AFTER_CLEAN_S`.
+        self._absent_since: dict[int, float] = {}
         # Drivers seen on the board WITHOUT pit columns. A visit that begins
         # for a driver who is not in here started after the fill did, so far as
         # anything can tell - which is what `partial` means.
@@ -431,6 +500,7 @@ class PitWall:
         """
         self._visits.clear()
         self._absent.clear()
+        self._absent_since.clear()
         self._seen_clean.clear()
         self._clean_place.clear()
         self._position.clear()
@@ -600,6 +670,7 @@ class PitWall:
             # whether a stop is happening.
             self._pitted.add(driver)
             self._absent[driver] = 0
+            self._absent_since.pop(driver, None)
             visit = self._visits.get(driver)
             if visit is None:
                 # Seen in the lane on the first clean frame of the session
@@ -682,7 +753,9 @@ class PitWall:
                 # nothing about whether he is standing in his box.
                 continue
             self._absent[driver] = self._absent.get(driver, 0) + 1
-            if self._absent[driver] >= CLOSE_AFTER_CLEAN_FRAMES:
+            since = self._absent_since.setdefault(driver, now)
+            if (self._absent[driver] >= CLOSE_AFTER_CLEAN_FRAMES
+                    and now - since >= CLOSE_AFTER_CLEAN_S):
                 visit = self._visits.get(driver)
                 if visit is not None and visit.rising_when_last_read:
                     # Counted and said, not prevented - see
@@ -803,6 +876,7 @@ class PitWall:
             # for laps he did not stop on, 7 and 11 Sep. Below the bar it is
             # dropped the way a rival's fragment is, and said as that.
             self._absent.pop(driver, None)
+            self._absent_since.pop(driver, None)
             _log.info("pit-wall: pit columns glimpsed on our own row on lap "
                       "%s (%d fuel reads over %.0f s) - not a stop",
                       visit.lap if visit is not None else None,
@@ -826,10 +900,12 @@ class PitWall:
             # normalises to a fixed shape, and all six folded into one cluster
             # - so the car "in the lane" WAS the own row in every test here.
             self._absent.pop(driver, None)
+            self._absent_since.pop(driver, None)
             _log.info("pit-wall: own stop on lap %s not filed as a rival's",
                       visit.lap if visit is not None else None)
             return None
         self._absent.pop(driver, None)
+        self._absent_since.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
             # **Said, because this is where a whole race of stops vanished.**
             # In Sardegna Rd 9 every stop by a car on medium tyres ended here

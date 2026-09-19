@@ -12,6 +12,8 @@ in VR reads about 6 crossings in 22 - says nothing at all.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dataclasses import dataclass
@@ -216,7 +218,12 @@ def test_the_fit_reproduces_the_monza_figure_on_file():
     from pitcrew.export.build import event_lap_inputs
     from pitcrew.store.db import Store
 
-    store = Store()
+    # **Read-only**, and nothing else is: this checks real data against the
+    # live archive, and `Store()` would have upgraded the file to read it.
+    from pitcrew.store.db import DEFAULT_DB_PATH
+    if not Path(DEFAULT_DB_PATH).exists():
+        pytest.skip("no archive on this machine")
+    store = Store.read_only()
     try:
         got = fit(event_lap_inputs(store, 1, "practice", hydrate=set()))
     finally:

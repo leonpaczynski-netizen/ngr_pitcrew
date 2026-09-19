@@ -1001,7 +1001,13 @@ CREATE TABLE IF NOT EXISTS rival_stops (
     laps_total      INTEGER,
     fuel_in_l       REAL,                    -- NULL = not read, never 0
     fuel_out_l      REAL,
-    compound        TEXT,
+    compound        TEXT,                    -- the tyre he LEFT on
+    -- ...and the one he ARRIVED on. The disc shows the incoming set until the
+    -- car exits the lane, so `compound` is the last read and this is the vote
+    -- across the stop. NULL on every row filed before 19 Sep 2026 - and on
+    -- those rows `compound` holds the ARRIVAL tyre, because the vote was what
+    -- was filed there. A reader that needs "fitted" checks this is not NULL.
+    compound_in     TEXT,
     assumed_start_l REAL,                    -- the assumption, stored not hidden
     -- The evidence behind the two figures above.
     -- Two different claims from one stop, counted separately: a row backed by
@@ -1243,6 +1249,10 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     # the fuel figure. Added to the DDL at v12+ without an entry here.
     "rival_stops": (
         ("compound_reads", "INTEGER NOT NULL DEFAULT 0"),
+        # 19 Sep 2026: the disc shows the tyres a car arrived on until it
+        # exits the lane. `compound` is now the tyre he left on; this is the
+        # one he came in on. NULL on older rows, whose `compound` is arrival.
+        ("compound_in", "TEXT"),
     ),
     # **What became of the call** (7 Sep 2026, plan 1.6): `race/call_outcome`
     # judged against the laps that followed, written as they came in. NULL

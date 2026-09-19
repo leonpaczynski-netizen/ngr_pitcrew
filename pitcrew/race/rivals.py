@@ -71,7 +71,12 @@ class Stop:
     fuel_in_l: float | None = None
     fuel_out_l: float | None = None
     tyres_changed: bool | None = None
+    # The tyre he LEFT on - the last disc read, as he exited the lane.
     compound: str | None = None
+    # ...and the one he ARRIVED on: the vote across the stop, because the disc
+    # shows the incoming set until the car leaves. It is the compound of the
+    # stint he just finished, which is a fact worth keeping in its own right.
+    compound_in: str | None = None
 
     @property
     def litres(self) -> float | None:

@@ -24,12 +24,15 @@ Every figure is OUR measured rate applied to HIS laps on the set:
   sample count (rule 4). Applying it to his car assumes his car and driving
   wear the set as ours does - a fair assumption in a one-make series, and
   still an assumption.
-* **The compound - the weakest link, and said so.** The disc is a single
-  letter, and on the one stop where we know the truth (our own, 16 Sep: we
-  fitted RH) it read M the whole time - so it appears to show the tyres a car
-  ARRIVED on, not the ones it left on. One sample, not proof. So what this
-  projects is "if he went back out on the same compound", and the derived
-  record says exactly that.
+* **The compound - read where the disc changed, assumed where it did not.**
+  The disc on GT7's timing totem changes only as the car exits the pit lane
+  (the driver, 19 Sep 2026); while he stands it shows the tyres he ARRIVED
+  on. So `Stop.compound` is the last read, as he left, and where it differs
+  from `Stop.compound_in` the change was SEEN and the compound is a reading.
+  Where the two agree he either refitted the same compound or the flip fell
+  between two grabs - indistinguishable on the disc - and the projection
+  says it is assuming the same set. The 0.5 s grab he moved to makes the
+  seen case far more common than the 2 s one did.
 
 ### The cliff, not the stint limit
 
@@ -65,6 +68,9 @@ class RivalTyres:
     samples: int            # the stints behind that rate (rule 4)
     worn_now: float         # rate x laps on the set, modelled
     cliff_key: float        # the completed-lap key where he reaches the cliff
+    # True where the disc was SEEN to change as he left the lane, so the
+    # compound is a reading; False where it is the arrival tyre assumed kept.
+    compound_seen: bool = False
 
     def cliff_lap(self, screen_offset: int) -> int:
         """The lap on his screen when the set goes off.
@@ -83,9 +89,13 @@ class RivalTyres:
                 f"({self.samples} stint{'' if self.samples == 1 else 's'}) = "
                 f"{self.worn_now:.0%} now, the cliff ({CLIFF_WORN:.0%}) at "
                 f"lap key {self.cliff_key:.1f}. [ASSUMED] his car wears the "
-                f"set as ours does; [ASSUMED] he went back out on the "
-                f"compound the disc showed at his stop, which on the one stop "
-                f"calibrated reads the tyres he ARRIVED on")
+                f"set as ours does; "
+                + (f"[READ] he left on {self.compound} - the disc changed as "
+                   f"he exited the lane" if self.compound_seen else
+                   f"[ASSUMED] he left on the {self.compound} he arrived on - "
+                   f"no change was seen at the lane exit, which a refit of "
+                   f"the same compound and a flip between two grabs both "
+                   f"look like"))
 
 
 def full_code(letter: str | None, our_compound: str | None) -> str | None:
@@ -144,4 +154,5 @@ def rival_tyres(rival, *, now_key: int | None, our_compound: str | None,
         compound=code, laps_on_set=laps_on_set, rate=float(rate),
         samples=int(samples or 0),
         worn_now=float(rate) * laps_on_set,
-        cliff_key=float(stop.lap) + CLIFF_WORN / float(rate))
+        cliff_key=float(stop.lap) + CLIFF_WORN / float(rate),
+        compound_seen=bool(getattr(stop, "tyres_changed", None)))

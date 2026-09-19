@@ -156,3 +156,33 @@ def test_the_live_database_has_every_declared_column():
     assert real == {}, (
         f"declared columns missing from {LIVE}: {real} - add them to "
         f"ADDED_COLUMNS and open the app once")
+
+
+def test_a_read_only_store_cannot_change_the_file(tmp_path):
+    """**`Store()` was never read-only, whatever the caller meant.** Its
+    constructor runs the schema upgrade, so two archive checks opening the
+    live file "to read" added a column to it mid-suite (19 Sep 2026).
+    `Store.read_only` must be unable to write - not merely unlikely to."""
+    import sqlite3
+
+    import pytest
+
+    from pitcrew.store.db import Store
+
+    path = tmp_path / "archive.db"
+    Store(path).close()                         # a real, current file
+    before = path.stat().st_mtime_ns
+
+    store = Store.read_only(path)
+    try:
+        # Reads work...
+        assert store._conn.execute(
+            "select count(*) from rival_stops").fetchone()[0] == 0
+        # ...and writes are refused by SQLite itself, not by convention.
+        with pytest.raises(sqlite3.OperationalError):
+            store._conn.execute(
+                "insert into rival_stops (driver, recorded_at) "
+                "values ('x', 'y')")
+    finally:
+        store.close()
+    assert path.stat().st_mtime_ns == before

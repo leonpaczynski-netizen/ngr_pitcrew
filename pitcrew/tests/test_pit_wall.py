@@ -674,3 +674,46 @@ def test_each_gap_reading_is_handed_on_with_whose_it_is(monkeypatch):
     # A reading whose neighbour the board could not place says so with None,
     # never a guessed car - and the race keys it on nothing.
     assert len(gaps) == 2 * (FEW + 1)
+
+
+def test_a_fast_grab_does_not_close_a_stop_in_a_second_and_a_half():
+    """**A frame count is not a duration, and the grab rate is his to change.**
+
+    Three clean frames was tuned at the 2 s grab - four to six seconds of a
+    car visibly out of his box. At the 0.5 s grab he moved to on 19 Sep 2026
+    the same three frames are 1.5 s, and a pit crew washing a disc out behind
+    the translucent HUD for under two seconds would close a stop mid-fill.
+    """
+    from pitcrew.race.pit_wall import CLOSE_AFTER_CLEAN_S
+
+    clock = Clock(step=0.5)                 # the new grab rate
+    wall = a_wall()
+    warm(wall, clock)
+    # A real stop's length: `MIN_WATCHED_S` discards anything shorter as a
+    # fragment, so a two-second fill would test that guard and not this one.
+    for frame in range(60):                 # 30 s of filling, 19 -> 78 L
+        wall.see(a_frame(in_lane=(1,), fuel={1: 19 + frame}),
+                 now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert closed == [], "three frames at 0.5 s is 1.5 s - not a departure"
+    # Once the duration is met as well, the stop closes as it always did.
+    while clock.now < 60 and not closed:
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert closed, "the stop must still close once he is genuinely gone"
+    assert CLOSE_AFTER_CLEAN_S == 4.0       # three frames at the old 2 s
+
+
+def test_at_the_old_grab_rate_the_close_is_exactly_what_it_was():
+    """4.0 s is what three frames span at 2 s, so nothing changes there."""
+    clock = Clock(step=2.0)
+    wall = a_wall()
+    warm(wall, clock)
+    for frame in range(15):                 # 30 s of filling
+        wall.see(a_frame(in_lane=(1,), fuel={1: 19 + 4 * frame}),
+                 now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert closed, "three frames at 2 s is still a departure"
