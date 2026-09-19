@@ -1309,6 +1309,11 @@ class PiperEngine:
         self._voice = None
         # One load, however many threads ask at once - see `_load`.
         self._load_lock = threading.Lock()
+        # Whether the throwaway first synthesis has run. It pays the ONNX
+        # session's own first-run cost, which is paid once per process - so
+        # the second and later `warm()`s (every session start after the
+        # launch pre-warm) have nothing left to warm.
+        self._warmed = False
         self.tuning = dict(DEFAULT_TUNING)
         if tuning:
             self.tuning.update(tuning)
@@ -1332,8 +1337,11 @@ class PiperEngine:
         claimed, and the driver hears nothing.
         """
         self._load()
+        if self._warmed:
+            return
         for _samples, _rate in self.synthesise(WARM_LINE):
             pass
+        self._warmed = True
 
     def _load(self):
         """The model, loaded once however many threads ask at once.

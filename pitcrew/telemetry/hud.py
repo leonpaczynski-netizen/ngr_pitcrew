@@ -63,6 +63,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -130,6 +131,82 @@ LIVE_PEAK = 165
 # Frames larger than the library's default cap; see the module docstring.
 MAX_FRAME_BYTES = 16 * 1024 * 1024
 CONNECT_TIMEOUT_S = 4.0
+# **How long a loopback OBS gets to answer the TCP handshake.** Windows does
+# not refuse a connection to a closed loopback port - it retries the SYN and
+# reports the refusal about 2.0 s later (measured 2,016-2,026 ms on this PC,
+# three of three). Every "could not start the OBS recording:
+# ConnectionRefusedError" in the log cost that on the Qt thread, twice per
+# session start: once in the gauge pre-flight, once starting the recording. A
+# listening socket on the same machine completes the handshake in the kernel,
+# in well under a millisecond and whatever OBS itself is doing, so a quarter
+# of a second is a thousand-fold margin and silence past it means nothing is
+# listening. Only literal loopback addresses get this: a remote OBS is a
+# network, not a kernel, and keeps the full `CONNECT_TIMEOUT_S`.
+OBS_LOOPBACK_ANSWER_S = 0.25
+_LOOPBACK = {"127.0.0.1": "AF_INET", "::1": "AF_INET6"}
+# **Why the refusal is slow, and the switch that makes it immediate.** The
+# two seconds are Windows re-sending the SYN after the loopback RST - two
+# retransmissions at 0.5 s and 1 s, then the refusal. `SIO_TCP_INITIAL_RTO`
+# with `TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS` (Win10 1703+, ws2ipdef.h)
+# turns those re-sends off for this one socket, so a closed port is refused
+# on the first RST: 15 ms measured, against 2,014-2,027 ms without it and
+# 250 ms for the timeout alone. A listening OBS answers the first SYN, so it
+# never needed a re-send. The timeout stays as the backstop wherever the
+# ioctl is refused (an older Windows, not Windows).
+_SIO_TCP_INITIAL_RTO = 0x98000011          # _WSAIOW(IOC_VENDOR, 17)
+_RTO_UNSPECIFIED_RTT = 0xFFFF              # keep the system's initial RTO
+_RTO_NO_SYN_RETRANSMISSIONS = 0xFE
+
+
+def _refuse_on_first_rst(sock) -> bool:
+    """Turn off SYN re-sends on `sock` (Windows). True if it took."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _InitialRto(ctypes.Structure):     # TCP_INITIAL_RTO_PARAMETERS
+            _fields_ = [("Rtt", ctypes.c_ushort),
+                        ("MaxSynRetransmissions", ctypes.c_ubyte)]
+
+        params = _InitialRto(_RTO_UNSPECIFIED_RTT, _RTO_NO_SYN_RETRANSMISSIONS)
+        returned = wintypes.DWORD(0)
+        return ctypes.windll.ws2_32.WSAIoctl(
+            ctypes.c_size_t(sock.fileno()),
+            wintypes.DWORD(_SIO_TCP_INITIAL_RTO),
+            ctypes.byref(params), ctypes.sizeof(params), None, 0,
+            ctypes.byref(returned), None, None) == 0
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
+def _loopback_socket(host: str, port: int, *,
+                     answer_s: float = OBS_LOOPBACK_ANSWER_S):
+    """`(socket, None)` connected to a loopback OBS, `(None, why)` if nothing
+    is listening, or `(None, None)` when `host` is not loopback and the caller
+    should connect the ordinary way. Never raises."""
+    import socket
+
+    family = _LOOPBACK.get((host or "").strip())
+    if family is None:
+        return None, None
+    nobody = (f"nothing is listening on {host}:{port} - OBS is not running, "
+              f"or its WebSocket server is switched off")
+    sock = socket.socket(getattr(socket, family), socket.SOCK_STREAM)
+    _refuse_on_first_rst(sock)
+    sock.settimeout(answer_s)
+    try:
+        sock.connect((host.strip(), int(port)))
+    except (socket.timeout, TimeoutError):
+        sock.close()
+        return None, f"{nobody} (no answer in {answer_s:g}s on loopback)"
+    except ConnectionRefusedError:
+        sock.close()
+        return None, f"{nobody} (refused on loopback)"
+    except OSError as exc:
+        sock.close()
+        return None, f"{type(exc).__name__}: {exc}"
+    sock.settimeout(None)
+    return sock, None
 # Consecutive failures before the sampler stands down for the session. It says
 # so once and stops trying: an error repeated every lap is noise, and by then
 # something needs a human anyway.
@@ -1172,12 +1249,22 @@ class ObsSource:
 
     def _connected(self, work):
         """Open, authenticate, run `work(request)`, close. Never raises."""
+        # The handshake first, bounded - see `OBS_LOOPBACK_ANSWER_S`. The
+        # socket it opens is the one the websocket then runs over, so a
+        # listening OBS sees one connection, not a probe and then another.
+        # And before the import: with OBS closed the answer is known without
+        # the websockets package ever being loaded (25-150 ms cold).
+        sock, why = _loopback_socket(self.host, self.port)
+        if why is not None:
+            return None, why
         try:
             from websockets.sync.client import connect
         except ImportError:
+            if sock is not None:
+                sock.close()
             return None, "the websockets package is not installed"
         try:
-            with connect(f"ws://{self.host}:{self.port}",
+            with connect(f"ws://{self.host}:{self.port}", sock=sock,
                          open_timeout=CONNECT_TIMEOUT_S,
                          close_timeout=CONNECT_TIMEOUT_S,
                          max_size=MAX_FRAME_BYTES) as ws:
@@ -1310,6 +1397,25 @@ PROJECTOR_TITLES = ("windowed projector (program)",
                     "fullscreen projector (program)")
 
 
+def _window_pid(hwnd) -> int | None:
+    """The id of the process that owns `hwnd`, or None if it cannot be told.
+
+    `GetWindowThreadProcessId` reads the window's owner out of the window
+    manager and sends nothing to the window, so unlike `GetWindowText` it
+    cannot wait on a thread that is not pumping messages.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        pid = wintypes.DWORD(0)
+        ctypes.windll.user32.GetWindowThreadProcessId(
+            wintypes.HWND(int(hwnd)), ctypes.byref(pid))
+        return int(pid.value) or None
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
 def find_projector(title_hint: str = ""):
     """(hwnd, title) of the OBS projector, or (None, reason).
 
@@ -1330,8 +1436,22 @@ def find_projector(title_hint: str = ""):
     # the driver to reopen a window he already had open: on 3 Sep 2026 he had
     # it up all night and the log told him to create it.
     hidden = []
+    own = os.getpid()
 
     def visit(hwnd, _):
+        # **Our own windows are skipped BEFORE their title is asked for, and
+        # that order is the whole of a twelve-second freeze.** For a window
+        # of another process `GetWindowText` reads a cached caption and
+        # cannot block. For a window of THIS process it sends `WM_GETTEXT`
+        # to the thread that owns the window - the Qt thread - and waits for
+        # it to answer. `preflight` runs this on a worker while the Qt thread
+        # sits in `join(12 s)`, so the worker waited for the Qt thread and the
+        # Qt thread waited for the worker: every practice and race start from
+        # 4 to 19 Sep 2026 froze the window for exactly `PREFLIGHT_TIMEOUT_S`
+        # and logged "could not CHECK" - 55 times, and never once an answer.
+        # None of our windows can be the OBS projector, so nothing is lost.
+        if _window_pid(hwnd) == own:
+            return
         title = win32gui.GetWindowText(hwnd) or ""
         low = title.lower()
         if PROJECTOR_WORD not in low:

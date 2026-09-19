@@ -32,6 +32,8 @@ def _engine(monkeypatch) -> tuple[voice.PiperEngine, _FakeModel]:
     engine.tuning = dict(voice.DEFAULT_TUNING)
     model = _FakeModel()
     engine._voice = None
+    # What `__init__` sets: the throwaway synthesis has not run yet.
+    engine._warmed = False
     monkeypatch.setattr(engine, "_load", lambda: model)
     monkeypatch.setattr(engine, "_config", lambda: None)
     return engine, model

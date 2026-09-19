@@ -64,6 +64,7 @@ the gauge does.
 from __future__ import annotations
 
 import datetime
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -110,6 +111,9 @@ DAMAGE_KEEP = 40
 # nothing was being captured while his projector was open in front of him.
 # 12 s is past that cold start and still finite for a genuinely sick OBS.
 PREFLIGHT_TIMEOUT_S = 12.0
+# How long closing a session waits for a `start_video` still in flight. OBS
+# answers in well under this; past it the worker stops what it started.
+VIDEO_START_WAIT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -186,6 +190,11 @@ class HudSession:
         self._wear_now_lap: int | None = None
         self._blind_note: str | None = None
         self._video_started = False
+        # The session a `start_video` worker is starting OBS for, and the
+        # worker. Written under the lock on both threads - see `stop_video`.
+        self._video_lock = threading.Lock()
+        self._video_session: int | None = None
+        self._video_thread: threading.Thread | None = None
         # The pit wall, if one has asked to ride along. Read on the sampler's
         # worker thread and written on the Qt one - a plain attribute, like
         # everything else crossing that boundary here, because a lock here is
@@ -742,6 +751,20 @@ class HudSession:
         tool has to be handed an offset by hand and admits its estimate is a
         few seconds early.
 
+        **Asked on a worker, never on the Qt thread.** This is a websocket
+        connect, an identify and two requests, and OBS answers `StartRecord`
+        only once the output is running: measured in the log at 0.3 to 3.9 s
+        between the pre-flight and "OBS recording started", on the button
+        handler, with the window frozen - and 2.0 s of refused connect on
+        every start with OBS closed. The zero is still stamped at the moment
+        OBS says it is recording, so what it means is unchanged; it simply
+        does not hold the session hostage while it waits. No indexed crossing
+        is lost: synchronously, the listener only started after OBS
+        confirmed, so no crossing inside the wait was recorded at all. Now one
+        is recorded as a lap, and `video_index.build` places it at second zero
+        if it fell within `CLOCK_SLACK_S` (2 s) of the zero, or leaves it out
+        of the video if earlier - a moment the capture does not contain.
+
         Silent on every failure. A recording is a convenience and a session is
         not, so nothing here may stop one opening.
         """
@@ -751,7 +774,20 @@ class HudSession:
 
         source = ObsSource(self.settings.obs_host, self.settings.obs_port,
                            self.settings.obs_password)
-        started, why = source.start_recording()
+        with self._video_lock:
+            self._video_session = session_id
+        worker = threading.Thread(
+            target=self._start_video_worker, args=(session_id, source),
+            name="obs-record", daemon=True)
+        self._video_thread = worker
+        worker.start()
+
+    def _start_video_worker(self, session_id: int, source) -> None:
+        """The OBS round trip, off the Qt thread. Never raises."""
+        try:
+            started, why = source.start_recording()
+        except Exception as exc:                             # noqa: BLE001
+            started, why = None, f"{type(exc).__name__}: {exc}"
         if started is None:
             log("session").info("could not start the OBS recording: %s", why)
             return
@@ -765,10 +801,40 @@ class HudSession:
                 "where in it second zero fell")
             return
         stamp = datetime.datetime.now().isoformat(timespec="seconds")
-        self.store.set_session_video(session_id, path=None,
-                                     started_at=stamp)
-        self._video_started = True
+        with self._video_lock:
+            # The zero is filed BEFORE the flag goes up, both under the lock,
+            # so a `stop_video` can never see a recording it may stop whose
+            # zero is not yet on the row it then writes the path to.
+            current = self._video_session == session_id
+            if current:
+                try:
+                    self.store.set_session_video(session_id, path=None,
+                                                 started_at=stamp)
+                except Exception as exc:                     # noqa: BLE001
+                    log("session").warning("could not file the video zero "
+                                           "for session %s: %s",
+                                           session_id, exc)
+                self._video_started = True
+        if not current:
+            # **The session closed while OBS was still starting.** `stop_video`
+            # waited as long as it will and gave up, so nobody else is going
+            # to stop this recording: the app started it, the app stops it.
+            path, why = source.stop_recording()
+            log("session").info(
+                "OBS started recording after session %s had closed - stopped "
+                "it again (%s)", session_id,
+                path if path is not None else f"not cleanly: {why}")
+            return
         log("session").info("OBS recording started, video zero at %s", stamp)
+
+    def video_settled(self, timeout_s: float | None = None) -> bool:
+        """Wait for an in-flight `start_video`. True when none is running."""
+        worker = self._video_thread
+        if worker is None:
+            return True
+        worker.join(timeout=VIDEO_START_WAIT_S if timeout_s is None
+                    else timeout_s)
+        return not worker.is_alive()
 
     def stop_video(self, session_id: int | None) -> None:
         """Stop the recording this app started, and file where OBS put it.
@@ -776,10 +842,23 @@ class HudSession:
         **Never stops one it did not start** - `ObsSource.stop_recording`
         already refuses, and `_video_started` is the app's own half of the
         same rule.
+
+        **A start still in flight is waited for, boundedly.** Otherwise a
+        session closed inside the start's round trip would find nothing
+        started, return, and leave OBS recording all night. If it does not
+        settle in `VIDEO_START_WAIT_S` the worker is told the session is gone
+        and stops the recording itself when it lands.
         """
-        if not getattr(self, "_video_started", False):
+        if not self.video_settled(VIDEO_START_WAIT_S):
+            log("session").warning(
+                "the OBS recording was still starting after %gs - the session "
+                "closes now and the recording is stopped when OBS answers",
+                VIDEO_START_WAIT_S)
+        with self._video_lock:
+            self._video_session = None
+            started, self._video_started = self._video_started, False
+        if not started:
             return
-        self._video_started = False
         from pitcrew.telemetry.hud import ObsSource
 
         source = ObsSource(self.settings.obs_host, self.settings.obs_port,

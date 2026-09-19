@@ -218,27 +218,44 @@ def reference_lap(store, event_id: int) -> ReferenceLap | None:
     # window is compound- or weather-aware - the reference is simply the
     # event's best counted lap, whatever set and sky it was driven under.
     # A follow-up, not this change.
+    from pitcrew.store import frame_memo
+
     for row in sorted(rows, key=lambda row: row["lap_time_ms"]):
-        stored = store.get_lap_frames(row["id"])
-        if not stored:
+        lap_ms = int(row["lap_time_ms"])
+        # Through the memo, keyed on the claimed time as well as the bytes:
+        # the span gate and the curve both depend on it - `store/frame_memo`.
+        got = frame_memo.derived(
+            store, row["id"], ("reference_lap", lap_ms),
+            lambda stored, lap_id=row["id"], lap_ms=lap_ms:
+                _reference_from(stored, lap_id, lap_ms))
+        if got is frame_memo.NO_FRAMES:
             continue
-        # The claimed time has to describe the frames - see
-        # REFERENCE_SPAN_TOLERANCE for the phantom this gate exists to stop.
-        span_ms = (stored["frame_count"]
-                   / (stored["sample_hz"] or SAMPLE_HZ) * 1000.0)
-        if (abs(span_ms - row["lap_time_ms"])
-                > row["lap_time_ms"] * REFERENCE_SPAN_TOLERANCE):
+        reference, span_ms = got
+        if reference is None and span_ms is not None:
             log("quali").info(
                 "reference candidate lap %s rejected: claims %d ms, frames "
                 "span %.0f ms - a time its own recording contradicts",
-                row["id"], row["lap_time_ms"], span_ms)
+                row["id"], lap_ms, span_ms)
             continue
-        reference = ReferenceLap.from_frames(
-            stored["frames"], lap_id=row["id"],
-            lap_time_ms=int(row["lap_time_ms"]))
         if reference is not None:
             return reference
     return None
+
+
+def _reference_from(stored: dict, lap_id: int, lap_time_ms: int):
+    """`(ReferenceLap or None, rejected span ms or None)` from stored frames.
+
+    The claimed time has to describe the frames - see REFERENCE_SPAN_TOLERANCE
+    for the phantom this gate exists to stop. A span is returned only when
+    that gate refused the lap, so the caller can say so every time it is
+    asked, not only the first time the answer was worked out.
+    """
+    span_ms = (stored["frame_count"]
+               / (stored["sample_hz"] or SAMPLE_HZ) * 1000.0)
+    if abs(span_ms - lap_time_ms) > lap_time_ms * REFERENCE_SPAN_TOLERANCE:
+        return None, span_ms
+    return (ReferenceLap.from_frames(stored["frames"], lap_id=lap_id,
+                                     lap_time_ms=lap_time_ms), None)
 
 
 class _Phase(enum.Enum):
