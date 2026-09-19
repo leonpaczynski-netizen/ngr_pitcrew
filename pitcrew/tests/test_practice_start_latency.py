@@ -712,6 +712,36 @@ def test_the_frame_prefetch_waits_for_the_pre_warm_and_never_runs_in_a_session(
     assert started == [f"event-{event_id}"]
 
 
+def test_a_refused_start_gets_its_prefetch_back_while_the_old_one_winds_down(
+        qt_app, window, store, event_id, monkeypatch):
+    """The start stood the prefetch down, then the pre-flight refused. The
+    stood-down thread may still be finishing its last blob - it must not
+    count as 'one already running', or the resume is swallowed and the
+    rest of the event is never prefetched. One that is running and NOT
+    stood down still does."""
+    from pitcrew.store import frame_memo
+
+    ctrl = window.controller
+    store.set_state("active_event_id", event_id)
+    started: list[str] = []
+    monkeypatch.setattr(frame_memo, "prefetch",
+                        lambda work, name: started.append(name) or running)
+    ctrl._prewarmed = True
+    ctrl.session_id = None
+    running = _RunningPrefetch()
+    running.cancelled = False
+    ctrl._frame_prefetch = running
+    try:
+        ctrl._prefetch_event_frames()
+        assert started == [], "two prefetches ran at once"
+        running.cancelled = True           # stood down, still alive
+        ctrl._prefetch_event_frames()
+        assert started == [f"event-{event_id}"]
+    finally:
+        ctrl._frame_prefetch = None
+        ctrl._prewarmed = False
+
+
 class _RunningPrefetch:
     def __init__(self):
         self.cancelled = 0
@@ -867,6 +897,139 @@ def test_a_debrief_can_be_stood_down():
 
     with pytest.raises(DebriefCancelled):
         from_store(_Store(), 1, cancelled=lambda: True)
+
+
+def test_the_corner_analysis_stands_down_between_corners():
+    """The corners are pure Python with no store call for the proxy to catch
+    - 0.75 s on event 1. A stand-down is honoured at the next corner, and a
+    build that is not stood down gives the same answer as before."""
+    from pitcrew.analysis.debrief import DebriefCancelled, analyse
+    from pitcrew.tests.test_debrief import _BURN, _PACE, MODEL, _census, _lap
+
+    laps = [(_lap(i, t1_min=90.0 + i, t2_min=120.0 - i), 90_000 + i * 100)
+            for i in range(1, 9)]
+    asked: list[int] = []
+
+    def cancelled():
+        asked.append(1)
+        return len(asked) > 1          # let the first corner through
+
+    with pytest.raises(DebriefCancelled):
+        analyse(MODEL, laps, census=_census(8), pace=_PACE, burn=_BURN,
+                cancelled=cancelled)
+    assert len(asked) == 2, "not asked once per corner"
+    kept = analyse(MODEL, laps, census=_census(8), pace=_PACE, burn=_BURN,
+                   cancelled=lambda: False)
+    assert kept == analyse(MODEL, laps, census=_census(8), pace=_PACE,
+                           burn=_BURN)
+
+
+class _FramesStore:
+    """Hands out a fresh decoded frame list per lap, as the real store does."""
+
+    def __init__(self):
+        self.handed: list[list] = []
+
+    def get_lap_frames(self, lap_id):
+        frames = [{"t_ms": i, "speed_kph": 100.0} for i in range(500)]
+        self.handed.append(frames)
+        return {"sample_hz": 60.0, "frames": frames}
+
+
+@pytest.mark.parametrize("ending", ["finished", "stood down"])
+def test_the_debrief_frees_its_frames_a_lap_at_a_time(monkeypatch, ending):
+    """1,356 ms: the Qt thread frozen at the end of every debrief on event 1
+    while CPython freed 176 decoded laps in ONE deallocation cascade (701 ms
+    when a Start stood it down 9 s in). Every frame list the build decoded
+    is emptied by hand, one lap per step, however the build ends - so no
+    single free is bigger than one lap's."""
+    from pitcrew.analysis import debrief
+
+    source = _FramesStore()
+    freed_in_order: list[int] = []
+
+    def build(store, event_id, *, session_ids, cancelled):
+        for lap_id in (1, 2, 3):
+            store.get_lap_frames(lap_id)
+        # What the build is holding when it ends: every lap, decoded.
+        assert [len(f) for f in source.handed] == [500, 500, 500]
+        if ending == "stood down":
+            raise debrief.DebriefCancelled("mid-build")
+        return "built"
+
+    real_release = debrief._Cancellable.release
+
+    def release(self):
+        # Record the lists' sizes as each one is emptied.
+        while self._decoded:
+            frames = self._decoded.pop()
+            frames.clear()
+            freed_in_order.append(sum(len(f) for f in source.handed))
+        real_release(self)
+
+    monkeypatch.setattr(debrief, "_build", build)
+    monkeypatch.setattr(debrief._Cancellable, "release", release)
+    if ending == "finished":
+        assert debrief.from_store(source, 1) == "built"
+    else:
+        with pytest.raises(debrief.DebriefCancelled):
+            debrief.from_store(source, 1, cancelled=lambda: False)
+    assert all(frames == [] for frames in source.handed)
+    # One lap at a time: 1,000 dicts left, then 500, then none.
+    assert freed_in_order == [1000, 500, 0]
+
+
+def test_releasing_hands_the_gil_over_after_every_lap(monkeypatch):
+    """`sleep(0)` was not enough: the freeing thread took the GIL straight
+    back, and a Start 10 s after a stop on event 1 still took 0.66-1.0 s.
+    A real sleep after every lap took it to 0.15-0.19 s."""
+    from pitcrew.analysis import debrief
+
+    slept: list[float] = []
+    real_sleep, me = time.sleep, threading.current_thread()
+
+    def sleep(seconds):
+        # `time.sleep` is the process's: any other thread still sleeps.
+        if threading.current_thread() is me:
+            slept.append(seconds)
+        else:
+            real_sleep(seconds)
+
+    monkeypatch.setattr(debrief.time, "sleep", sleep)
+    proxy = debrief._Cancellable(_FramesStore())
+    for lap_id in (1, 2, 3):
+        proxy.get_lap_frames(lap_id)
+    proxy.release()
+    assert slept == [debrief.RELEASE_YIELD_S] * 3
+    assert debrief.RELEASE_YIELD_S > 0
+
+
+def test_releasing_empties_only_what_this_build_decoded():
+    from pitcrew.analysis.debrief import _Cancellable
+
+    source = _FramesStore()
+    elsewhere = source.get_lap_frames(9)["frames"]      # not via the proxy
+    proxy = _Cancellable(source)
+    mine = proxy.get_lap_frames(1)["frames"]
+    proxy.release()
+    assert mine == [] and len(elsewhere) == 500
+
+
+def test_a_debrief_not_stood_down_sees_the_store_unchanged(store, event_id):
+    """The app now always builds the debrief through the stand-down proxy,
+    so until the stand-down it must BE the store: every attribute and method
+    the store's own, answering the same. Checked on the real store over an
+    event, then the same proxy flipped."""
+    from pitcrew.analysis.debrief import DebriefCancelled, _Cancellable
+
+    flag = {"down": False}
+    proxy = _Cancellable(store, lambda: flag["down"])
+    assert proxy.get_event == store.get_event          # the same bound method
+    assert proxy.get_event(event_id) == store.get_event(event_id)
+    assert proxy.list_sessions(event_id) == store.list_sessions(event_id)
+    flag["down"] = True
+    with pytest.raises(DebriefCancelled):
+        proxy.get_event(event_id)
 
 
 def test_opening_a_session_stands_the_last_debrief_down(qt_app, window, store,

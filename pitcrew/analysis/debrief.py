@@ -56,6 +56,7 @@ reported rather than absorbed.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 
 from pitcrew.analysis import distance
@@ -343,8 +344,13 @@ def _window(lap: CountedLap, corner: Corner) -> tuple[list[float], list[int]]:
 
 
 def analyse(model: CornerModel, laps: list[tuple[CountedLap, int]],
-            *, census: Census, pace: Pace, burn: Burn) -> Debrief:
-    """The pure core. `laps` is (lap, lap_time_ms), already filtered clean."""
+            *, census: Census, pace: Pace, burn: Burn,
+            cancelled=None) -> Debrief:
+    """The pure core. `laps` is (lap, lap_time_ms), already filtered clean.
+
+    `cancelled`, if given, is asked before each corner (see `from_store`):
+    the corners are the pure half of the build, 0.75 s on a 176-lap event,
+    with no store call inside for the stand-down proxy to catch."""
     laps = [(lap, ms) for lap, ms in laps]
     kept = {id(lap) for lap in length_gate([lap for lap, _ in laps]).kept}
     laps = [(lap, ms) for lap, ms in laps if id(lap) in kept]
@@ -353,6 +359,7 @@ def analyse(model: CornerModel, laps: list[tuple[CountedLap, int]],
     times = [float(ms) for _, ms in laps]
 
     for index, corner in enumerate(model.corners):
+        _stop_if(cancelled, corner.name)
         mins, apex_gears, paired_times = [], [], []
         for (lap, ms) in laps:
             speeds, lap_gears = _window(lap, corner)
@@ -434,18 +441,72 @@ class DebriefCancelled(Exception):
     """`from_store` was stood down part-way - see its `cancelled`."""
 
 
-class _Cancellable:
-    """The store, refusing every call once `cancelled()` is true. The decode
-    of each lap goes through a store call, so a stand-down takes effect
-    within one lap's decode (~70 ms)."""
+def _stop_if(cancelled, where: str) -> None:
+    """Raise `DebriefCancelled` if the build has been stood down. For the
+    stretches of pure Python the store proxy never sees - each measured at
+    0.7-1.0 s on event 1's 176 laps, far past the one lap a stand-down is
+    meant to cost."""
+    if cancelled is not None and cancelled():
+        raise DebriefCancelled(where)
 
-    def __init__(self, store, cancelled) -> None:
+
+# How long `_Cancellable.release` sleeps between two laps' frees, so the GIL
+# really is handed to the Qt thread in between - see there.
+RELEASE_YIELD_S = 0.002
+
+
+class _Cancellable:
+    """The store, refusing every call once `cancelled()` is true, and
+    keeping hold of every frame list it decodes so `release` can free them.
+
+    The decode of each lap goes through a store call, so a stand-down takes
+    effect within one lap's decode (~70 ms).
+
+    **Why the frames are freed by hand.** The build holds every practice lap
+    of the event decoded at once - 176 laps of 60 Hz dicts on event 1. When
+    the last reference to them went (the return, or a stand-down unwinding
+    the stack) CPython freed them all in one uninterruptible deallocation
+    cascade, and no other thread can take the GIL inside one: the Qt thread
+    was measured frozen for 1,356 ms at the end of every debrief on event 1,
+    and 701 ms when a Start stood it down 9 s in. `release` empties the lists
+    one lap at a time instead - a few ms each, with a short sleep between
+    every one so the GIL really is handed over.
+    """
+
+    def __init__(self, store, cancelled=None) -> None:
         self._store, self._cancelled = store, cancelled
+        self._decoded: list[list] = []
 
     def __getattr__(self, name):
-        if self._cancelled():
+        if self._cancelled is not None and self._cancelled():
             raise DebriefCancelled(name)
-        return getattr(self._store, name)
+        found = getattr(self._store, name)
+        if name == "get_lap_frames":
+            return self._holding(found)
+        return found
+
+    def _holding(self, get_lap_frames):
+        def call(*args, **kwargs):
+            stored = get_lap_frames(*args, **kwargs)
+            frames = stored.get("frames") if isinstance(stored, dict) else None
+            if isinstance(frames, list):
+                self._decoded.append(frames)
+            return stored
+        return call
+
+    def release(self) -> None:
+        """Empty every frame list this build decoded, one lap at a time.
+        Only this build's: `get_lap_frames` decodes a fresh list on every
+        call, and nothing the `Debrief` carries holds a frame."""
+        while self._decoded:
+            self._decoded.pop().clear()
+            # **A real sleep, not `sleep(0)`, between laps.** A stand-down
+            # means a session is opening on the Qt thread right now. With
+            # `sleep(0)` this thread took the GIL straight back and a Start
+            # 10 s after a stop on event 1 still took 0.66-1.0 s; with 2 ms
+            # it took 0.15-0.19 s. The cost is 176 x 2 ms = 0.35 s added to
+            # a background build that already takes 15 s.
+            time.sleep(RELEASE_YIELD_S)
 
 
 def from_store(store, event_id: int, *, session_ids=None,
@@ -457,14 +518,25 @@ def from_store(store, event_id: int, *, session_ids=None,
     pace and fuel halves would still compute, but a debrief whose corner half
     is silently absent reads as "nothing to say about your driving".
 
-    `cancelled`, if given, is asked before every store call and before the
-    corner analysis; once it answers True this raises `DebriefCancelled`.
-    The app stands the debrief down when the next session opens - it decodes
-    every practice lap (12.5 s of 18 s on a 176-lap event), and its answer
-    belongs to the run that closed.
+    `cancelled`, if given, is asked before every store call, before each
+    corner and each lap of the pure stretches; once it answers True this
+    raises `DebriefCancelled`. The app stands the debrief down when the next
+    session opens - it decodes every practice lap (12.5 s of 18 s on a
+    176-lap event), and its answer belongs to the run that closed.
+
+    Whichever way it ends, the decoded frames are freed a lap at a time
+    (`_Cancellable.release`), never in one cascade that freezes the Qt thread.
     """
-    if cancelled is not None:
-        store = _Cancellable(store, cancelled)
+    held = _Cancellable(store, cancelled)
+    try:
+        return _build(held, event_id, session_ids=session_ids,
+                      cancelled=cancelled)
+    finally:
+        held.release()
+
+
+def _build(store, event_id: int, *, session_ids, cancelled) -> Debrief | None:
+    """`from_store`'s body, over the holding proxy."""
     from pitcrew.analysis.resolve import circuit_key
     from pitcrew.analysis.runs import (
         REASON_IN_LAP,
@@ -516,6 +588,7 @@ def from_store(store, event_id: int, *, session_ids=None,
     # `analysis.distance`.
     clean, teleported = [], []
     for lap in counted:
+        _stop_if(cancelled, "the teleport check")
         if not (is_clean(lap.off_track_s) and lap.frames):
             continue
         if not distance.teleports(lap.frames).happened:
@@ -550,9 +623,9 @@ def from_store(store, event_id: int, *, session_ids=None,
                        silences=("No lap survived the excursion filter, so "
                                  "there is nothing to say about any corner.",))
 
-    if cancelled is not None and cancelled():
-        raise DebriefCancelled("before the corner analysis")
-    debrief = analyse(model, pairs, census=census, pace=pace, burn=burn)
+    _stop_if(cancelled, "before the corner analysis")
+    debrief = analyse(model, pairs, census=census, pace=pace, burn=burn,
+                      cancelled=cancelled)
     if teleported:
         debrief = Debrief(
             census=debrief.census, pace=debrief.pace, burn=debrief.burn,
@@ -563,7 +636,7 @@ def from_store(store, event_id: int, *, session_ids=None,
                 "mid-lap, so their corners are indexed against an axis that "
                 "moved. A reset or a garage return.",),
             notes=debrief.notes)
-    return _with_video(store, debrief, model, clean)
+    return _with_video(store, debrief, model, clean, cancelled=cancelled)
 
 
 def _sample_hz(lap) -> float | None:
@@ -574,7 +647,8 @@ def _sample_hz(lap) -> float | None:
     return (len(frames) - 1) * 1000.0 / span if span else None
 
 
-def _with_video(store, debrief: Debrief, model: CornerModel, clean) -> Debrief:
+def _with_video(store, debrief: Debrief, model: CornerModel, clean,
+                cancelled=None) -> Debrief:
     """Timecodes for the corner worth looking at, where a capture exists.
 
     Uses `race.video_index`, which knows the zero exactly because the app
@@ -607,6 +681,7 @@ def _with_video(store, debrief: Debrief, model: CornerModel, clean) -> Debrief:
     # millisecond precision, and skipped rather than guessed where it is not.
     cues, indexes, numbers = [], {}, {}
     for lap in clean:
+        _stop_if(cancelled, "the video cues")
         if lap.session_id not in indexes:
             indexes[lap.session_id] = video_index.for_session(store, lap.session_id)
             seen: dict[int, int | None] = {}

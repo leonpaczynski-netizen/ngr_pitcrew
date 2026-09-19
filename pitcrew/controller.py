@@ -1817,9 +1817,14 @@ class PitCrewController(QObject):
         if event is None:
             return
         running = self._frame_prefetch
-        if running is not None and running.is_alive():
+        if (running is not None and running.is_alive()
+                and not running.cancelled):
             # One at a time. A switch while one runs is caught by the next
             # load or stop; the button decodes whatever this did not reach.
+            # A stood-down one still finishing its last blob does not count:
+            # a start refused at the pre-flight asks for the prefetch back,
+            # and the old thread would otherwise swallow that request. The
+            # blob it is on is waited for, not decoded twice (`frame_memo`).
             return
         from pitcrew.store import frame_memo
 

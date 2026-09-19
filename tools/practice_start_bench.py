@@ -418,8 +418,34 @@ def main() -> int:
         frame_memo, memo_before = None, None
     running = ctrl.__dict__.get("_frame_prefetch")
     prefetch_running = bool(running is not None and running.is_alive())
+    # Whether the launch's Piper load (a ~1.5 s GIL hold) had finished before
+    # the press - a slow run with it still loading is the pre-warm landing on
+    # the button, not the button's own cost.
+    engine = getattr(getattr(ctrl, "voice", None), "_engine", None)
+    if engine is not None and not hasattr(engine, "_voice"):
+        # The phrase pack wraps Piper; find the engine that loads a model.
+        engine = next((v for v in vars(engine).values()
+                       if hasattr(v, "_voice")), None)
+    voice_loaded = None if engine is None else engine._voice is not None
     press = time.perf_counter()
     _T0[0] = press
+    # Every garbage-collector pass from here on that took over 10 ms, with
+    # the thread it ran on: a pass is one uninterruptible hold of the GIL.
+    import gc
+    gc_passes: list = []
+    gc_start = [0.0]
+
+    def gc_timer(phase, info):
+        if phase == "start":
+            gc_start[0] = time.perf_counter()
+            return
+        took = (time.perf_counter() - gc_start[0]) * 1000
+        if took > 10:
+            gc_passes.append((round((gc_start[0] - press) * 1000, 1),
+                              round(took, 1), info.get("generation"),
+                              threading.current_thread().name))
+
+    gc.callbacks.append(gc_timer)
     if ARGS.dump_at:
         main_id = threading.main_thread().ident
 
@@ -485,8 +511,10 @@ def main() -> int:
             ctrl.active_event() or {}, "get") else None,
         "rack_rows": len(ctrl.practice.rows()),
         "prefetch_running_at_press": prefetch_running,
+        "voice_loaded_at_press": voice_loaded,
         "memo_before": memo_before,
         "memo_after": frame_memo.stats() if frame_memo else None,
+        "gc_passes_over_10ms": gc_passes,
     }
     del first_idle
 
