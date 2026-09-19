@@ -169,13 +169,16 @@ def measured_temp_window(store, event_id: int) -> TempWindow | None:
     rows = [row for row in store.list_event_laps(event_id, "practice")
             if not row.get("excluded")
             and not row.get("is_out_lap") and not row.get("is_pit_lap")]
+    from pitcrew.store import frame_memo
+
     samples: list[tuple[int, float, float]] = []
     for row in rows[-MAX_DECODED_LAPS:]:
-        stored = store.get_lap_frames(row["id"])
-        if not stored:
-            continue
-        means = lap_axle_means(stored["frames"])
-        if means is None:
+        # Through the memo: the same bytes give the same means, and the
+        # qualifying arm and the race arm both ask - see `store/frame_memo`.
+        means = frame_memo.derived(
+            store, row["id"], "lap_axle_means",
+            lambda stored: lap_axle_means(stored["frames"]))
+        if means is frame_memo.NO_FRAMES or means is None:
             continue
         samples.append((row["session_id"], means[0], means[1]))
     return window_from_samples(samples)

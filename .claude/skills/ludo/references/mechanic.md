@@ -234,6 +234,7 @@ never as a step of a diagnosis.**
 - `tools/series.py` — `--set` writes at once; `--like`/`--car` ask first unless `--yes`.
 - `tools/name_drivers.py` — writes as soon as it is given a name (`old new`, `--me`, `--teammate`).
 - `tools/instrument_floors.py --write` — records measurement rows (same-setup noise floors for full-throttle, braking and coast share, per session, through `pitcrew.analysis.instrument_gate`, rows 5.0/5.7); read-only without `--write`. Analysis rows carry the driver's standing yes (14 Sep 2026). A floor is the first of the gate's four checks, not a pass, and it refuses a between-run floor until row 5.4a says which sessions share a setup.
+- `tools/practice_start_bench.py --root <tree>` — the app's own start-up latency bench, not an instrument for this skill: it opens a practice session through the real window, so it writes a session row to the database of the tree it is pointed at. It refuses the main checkout; point it only at a sandbox worktree with a copied database, never at his races.
 - `pitcrew.analysis.wear_rates.carry_into_knowledge` — writes the fitted rates into `race_knowledge` through `store.save_race_knowledge`, whenever it is called.
 
 **Not instruments for this skill** (the app's own health, voice, rig and

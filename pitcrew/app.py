@@ -48,6 +48,11 @@ WINDOW = (1600, 1000)
 # survive being given less than it wants, because a display can be smaller
 # than this and refusing to open is not an answer.
 MIN_WINDOW = (900, 560)
+# How long after the last deferred screen is built before the session paths
+# are pre-warmed (`PitCrewController.prewarm_for_sessions`). Long enough for
+# the first paint and the first-paint fill to land first; short, because a
+# press that arrives before the voice model has loaded still waits for it.
+PREWARM_DELAY_MS = 500
 
 # The rail, grouped by the job each screen belongs to. Two loops run through
 # this app and they are not the same work: PREPARE/LEARN is the setup loop
@@ -906,6 +911,12 @@ class PitCrewWindow(QMainWindow):
         pending = [i for i in sorted(self.LATE_SCREENS)
                    if getattr(self, self.LATE_SCREENS[i][0]) is None]
         if not pending:
+            # **Then the session paths' own first-use costs**, last, once the
+            # window is built, painted and answerable - see
+            # `prewarm_for_sessions` for what they are and why the Practice
+            # button and the race arm used to pay them with the window frozen.
+            QTimer.singleShot(PREWARM_DELAY_MS,
+                              self.controller.prewarm_for_sessions)
             return
         index = pending[0]
         try:
@@ -918,6 +929,9 @@ class PitCrewWindow(QMainWindow):
                 "could not warm the %s screen in the background",
                 self.LATE_SCREENS[index][0], exc_info=True)
             setattr(self, self.LATE_SCREENS[index][0], None)
+            # The pre-warm does not depend on the screen that failed.
+            QTimer.singleShot(PREWARM_DELAY_MS,
+                              self.controller.prewarm_for_sessions)
             return
         QTimer.singleShot(0, self.warm_screens)
 

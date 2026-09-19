@@ -2182,13 +2182,25 @@ class Store:
         rows = self._query("SELECT * FROM lap_frames WHERE lap_id = ?", (lap_id,))
         if not rows:
             return None
+        return self.decode_lap_frames_row(rows[0])
+
+    def lap_frames_row(self, lap_id: int):
+        """The stored row - `blob`, `sample_hz`, `frame_count` - undecoded,
+        or None. For `store/frame_memo`, which keys on the bytes."""
+        rows = self._query(
+            "SELECT blob, sample_hz, frame_count FROM lap_frames "
+            "WHERE lap_id = ?", (lap_id,))
+        return rows[0] if rows else None
+
+    @staticmethod
+    def decode_lap_frames_row(row) -> dict:
+        """What `get_lap_frames` returns, from a `lap_frames` row."""
         from pitcrew.telemetry.recorder import (
             FRAME_SCHEMA_VERSION,
             _VERSION_KEY,
             decode_frames,
             repair_frames,
         )
-        row = rows[0]
         decoded = decode_frames(row["blob"])
         version = (decoded[0].get(_VERSION_KEY, FRAME_SCHEMA_VERSION)
                    if decoded else FRAME_SCHEMA_VERSION)

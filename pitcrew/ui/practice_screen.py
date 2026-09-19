@@ -13,7 +13,7 @@ loses its voice while keeping its identity.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -1479,11 +1479,42 @@ class PracticeScreen(QWidget):
     # ------------------------------------------------------------------ data
 
     def set_laps(self, rows: list[LapRow]) -> None:
+        previous = self._rows
         self._rows = list(rows)
         self._mark_out_laps()
         self._mark_fuel_implausible()
+        if self._drawn_as(previous):
+            # **Exactly what is on the screen already, so it is not drawn
+            # again.** Starting practice re-reads the event's laps and used to
+            # rebuild every row of the rack from them: 607 ms on the Qt thread
+            # for 176 laps, on the button, to draw the rack it was already
+            # showing. The objects the row widgets hold are kept, because an
+            # edit made through a widget mutates the row it holds and the rack
+            # must go on reading that same object.
+            self._rows = previous
+            self.refresh()
+            return
         self._rebuild_rack()
         self.refresh()
+
+    def _drawn_as(self, previous: list[LapRow]) -> bool:
+        """Would a rebuild draw exactly what the last rebuild drew?
+
+        The rack is a function of its rows and the personal bests, and
+        nothing else - see `_make_row`. So a rebuild can be skipped when the
+        new rows equal the rows as they were WHEN LAST DRAWN, and the rows the
+        widgets hold still equal them too. Compared against copies taken at
+        the draw, not against the live objects: the controller mutates the
+        rows the widgets hold (`repaint_rows` exists because of it), and a
+        live object would always equal itself however stale the widget is. A
+        lap appended since, an edit, or a changed best, and it rebuilds.
+        """
+        drawn = getattr(self, "_drawn", None)
+        if drawn is None:
+            return False
+        rows, bests = drawn
+        return (rows == self._rows and rows == previous
+                and bests == getattr(self, "_personal_bests", {}))
 
     def set_fuel_capacity(self, capacity: float | None) -> None:
         """The tank this event ran, which the implausibility floor needs.
@@ -1820,6 +1851,9 @@ class PracticeScreen(QWidget):
             self.rack_layout.addWidget(widget)
             self._row_widgets.append(widget)
         self.rack_layout.addStretch(1)
+        # What was just drawn, as copies - see `_drawn_as`.
+        self._drawn = ([replace(row) for row in self._rows],
+                       dict(getattr(self, "_personal_bests", {})))
         # No restore here, and no timer either. The rack does not know its own
         # height yet: the old rows are only destroyed when the event loop next
         # turns, and the layout collapses to nothing on the way through. A
@@ -2085,6 +2119,9 @@ class PracticeScreen(QWidget):
             "Recording. Press to stop and mark the session up."
             if recording else
             "Start recording this session's laps.")
+
+    def status_text(self) -> str:
+        return self.subtitle.text()
 
     def set_status(self, text: str, *, warn: bool = False) -> None:  # noqa: N802
         self.subtitle.setText(text)

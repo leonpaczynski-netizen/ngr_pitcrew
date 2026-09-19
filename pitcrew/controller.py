@@ -278,6 +278,9 @@ class TelemetryBridge(QObject):
     # every lap's telemetry - 2.5 s on the active event, 9.4 s on the
     # largest. Emitted queued so the speaking happens on the Qt thread.
     debriefed = pyqtSignal(object)           # analysis.debrief.Debrief
+    # The qualifying fuel call, worked out off the Qt thread - see
+    # `_announce_quali_fuel`. `(session id it was worked out for, line)`.
+    quali_fuel_said = pyqtSignal(object, str)
     # **A rival finished a pit stop**, composed on the HUD sampler's worker
     # thread and handled on the Qt one. It carries the `pit_wall.Seen` rather
     # than a formatted line, because what to say about it is a decision the
@@ -1120,6 +1123,7 @@ class PitCrewController(QObject):
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.debriefed.connect(self._on_debriefed)
+        self.bridge.quali_fuel_said.connect(self._on_quali_fuel_said)
         self.bridge.stream_seen.connect(self._on_stream_seen)
         self.bridge.parse_failed.connect(self._on_parse_failed)
         self.bridge.ptt_answered.connect(self._show_ptt_answer)
@@ -1264,6 +1268,48 @@ class PitCrewController(QObject):
         self.open_on_next_round()
         self.load_active_event()
         self._close_orphaned_sessions()
+
+    def prewarm_for_sessions(self) -> None:
+        """Pay, while the app idles, what the first session start used to pay
+        with the window frozen. Once per process; idempotent; never raises.
+
+        **The voice model is the one that matters, and not for the reason the
+        warm-up was written.** `PiperVoice.load` is an ONNX session build that
+        HOLDS THE GIL for its whole ~1.5 s (measured: onnxruntime 1.27's
+        `initialize_session` - a 1 ms ticker thread saw one 1,495 ms gap, and
+        neither the optimisation level, prepacking nor the ORT format moves
+        it). `voice.warm()` spawns a thread and returns, so the start paths
+        assumed the load ran beside them. It did not: it stopped every other
+        Python thread, the Qt thread included - `listener.start()` waited
+        1.6 s for its new thread to be scheduled, and the transducer's
+        `Pa_OpenStream` 2 s, on the Practice button and on the grid.
+
+        Done here it is the same ~1.5 s, once, while nothing is waiting on
+        it; the session starts then find the model loaded and their own
+        `warm()` is a cached return plus one ~100 ms synthesis that yields the
+        GIL. Nothing is deferred past the start - if the button is pressed
+        while this is still loading, `PiperEngine._load`'s lock makes the
+        start's warm wait for THIS load rather than build a second one.
+
+        The driver board is the other: its first build is ~120 ms of widgets
+        on the Qt thread, and it is built once and reused, so building it
+        hidden now costs nothing later. Both are exactly what the start paths
+        would have built - nothing here reads session state (rule 11).
+        """
+        if self.__dict__.get("_prewarmed"):
+            return
+        self._prewarmed = True
+        try:
+            self.voice.warm()
+        except Exception:                                    # noqa: BLE001
+            log("voice").warning("could not pre-warm the voice", exc_info=True)
+        if self.settings.driver_board_enabled:
+            try:
+                self._build_driver_board()
+            except Exception:                                # noqa: BLE001
+                log("ui").warning("could not pre-build the driver board",
+                                  exc_info=True)
+        self._prefetch_event_frames()
 
     # --------------------------------------------------------------- catalog
 
@@ -1702,6 +1748,46 @@ class PitCrewController(QObject):
         # above does not - anything said earlier would be on the screen the
         # load then replaced.
         self._say_calendar_news(event, proposal=proposal, applied=applied)
+        self._prefetch_event_frames()
+
+    def _prefetch_event_frames(self) -> None:
+        """Work out, off the Qt thread, what arming this event decodes.
+
+        The qualifying coach's temperature window and reference curve, and
+        the race arm's temperature window, are pure functions of stored lap
+        blobs; `store/frame_memo` remembers them by content. Running them
+        here, while nothing is waiting, means the Practice button and the
+        race arm find them already worked out instead of decoding ~16 blobs
+        on the Qt thread (~0.5 s on a 176-lap event). The button still asks
+        for the answer - it gets the one for the bytes stored NOW, from memory
+        or by decoding them - so a lap edited or added since can never be
+        served stale.
+
+        Never during a session: the listener and the transducer want the
+        interpreter then. Not before the launch pre-warm either, which calls
+        this itself once the window is up - the first-paint load must not
+        start a decode beside the rest of the launch.
+        """
+        if self.session_id is not None or not self.__dict__.get("_prewarmed"):
+            return
+        event = self.active_event()
+        if event is None:
+            return
+        running = self.__dict__.get("_frame_prefetch")
+        if running is not None and running.is_alive():
+            # One at a time. A switch while one runs is caught by the next
+            # load or stop; the button decodes whatever this did not reach.
+            return
+        from pitcrew.store import frame_memo
+
+        store, event_id = self.store, event["id"]
+
+        def work() -> None:
+            measured_temp_window(store, event_id)
+            reference_lap(store, event_id)
+
+        self._frame_prefetch = frame_memo.prefetch(
+            work, name=f"event-{event_id}")
 
     def switch_event(self, event_id) -> None:
         """Make another saved event the one the whole app is working on.
@@ -2752,7 +2838,47 @@ class PitCrewController(QObject):
         **Silence would read as "carry what you like".** Where nothing has
         measured this car's burn here the refusal is spoken instead, because
         an unconfident call that says so is still a call he can act on.
+
+        **Worked out on a worker, spoken back on the Qt thread.** The load
+        comes off `build_inputs`, the whole strategy evidence build - it
+        decodes the event's hydrated laps and cost 1.6 s on the Practice
+        button for a 176-lap event, to produce four numbers for one sentence.
+        Nothing else waits on those numbers: the coach is armed without them.
+        The line lands about when it used to be spoken, because it used to be
+        spoken after the same work; what changed is that the window and the
+        listener are no longer held for it. It is dropped if the session it
+        was worked out for has closed by then (rule 11).
         """
+        session = self.session_id
+
+        def work() -> None:
+            try:
+                said = self._quali_fuel_line(event)
+            except Exception:                                # noqa: BLE001
+                log("quali").warning("the qualifying fuel call could not be "
+                                     "worked out", exc_info=True)
+                return
+            self.bridge.quali_fuel_said.emit(session, said or "")
+
+        def begin() -> None:
+            threading.Thread(target=work, name="quali-fuel",
+                             daemon=True).start()
+
+        # After the start has finished with the Qt thread, not beside it: the
+        # evidence build is ~1.6 s of Python, and started inline it took its
+        # share of the interpreter from the listener and transducer opens
+        # still ahead of it on the button. Straight away where there is no
+        # event loop to come back to (a headless replay).
+        from PyQt6.QtCore import QCoreApplication
+
+        if QCoreApplication.instance() is None:
+            begin()
+        else:
+            QTimer.singleShot(0, begin)
+
+    def _quali_fuel_line(self, event: dict) -> str | None:
+        """The sentence, or None. Reads the store only - safe off the Qt
+        thread, which is where `_announce_quali_fuel` runs it."""
         try:
             inputs, _evidence = build_inputs(self.store, event["id"])
         except Exception:                                    # noqa: BLE001
@@ -2770,12 +2896,23 @@ class PitCrewController(QObject):
             # over-fuels the one lap that must carry nothing.
             fuel_reference_load_l=getattr(
                 inputs, "fuel_reference_load_l", None) if inputs else None)
-        said = load.call() if load is not None else quali_fuel_refusal(burn)
+        return load.call() if load is not None else quali_fuel_refusal(burn)
+
+    def _on_quali_fuel_said(self, session, said: str) -> None:
+        """The fuel call has been worked out: say it, if its session is on."""
         if not said:
+            return
+        if session is not None and session != self.session_id:
+            log("quali").info("not saying the fuel call for session %s - it "
+                              "has closed: %s", session, said)
             return
         log("quali").info("%s", said)
         if self.practice is not None:
-            self.practice.set_status(said)
+            # Beside what the start put there, not over it: the status
+            # already says where the stream is coming from and what the
+            # coach is armed with, and both still matter.
+            current = self.practice.status_text()
+            self.practice.set_status(f"{current} {said}".strip())
         if self.practice is not None and self.practice.coach_speaks():
             self.voice.say(said)
 
@@ -3059,6 +3196,8 @@ class PitCrewController(QObject):
             # close open - the session row is what matters and it is written.
             self._stop_video(closing)
             self._refresh_straights(closing)
+            # The laps just driven are the next start's reference and window.
+            self._prefetch_event_frames()
 
         self.practice.set_recording(False)
         event = self.active_event()
@@ -6459,12 +6598,14 @@ class PitCrewController(QObject):
         # test file.
         self._board_failures = 0
         self._board_failures_total = 0
-        if self.driver_board is None:
-            from pitcrew.ui.driver_view import DriverWindow
-
-            self.driver_board = DriverWindow()
-            self.driver_board.restore_geometry(
+        if self.driver_board is None or not self.__dict__.get(
+                "_board_ever_shown"):
+            # Built hidden at idle by `prewarm_for_sessions` where it could
+            # be; placed HERE either way, from the geometry as it is now, so
+            # a board built early still opens where he last left it.
+            self._build_driver_board().restore_geometry(
                 self.settings.driver_board_geometry)
+            self._board_ever_shown = True
         # Escape, or anything else that closes it, has to stop the feed -
         # otherwise the timer goes on pushing into a hidden widget for the
         # rest of the race.
@@ -6479,6 +6620,14 @@ class PitCrewController(QObject):
         # freeze at whatever it read when he came in, on the one number he is
         # sitting there watching.
         self._board_timer.start(250)
+
+    def _build_driver_board(self):
+        """The board window, built once and reused - hidden until opened."""
+        if self.driver_board is None:
+            from pitcrew.ui.driver_view import DriverWindow
+
+            self.driver_board = DriverWindow()
+        return self.driver_board
 
     def _board_was_closed(self) -> None:
         """He pressed Escape, or Windows closed it. Stop feeding it.
