@@ -102,13 +102,13 @@ class SettingsScreen(QWidget):
 
         header = QVBoxLayout()
         header.setSpacing(2)
+        page.addLayout(header)
         header.addWidget(StencilLabel("Settings", size=theme.TITLE_PX,
                                       colour=theme.STENCIL, tracking=6.0))
         header.addWidget(BodyLabel(
             "The feed, the button and the beep. Test them here — in the "
             "headset you cannot see whether any of them worked.",
             colour=theme.STENCIL_DIM))
-        page.addLayout(header)
 
         # **This screen scrolls, and was the only one that did not.** It is
         # also the tallest: the two plates in the left column alone need
@@ -120,13 +120,29 @@ class SettingsScreen(QWidget):
         # with no way to reach it - on the one screen that carries the
         # recovery controls for a broken feed, where the driver goes
         # *because* something is already wrong.
+        #
+        # **Containers before contents** (19 Sep 2026) - the scroller is in
+        # the page, and the columns in the scroller, before any plate is
+        # made, so each plate is moved once rather than four times. See
+        # `EventScreen._build` for why that is the cost.
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        page.addWidget(scroller, 1)
         body = QWidget()
         columns = QHBoxLayout(body)
         columns.setContentsMargins(0, 0, 0, 0)
         columns.setSpacing(theme.GAP_WIDE)
+        scroller.setWidget(body)
 
         left = QVBoxLayout()
         left.setSpacing(theme.GAP_WIDE)
+        columns.addLayout(left, 1)
+        right = QVBoxLayout()
+        right.setSpacing(theme.GAP_WIDE)
+        columns.addLayout(right, 1)
         left.addWidget(self._feed_plate())
         # No stretch factor: the trailing stretch takes the slack, as it does
         # on the right. The factor was harmless while push-to-talk was last in
@@ -134,24 +150,12 @@ class SettingsScreen(QWidget):
         left.addWidget(self._ptt_plate())
         left.addWidget(self._gauge_plate())
         left.addStretch(1)
-        columns.addLayout(left, 1)
 
-        right = QVBoxLayout()
-        right.setSpacing(theme.GAP_WIDE)
         right.addWidget(self._beep_plate())
         right.addWidget(self._audio_plate())
         right.addWidget(self._rig_plate())
         right.addWidget(self._voice_plate())
         right.addStretch(1)
-        columns.addLayout(right, 1)
-
-        scroller = QScrollArea()
-        scroller.setWidgetResizable(True)
-        scroller.setFrameShape(QFrame.Shape.NoFrame)
-        scroller.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroller.setWidget(body)
-        page.addWidget(scroller, 1)
 
         # Outside the scroller, so the thing you came here to press cannot be
         # scrolled away from.

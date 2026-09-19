@@ -960,7 +960,7 @@ class PitCrewController(QObject):
                  strategy_screen=None, race_screen=None, *,
                  car_screen=None, settings_screen=None,
                  port: int | None = None, voice=None, warm=None,
-                 voice_engine=None,
+                 voice_engine=None, defer_strip: bool = False,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
@@ -1229,7 +1229,15 @@ class PitCrewController(QObject):
         self._strip_composer = StripComposer()
         self._strip_was_live = False
         self._strip_failures = 0
-        self._start_strip()
+        # **Held back until the window has drawn, when the window asks**
+        # (19 Sep 2026): binding the server and composing both idle pages
+        # was 20-150 ms straight on the path to the first frame, for a page
+        # nobody can have open yet. The window's launch chain calls
+        # `start_deferred_strip` after the first paint; everyone else gets
+        # it here, as before.
+        self._strip_deferred = defer_strip
+        if not defer_strip:
+            self._start_strip()
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -6622,6 +6630,17 @@ class PitCrewController(QObject):
             self.strip = server
             self._strip_idle()
 
+    def start_deferred_strip(self) -> None:
+        """Start the strip `defer_strip` held back. Once; a no-op otherwise.
+
+        A strip already up - a Settings save got there first - is left alone.
+        """
+        if not self.__dict__.get("_strip_deferred"):
+            return
+        self._strip_deferred = False
+        if self.__dict__.get("strip") is None:
+            self._start_strip()
+
     def _stop_strip(self) -> None:
         strip, self.strip = self.__dict__.get("strip"), None
         if strip is not None:
@@ -8648,6 +8667,8 @@ class PitCrewController(QObject):
         return path
 
     def shutdown(self) -> None:
+        # A strip still held back is never started on the way out.
+        self._strip_deferred = False
         # **The orphan sweep, if the event loop never got to it.** It is
         # deferred to first paint now, and `main()` can return through its
         # `finally` without ever reaching `app.exec()` - so without this, the

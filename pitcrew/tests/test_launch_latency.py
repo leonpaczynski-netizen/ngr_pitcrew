@@ -388,7 +388,7 @@ def test_a_screen_that_will_not_build_still_releases_the_speech_load(
     warm, release = held_warm_up(Recogniser(), Matcher())
     window = PitCrewWindow(store, warm=warm)
 
-    def boom():
+    def boom(**_kwargs):
         raise RuntimeError("this screen will not build")
 
     monkeypatch.setitem(window.LATE_SCREENS, 1,

@@ -50,8 +50,10 @@ class ReferenceScreen(QWidget):
         page.setContentsMargins(30, 26, 30, 0)
         page.setSpacing(theme.GAP_WIDE)
 
+        # Containers before contents - see `EventScreen._build` (19 Sep 2026).
         header = QVBoxLayout()
         header.setSpacing(2)
+        page.addLayout(header)
         header.addWidget(StencilLabel("Reference", size=theme.TITLE_PX,
                                       colour=theme.STENCIL, tracking=6.0))
         header.addWidget(BodyLabel(
@@ -63,7 +65,6 @@ class ReferenceScreen(QWidget):
         if baseline:
             header.addWidget(BodyLabel(baseline, size=13,
                                        colour=theme.WARNING))
-        page.addLayout(header)
 
         # **A way to find a row.** These are the knowledge base's tables, read
         # at the rig with the headset pushed up, and the only tool for finding
@@ -84,11 +85,13 @@ class ReferenceScreen(QWidget):
         # being reachable.
         scroller.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        page.addWidget(scroller, 1)
 
         inner = QWidget()
         stack = QVBoxLayout(inner)
         stack.setContentsMargins(0, 0, 4, 0)
         stack.setSpacing(theme.GAP_WIDE)
+        scroller.setWidget(inner)
 
         sections = self._reference.get("sections") or []
         if not sections:
@@ -102,9 +105,6 @@ class ReferenceScreen(QWidget):
             stack.addWidget(plate)
             self._plates.append((plate, self._section_text(section)))
         stack.addStretch(1)
-
-        scroller.setWidget(inner)
-        page.addWidget(scroller, 1)
 
     @staticmethod
     def _section_text(section: dict) -> str:

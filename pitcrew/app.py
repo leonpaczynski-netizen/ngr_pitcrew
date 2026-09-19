@@ -10,7 +10,17 @@ import time
 
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
+if __name__ == "__main__":
+    # **The real launch starts here, before the imports below** - about
+    # 270 ms of them, none touching a font - so a Qt worker can load the
+    # font fallback in that time instead of on the Qt thread later. See
+    # `pitcrew.boot`. Only for `python -m pitcrew.app`, which is what the
+    # shortcut runs; an import of this module does nothing new.
+    from pitcrew import boot as _boot
+
+    _boot.early()
+
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer  # noqa: E402
 from PyQt6.QtGui import (QColor, QFontMetrics, QIcon, QKeySequence,
                          QPainter, QShortcut)
 from PyQt6.QtWidgets import (
@@ -29,7 +39,7 @@ from pitcrew.engineer import ptt, voice
 from pitcrew.controller import DEFAULT_PORT, PitCrewController
 from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
-from pitcrew.ui import theme
+from pitcrew.ui import font_warm, theme
 from pitcrew.ui.car_screen import CarScreen
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
@@ -78,8 +88,9 @@ NAV_GROUPS = (
 SCREENS = tuple(name for _heading, names in NAV_GROUPS for name in names)
 ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
 
-# The latest the launch holds the speech warm-up back after the window is
-# shown - see `PitCrewWindow.release_speech`. Normally released well before.
+# The latest the launch holds the speech warm-up and the phone strip back
+# after the window is shown - see `PitCrewWindow.finish_launch`. Normally
+# released well before.
 SPEECH_BACKSTOP_MS = 3000
 
 # How long the launch waits for the window's first paint before warming the
@@ -89,7 +100,7 @@ FIRST_PAINT_BACKSTOP_MS = 1000
 # Windows groups taskbar buttons by this id. Without one, a Python GUI app is
 # grouped under the interpreter, so a pinned shortcut and the running window
 # appear as two separate buttons with two different icons.
-APP_ID = "NextGearRacing.PitCrew"
+from pitcrew.boot import APP_ID  # noqa: E402
 
 
 # Held for the life of the process, and **released on the way out by
@@ -843,12 +854,24 @@ class PitCrewWindow(QMainWindow):
         if ICON.exists():
             self.setWindowIcon(QIcon(str(ICON)))
 
+        # **Parent first, then fill** (19 Sep 2026). Under the app-wide style
+        # sheet, moving a finished subtree under a new parent re-polishes
+        # every widget in it that carries its own sheet - which is every
+        # label. Built bottom-up, the whole window was polished again by
+        # `addWidget` into the stack, again by the stack into the row, and
+        # again by `setCentralWidget`: 60-80 ms of the launch, spent redoing
+        # work already done. So the shell is the central widget before
+        # anything is in it, and each screen is made with the stack as its
+        # parent. The rail is inserted in front of the stack once it can be
+        # built, which leaves the row's order exactly as it was.
         shell = QWidget()
         row = QHBoxLayout(shell)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
+        self.setCentralWidget(shell)
 
-        self.stack = QStackedWidget()
+        self.stack = QStackedWidget(shell)
+        row.addWidget(self.stack, 1)
         # **Three of the seven are not built here.** Car, Reference and
         # Settings are made in the idle turns straight after the window is
         # shown (`warm_screens`), or on the first visit if that comes sooner.
@@ -862,11 +885,11 @@ class PitCrewWindow(QMainWindow):
         # see `PushToTalk._take_arrival` - and Car's build is now straight on
         # the path to the window. It is the first screen `warm_screens`
         # builds, so it is ready long before anyone can click it.
-        self.event_screen = EventScreen()
+        self.event_screen = EventScreen(parent=self.stack)
         self.car_screen = None
-        self.practice_screen = PracticeScreen()
-        self.strategy_screen = StrategyScreen()
-        self.race_screen = RaceScreen()
+        self.practice_screen = PracticeScreen(parent=self.stack)
+        self.strategy_screen = StrategyScreen(parent=self.stack)
+        self.race_screen = RaceScreen(parent=self.stack)
         self.reference_screen = None
         self.settings_screen = None
         # Order must match SCREENS, which NAV_GROUPS defines: the rail
@@ -880,19 +903,19 @@ class PitCrewWindow(QMainWindow):
                        self.practice_screen,
                        self.strategy_screen, self.race_screen,
                        self.reference_screen, self.settings_screen):
-            self.stack.addWidget(screen if screen is not None else QWidget())
+            self.stack.addWidget(screen if screen is not None
+                                 else QWidget(self.stack))
 
         self.rail = NavRail(self.stack, NAV_GROUPS,
                             builder=self._ensure_screen)
-        row.addWidget(self.rail)
-        row.addWidget(self.stack, 1)
-        self.setCentralWidget(shell)
+        row.insertWidget(0, self.rail)
 
         self.controller = PitCrewController(
             store, self.event_screen, self.practice_screen,
             self.strategy_screen, self.race_screen,
             car_screen=None, settings_screen=None,
-            port=port, warm=warm, voice_engine=voice_engine)
+            port=port, warm=warm, voice_engine=voice_engine,
+            defer_strip=True)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
@@ -924,7 +947,8 @@ class PitCrewWindow(QMainWindow):
         if existing is not None:
             return existing
 
-        screen = factory()
+        # The stack as its parent from the start - see `__init__`.
+        screen = factory(parent=self.stack)
         # The attribute first, then the wiring, and only then the stack.
         # `_trigger_primary` reads these attributes, and the controller's
         # attach can push state into the screen - both must find a screen
@@ -955,7 +979,7 @@ class PitCrewWindow(QMainWindow):
         pending = [i for i in sorted(self.LATE_SCREENS)
                    if getattr(self, self.LATE_SCREENS[i][0]) is None]
         if not pending:
-            self.release_speech()
+            self.finish_launch()
             return
         index = pending[0]
         try:
@@ -969,7 +993,7 @@ class PitCrewWindow(QMainWindow):
                 self.LATE_SCREENS[index][0], exc_info=True)
             setattr(self, self.LATE_SCREENS[index][0], None)
             # The chain ends here, and what waits on its end must not.
-            self.release_speech()
+            self.finish_launch()
             return
         QTimer.singleShot(0, self.warm_screens)
 
@@ -981,6 +1005,18 @@ class PitCrewWindow(QMainWindow):
         `FIRST_PAINT_BACKSTOP_MS`. Exactly once either way.
         """
         _FirstPaint(self, then)
+
+    def finish_launch(self) -> None:
+        """What the launch held back until the window was up: the phone
+        strip's server, then the speech load. Both idempotent; called at
+        either end of `warm_screens` and by the backstop in `main`."""
+        try:
+            self.controller.start_deferred_strip()
+        except Exception:                         # noqa: BLE001
+            # The strip is an output; it must not take speech with it.
+            diagnostics.log().error("could not start the phone strip",
+                                    exc_info=True)
+        self.release_speech()
 
     def release_speech(self) -> None:
         """Start the speech warm-up the launch built but held back. Once.
@@ -1056,8 +1092,16 @@ def main() -> int:
                        database=DEFAULT_DB_PATH, log=log_path)
 
     diagnostics.mark("logging up")
-    _claim_taskbar_identity()
-    app = QApplication(sys.argv)
+    # The real launch made the QApplication before the imports - see
+    # `pitcrew.boot`. Anything else, including a boot that failed, makes it
+    # here as it always did.
+    from pitcrew import boot
+
+    app = QApplication.instance()
+    early = app is not None and app is boot.APP
+    if app is None:
+        _claim_taskbar_identity()
+        app = QApplication(sys.argv)
     diagnostics.mark("QApplication")
     # **Before the store, the controller, or any device.** Checked after
     # QApplication exists so the refusal can be shown rather than only
@@ -1072,10 +1116,12 @@ def main() -> int:
     if not claim.allowed:
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(None, "Pit Crew is already running", claim.message)
+        font_warm.stop_all()
         return 0
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))
-    theme.apply(app)
+    if not early:
+        theme.apply(app)
     diagnostics.mark("theme")
 
     try:
@@ -1119,9 +1165,10 @@ def main() -> int:
         # of blank window in front of the driver. `after_first_paint` holds
         # the chain until the window has actually drawn.
         window.after_first_paint(window.warm_screens)
-        # The backstop for `release_speech`. The chain above calls it within
-        # half a second; this is for a chain that somehow never ran.
-        QTimer.singleShot(SPEECH_BACKSTOP_MS, window.release_speech)
+        # The backstop for `finish_launch` - the strip, then the speech load.
+        # The chain above calls it within half a second; this is for a chain
+        # that somehow never ran.
+        QTimer.singleShot(SPEECH_BACKSTOP_MS, window.finish_launch)
         if claim.message:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(None, "The previous Pit Crew is stuck",
@@ -1133,6 +1180,9 @@ def main() -> int:
         # die - see `_INSTANCE_MUTEX`. Every exit path this app has actually
         # taken runs through here, including all three wedges.
         _release_sole_instance()
+        # No font warm-up may outlive the application object: Qt aborts
+        # the process if a running QThread is destroyed.
+        font_warm.stop_all()
     diagnostics.log().info("Pit Crew exited with %s", code)
     return code
 

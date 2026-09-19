@@ -107,6 +107,16 @@ def test_the_rig_and_the_bench_see_the_settings_screen(window):
     assert window.controller.bench.settings_screen is screen
 
 
+def pump_until(qt_app, done, timeout: float = 5.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not done() and time.monotonic() < deadline:
+        qt_app.processEvents()
+        time.sleep(0.002)
+    qt_app.processEvents()
+
+
 def wired(screen, name: str) -> int:
     """How many slots are on one of a screen's signals.
 
@@ -145,8 +155,10 @@ def test_warming_builds_them_all_without_navigating(window, qt_app):
     """The background chain: the first visit to a screen should not be the
     first time it is made."""
     window.warm_screens()
-    for _ in range(10):
-        qt_app.processEvents()
+    # Car is built a slice per turn now, so the chain is a dozen turns, not
+    # three. Pumped until it is done, with a bound.
+    pump_until(qt_app, lambda: all(
+        getattr(window, window.LATE_SCREENS[i][0]) is not None for i in LATE))
 
     for index in LATE:
         assert getattr(window, window.LATE_SCREENS[index][0]) is not None
@@ -161,7 +173,7 @@ def test_a_screen_that_will_not_build_does_not_spin_the_chain(window, qt_app,
     """**The worst failure in the set if it were missed.** A chain that
     re-armed on the index it just failed would peg a core for the rest of the
     race, with nothing in the log to say why."""
-    def boom():
+    def boom(**_kwargs):
         raise RuntimeError("this screen will not build")
 
     monkeypatch.setitem(window.LATE_SCREENS, 5,

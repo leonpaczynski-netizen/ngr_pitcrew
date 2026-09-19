@@ -125,6 +125,29 @@ def struck_when_empty(box: QAbstractSpinBox) -> QAbstractSpinBox:
     return box
 
 
+def uniform_rows(combo: QComboBox) -> QComboBox:
+    """Tell a combo's list that every row is one line of one font.
+
+    **Measured 19 Sep 2026: this was the freeze after the window appeared.**
+    A list view with non-uniform rows sizes EVERY row to lay itself out - on
+    the Car screen's picker, 608 cars, the moment the combo was placed in its
+    layout. Four of those names carry a katakana middle dot ("Nissan R34
+    GT-R V･spec II", "Honda CR-V e:HEV EX・Black Edition") that Bahnschrift
+    does not have, and sizing the first of them made Qt find and load a
+    Japanese fallback face: 290 ms, on the Qt thread, for a list nobody had
+    opened. With uniform rows the view sizes one row and paints only the
+    ones on screen, so the fallback is loaded - once - only if someone
+    scrolls to those cars.
+
+    True of every combo here: one line each, one font, headings included.
+    A popup rendered with and without it is identical, pixel for pixel.
+    """
+    view = combo.view()
+    if hasattr(view, "setUniformItemSizes"):
+        view.setUniformItemSizes(True)
+    return combo
+
+
 def block_wheel(widget: QWidget) -> QWidget:
     """Make a value widget ignore the wheel until it is deliberately focused."""
     if isinstance(widget, (QComboBox, QAbstractSpinBox)):
@@ -784,6 +807,7 @@ class Picker(QWidget):
         # a long name is elided to "24 Heures du...cing Circuit" and two
         # circuits become indistinguishable in the one place it matters.
         self.combo.view().setTextElideMode(Qt.TextElideMode.ElideNone)
+        uniform_rows(self.combo)
         block_wheel(self.combo)
         # A `Picker` is a plain QWidget wrapping the combo, so its focus policy
         # is NoFocus and `setFocus()` on it did nothing at all - which made the
@@ -957,6 +981,7 @@ class CascadingPicker(QWidget):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setMinimumContentsLength(8)
         combo.view().setTextElideMode(Qt.TextElideMode.ElideNone)
+        uniform_rows(combo)
         block_wheel(combo)
         combo.setProperty("placeholder", placeholder)
         return combo
