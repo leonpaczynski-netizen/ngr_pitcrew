@@ -885,11 +885,19 @@ class PitCrewWindow(QMainWindow):
         # see `PushToTalk._take_arrival` - and Car's build is now straight on
         # the path to the window. It is the first screen `warm_screens`
         # builds, so it is ready long before anyone can click it.
-        self.event_screen = EventScreen(parent=self.stack)
+        # Each step is timed, and WARNs past `diagnostics.SLOW_STEP_S`: one
+        # launch under load spent 17.7 s in the Event screen with nothing in
+        # the log to say so (critic, 19 Sep 2026).
+        timed = diagnostics.timed_step
+        with timed("EventScreen"):
+            self.event_screen = EventScreen(parent=self.stack)
         self.car_screen = None
-        self.practice_screen = PracticeScreen(parent=self.stack)
-        self.strategy_screen = StrategyScreen(parent=self.stack)
-        self.race_screen = RaceScreen(parent=self.stack)
+        with timed("PracticeScreen"):
+            self.practice_screen = PracticeScreen(parent=self.stack)
+        with timed("StrategyScreen"):
+            self.strategy_screen = StrategyScreen(parent=self.stack)
+        with timed("RaceScreen"):
+            self.race_screen = RaceScreen(parent=self.stack)
         self.reference_screen = None
         self.settings_screen = None
         # Order must match SCREENS, which NAV_GROUPS defines: the rail
@@ -906,16 +914,18 @@ class PitCrewWindow(QMainWindow):
             self.stack.addWidget(screen if screen is not None
                                  else QWidget(self.stack))
 
-        self.rail = NavRail(self.stack, NAV_GROUPS,
-                            builder=self._ensure_screen)
+        with timed("NavRail"):
+            self.rail = NavRail(self.stack, NAV_GROUPS,
+                                builder=self._ensure_screen)
         row.insertWidget(0, self.rail)
 
-        self.controller = PitCrewController(
-            store, self.event_screen, self.practice_screen,
-            self.strategy_screen, self.race_screen,
-            car_screen=None, settings_screen=None,
-            port=port, warm=warm, voice_engine=voice_engine,
-            defer_strip=True)
+        with timed("PitCrewController"):
+            self.controller = PitCrewController(
+                store, self.event_screen, self.practice_screen,
+                self.strategy_screen, self.race_screen,
+                car_screen=None, settings_screen=None,
+                port=port, warm=warm, voice_engine=voice_engine,
+                defer_strip=True)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
@@ -948,7 +958,8 @@ class PitCrewWindow(QMainWindow):
             return existing
 
         # The stack as its parent from the start - see `__init__`.
-        screen = factory(parent=self.stack)
+        with diagnostics.timed_step(name):
+            screen = factory(parent=self.stack)
         # The attribute first, then the wiring, and only then the stack.
         # `_trigger_primary` reads these attributes, and the controller's
         # attach can push state into the screen - both must find a screen
@@ -1035,6 +1046,7 @@ class PitCrewWindow(QMainWindow):
         roughly doubled them. The loads run on their one warm-up thread, as
         always; nothing here waits for them.
         """
+        diagnostics.launch_drawn()
         self.release_speech()
         self.warm_screens()
 
@@ -1123,6 +1135,8 @@ def main() -> int:
                        database=DEFAULT_DB_PATH, log=log_path)
 
     diagnostics.mark("logging up")
+    # Already armed by `boot.early` on the real launch; this covers the rest.
+    diagnostics.watch_launch()
     # The real launch made the QApplication before the imports - see
     # `pitcrew.boot`. Anything else, including a boot that failed, makes it
     # here as it always did.
@@ -1147,6 +1161,7 @@ def main() -> int:
     if not claim.allowed:
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(None, "Pit Crew is already running", claim.message)
+        diagnostics.launch_drawn()
         font_warm.stop_all()
         return 0
     if ICON.exists():
@@ -1178,9 +1193,12 @@ def main() -> int:
         # about to be refused must not first load a quarter of a gigabyte.
         warm = ptt.start_warm_up(settings.load(store).speech_backend,
                                  start=False)
-        window = PitCrewWindow(store, warm=warm, voice_engine=voice_engine)
+        with diagnostics.timed_step("the window build"):
+            window = PitCrewWindow(store, warm=warm,
+                                   voice_engine=voice_engine)
         diagnostics.mark("window built")
-        window.show()
+        with diagnostics.timed_step("the window's show()"):
+            window.show()
         diagnostics.mark("window shown")
         # After `show`, so none of this is between the launch and the window.
         # It only removes the pause on the first visit to a deferred screen;
@@ -1211,6 +1229,7 @@ def main() -> int:
         # die - see `_INSTANCE_MUTEX`. Every exit path this app has actually
         # taken runs through here, including all three wedges.
         _release_sole_instance()
+        diagnostics.launch_drawn()
         # No font warm-up may outlive the application object: Qt aborts
         # the process if a running QThread is destroyed.
         font_warm.stop_all()

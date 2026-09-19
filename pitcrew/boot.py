@@ -39,6 +39,8 @@ def early() -> None:
     # `main` writes the full banner once the app has imported; this is the
     # line that ties the early marks to this process.
     diagnostics.log().info("Pit Crew launching - pid: %d", os.getpid())
+    # From here, a launch that has not drawn by 3 s writes where it is.
+    diagnostics.watch_launch()
     try:
         from PyQt6.QtWidgets import QApplication
 

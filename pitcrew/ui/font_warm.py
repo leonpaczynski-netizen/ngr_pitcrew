@@ -42,6 +42,8 @@ thread; it is how text is drawn into images in workers.
 """
 from __future__ import annotations
 
+import time
+
 from PyQt6 import sip
 from PyQt6.QtCore import (QMetaObject, QObject, QPropertyAnimation, QSizeF, Qt,
                           QThread)
@@ -81,9 +83,29 @@ class FontWarmUp(QObject):
         sip.transferto(doc, None)
         sip.transferto(self._thread, None)
         _LIVE.append(self)
+        # **Logged when it ends, with its time** (critic, 19 Sep 2026): a
+        # launch that stalls on fonts must leave a trace of how long the
+        # load it shares a lock with took. A direct connection, so the time
+        # is the worker's own - the one line of Python it ever runs, after
+        # every font has loaded, never while the lock is held.
+        self._name = name
+        self._began = time.perf_counter()
+        self.took_s: float | None = None
+        self._thread.finished.connect(self._finished,
+                                      Qt.ConnectionType.DirectConnection)
         self._thread.start()
         QMetaObject.invokeMethod(width, "start",
                                  Qt.ConnectionType.QueuedConnection)
+
+    def _finished(self) -> None:
+        self.took_s = time.perf_counter() - self._began
+        from pitcrew import diagnostics
+
+        level = ("warning" if self.took_s >= diagnostics.SLOW_STEP_S
+                 else "info")
+        getattr(diagnostics.log("startup"), level)(
+            "font warm-up %s finished in %.0f ms", self._name,
+            self.took_s * 1000.0)
 
     def done(self) -> bool:
         return self._thread.isFinished()
