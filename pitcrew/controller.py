@@ -1501,6 +1501,17 @@ class PitCrewController(QObject):
         screen = own.get(attr)
         builder = own.get("_screen_builder")
         if screen is None and builder is not None:
+            # **Never a widget off the Qt thread.** Building a QWidget on a
+            # worker is a native crash, not an exception - the whole app,
+            # mid-race. No worker reads these today (they talk to the Qt
+            # thread through `bridge` signals); this is so a future one that
+            # does gets a loud None and a log line, never a dead process.
+            if threading.current_thread() is not threading.main_thread():
+                log("pitcrew").error(
+                    "%s read on thread %r before it was built - it is only "
+                    "ever built on the Qt thread; returning None",
+                    attr.lstrip("_"), threading.current_thread().name)
+                return None
             made = builder(attr.lstrip("_"))
             if vars(self).get(attr) is None:
                 attach(made)

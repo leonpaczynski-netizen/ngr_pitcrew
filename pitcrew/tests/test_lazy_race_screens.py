@@ -211,3 +211,25 @@ def test_the_bench_writes_to_the_practice_screen_it_builds(window):
     assert window.practice_screen is None
     assert window.controller.bench.practice is window.controller.practice
     assert window.practice_screen is not None
+
+
+@pytest.mark.parametrize("index", sorted(OWNED))
+def test_a_worker_never_builds_one(window, index):
+    """A QWidget built off the Qt thread is a native crash, mid-race. A
+    worker that reads one before it exists gets None and a log line; the Qt
+    thread's next read builds it as usual."""
+    import threading
+
+    attr, name, _signals = OWNED[index]
+    seen = {}
+
+    def read() -> None:
+        seen["screen"] = getattr(window.controller, name)
+
+    worker = threading.Thread(target=read, name="not-qt")
+    worker.start()
+    worker.join()
+    assert seen == {"screen": None}
+    assert getattr(window, attr) is None
+    screen = getattr(window.controller, name)
+    assert screen is not None and getattr(window, attr) is screen
