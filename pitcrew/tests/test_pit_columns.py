@@ -220,7 +220,8 @@ def test_the_search_band_is_measured_in_row_heights_so_it_scales():
     to this path.
     """
     small = a_frame(rows=3, disc_x=146, size=20, top=110, pitch=28)
-    ladder = (128, 141, [120, 148, 176])
+    # The flag scaled with everything else: GT7 draws it the disc's width.
+    ladder = (126, 145, [120, 148, 176])
     assert len(read_rows(small, BOARD, ladder)) == 3
 
 
@@ -334,3 +335,46 @@ def test_outline_fill_ignores_a_hole_but_not_a_shape():
     # And a thin diagonal stroke is nowhere near round.
     stroke = np.eye(30, dtype=bool)
     assert _outline_fill(stroke) < 0.10
+
+
+# --- on a known row a disc is a fixed size, and round ----------------------
+#
+# Critic, 19 Sep 2026: scored on its outline, scenery behind the HUD fills a
+# box the way a circle does, and false pit rows over Sardegna Rd 9 went from
+# 115 to 211. Scenery does not match the disc's SIZE and ASPECT: real discs
+# were 26-30 px on rows 40 apart, the false ones most often 34-36 tall - the
+# whole search band - or oblong.
+
+
+def test_a_blob_filling_the_whole_band_is_not_a_disc():
+    """36 px beside a 27 px flag, on a 40 px pitch: the search band filled
+    edge to edge, which is what bright scenery through the HUD does."""
+    frame = a_frame(rows=3, size=36, top=216)
+    assert read_rows(frame, BOARD, LADDER) == []
+
+
+def test_an_oval_that_fills_its_box_like_a_circle_is_not_a_disc():
+    """An ellipse fills pi/4 of its box exactly as a circle does, so the
+    outline-fill test cannot refuse it. Its aspect can."""
+    frame = a_frame(rows=3, skip=(1,))
+    ys, xs = np.mgrid[0:28, 0:40]
+    oval = ((ys - 13.5) / 14.0) ** 2 + ((xs - 19.5) / 20.0) ** 2 <= 1.0
+    frame[260:288, 291:331][oval] = DISC
+    frame[267:281, 331 + 20:331 + 73] = INK         # its "fuel figure"
+    rows = read_rows(frame, BOARD, LADDER)
+    assert [r.disc[1] for r in rows] == [220, 300]
+
+
+def test_a_real_disc_on_the_same_rows_still_reads():
+    """The same fixture with GT7's own geometry - a 28 px disc beside a
+    27 px flag - keeps every row."""
+    assert len(read_rows(a_frame(rows=3), BOARD, LADDER)) == 3
+
+
+def test_a_broken_ladder_does_not_cost_a_real_disc():
+    """The row pitch was the first yardstick, and a ladder missing rows made
+    it 53-68 px on real frames, refusing the discs on them. The flag's width
+    does not care how many rows the ladder found."""
+    sparse = (256, 282, [234, 314])            # the middle row missed
+    frame = a_frame(rows=3, skip=(1,))
+    assert len(read_rows(frame, BOARD, sparse)) == 2

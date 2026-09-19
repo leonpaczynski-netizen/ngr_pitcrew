@@ -159,6 +159,25 @@ DISC_SQUARENESS = 0.65, 1.55
 # here. Every letter now scores what the geometry says a circle scores.
 DISC_ROUNDNESS = 0.70, 0.90
 
+# **On a row the ladder has found, a disc is the pit flag's size and round.**
+# Scored on the outline, scenery behind the translucent HUD fills a box as a
+# circle does (0.70-0.90), so roundness alone took false pit rows from 115 to
+# 211 over Sardegna Rd 9 (critic, 19 Sep 2026). What scenery does NOT do is
+# match the disc's size and aspect. Over that race every real disc measured
+# 26-30 px a side and within a few percent of square; the false ones were
+# 17-59 px wide and most often 34-36 tall - the whole search band filled.
+#
+# **Measured against the flag, not the row pitch.** The pitch was tried first
+# and it is the ladder's weakest number: a missed row makes the gaps 53-68 px
+# and a stray one 31-34, and on those frames real discs were refused. The
+# flag column is measured on every frame and was 28 px wide on 35 of 39
+# sampled frames of that race (29 twice, 33 and 36 once each) - the disc's
+# own size. A wide flag only loosens this on its frame; it never refuses a
+# real disc. Both bounds are ratios, so they survive a resolution change. The
+# disc-first search (`read`) has no flag, and keeps `DISC_SQUARENESS`.
+DISC_OF_FLAG = 0.75, 1.15
+DISC_ASPECT_ON_ROW = 1 / 1.2, 1.2
+
 
 def _outline_fill(box) -> float:
     """How much of `box` a shape covers, with the holes inside it filled.
@@ -363,7 +382,8 @@ def _inside_board(discs, board):
     return [d for d in discs if left <= d[0] <= right]
 
 
-def _disc_on_row(frame, y: int, left: int, right: int, height: int):
+def _disc_on_row(frame, y: int, left: int, right: int, height: int,
+                 flag_w: int | None = None):
     """A compound disc on one known row, or None.
 
     The row is given, so this asks only whether the disc is there - which is
@@ -384,12 +404,21 @@ def _disc_on_row(frame, y: int, left: int, right: int, height: int):
     # scenery shows through the HUD, and one of those is often the longer run.
     # On a measured frame that took the disc count from five to two. The disc
     # precedes the fuel figure, so leftmost breaks any remaining tie.
+    # The frame-height bounds are the reader's outer limits; the flag's
+    # width is the tight one (`DISC_OF_FLAG`), and the stricter applies.
     low, high = DISC_MIN_FRAC * frame.shape[0], DISC_MAX_FRAC * frame.shape[0]
+    if flag_w:
+        low = max(low, DISC_OF_FLAG[0] * flag_w)
+        high = min(high, DISC_OF_FLAG[1] * flag_w)
     cols_on = np.where(red.any(axis=0))[0]
     if len(cols_on) == 0:
         return None
     for col_run in _runs(cols_on, 4):
-        wide = len(col_run)
+        # **The SPAN, not the count of lit columns.** `_runs` bridges gaps,
+        # so a ragged 28 px blob counted 24 and passed as square beside a
+        # 21 px height (Sardegna Rd 9, 1302.5 s). A disc is solid - its
+        # count is its span - so only scenery is affected.
+        wide = int(col_run[-1] - col_run[0] + 1)
         if not low <= wide <= high:
             continue
         strip = red[:, col_run[0]:col_run[-1] + 1]
@@ -397,10 +426,11 @@ def _disc_on_row(frame, y: int, left: int, right: int, height: int):
         if len(rows_here) == 0:
             continue
         for row_run in _runs(rows_here, 3):
-            tall = len(row_run)
+            tall = int(row_run[-1] - row_run[0] + 1)
             if not low <= tall <= high:
                 continue
-            if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
+            if not (DISC_ASPECT_ON_ROW[0] <= wide / tall
+                    <= DISC_ASPECT_ON_ROW[1]):
                 continue
             box = strip[row_run[0]:row_run[-1] + 1]
             fill = _outline_fill(box)
@@ -433,7 +463,8 @@ def read_rows(frame, board, ladder) -> list[PitRow]:
     board_left = board[0] if board is not None else None
     out = []
     for y in ys:
-        disc = _disc_on_row(frame, y, left, right, height)
+        disc = _disc_on_row(frame, y, left, right, height,
+                            flag_w=flag_x1 - flag_x0 + 1)
         if disc is None:
             continue
         box = _fuel_box(frame, disc)
