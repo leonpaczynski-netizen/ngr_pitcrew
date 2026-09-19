@@ -458,3 +458,95 @@ def test_a_late_car_screen_gets_the_catalogue_and_the_active_car(qt_app,
         assert screen.receivers(screen.car_changed) == 1
     finally:
         window.controller.shutdown()
+
+
+# ------------------------------------------------ one calendar read per paint
+
+@pytest.fixture()
+def counted_hub(monkeypatch):
+    """The hub replaced by one that counts its reads."""
+    import pitcrew.hub.calendar as calendar
+    import pitcrew.hub.read as read
+
+    reads: list[int] = []
+
+    class Hub:
+        available = True
+
+        def close(self):
+            pass
+
+    def upcoming(hub, *, me=None, now=None, stored_events=None):
+        reads.append(len(stored_events or []))
+        return []
+
+    monkeypatch.setattr(read, "Hub", Hub)
+    monkeypatch.setattr(calendar, "upcoming", upcoming)
+    return reads
+
+
+def _controller(store):
+    from pitcrew.controller import PitCrewController
+    from pitcrew.ui.event_screen import EventScreen
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    return PitCrewController(store, EventScreen(), PracticeScreen())
+
+
+def test_the_first_paint_reads_the_calendar_once(qt_app, store, counted_hub):
+    """Three questions, one read: it was three ~30 ms reads, all in front
+    of the window's first frame."""
+    controller = _controller(store)
+    asked: list[int] = []
+    real = controller.hub_proposals
+
+    def counting():
+        asked.append(1)
+        return real()
+
+    controller.hub_proposals = counting
+    try:
+        store.set_state("active_event_id",
+                        store.create_event(name="Memo", track="Suzuka"))
+        counted_hub.clear()
+        controller._first_paint_done = False
+        controller._first_paint_work()
+        assert len(asked) >= 2, "the premise: it is asked more than once"
+        assert len(counted_hub) == 1
+        # And the memo does not outlive the call.
+        assert controller._hub_memo is None
+    finally:
+        controller.shutdown()
+
+
+def test_a_round_written_in_between_is_read_afresh(qt_app, store,
+                                                   counted_hub):
+    """The memo is keyed on the events it was read against, so a round
+    linked or created mid-way is never answered from before the write."""
+    controller = _controller(store)
+    try:
+        counted_hub.clear()
+        controller._hub_memo = {}
+        controller.hub_proposals()
+        controller.hub_proposals()
+        assert len(counted_hub) == 1
+        store.create_event(name="Created mid-way", track="Suzuka")
+        controller.hub_proposals()
+        assert len(counted_hub) == 2
+        assert counted_hub[-1] == counted_hub[0] + 1
+    finally:
+        controller._hub_memo = None
+        controller.shutdown()
+
+
+def test_outside_the_first_paint_every_call_reads(qt_app, store, counted_hub):
+    """No cache across calls - the reason `hub_proposals` gives for having
+    none still holds everywhere but that one synchronous call."""
+    controller = _controller(store)
+    try:
+        counted_hub.clear()
+        controller.hub_proposals()
+        controller.hub_proposals()
+        assert len(counted_hub) == 2
+    finally:
+        controller.shutdown()

@@ -1250,6 +1250,9 @@ class PitCrewController(QObject):
         self._plan_watch.timeout.connect(self._poll_plan)
         self._plan_watch.start()
 
+        # See `hub_proposals`: a calendar memo that exists only inside
+        # `_first_paint_work`.
+        self._hub_memo: dict | None = None
         self.refresh_catalogs()
         # **Scheduled, not called.** See `_first_paint_work`: this is ~130 ms
         # of widget filling that the window does not need in order to appear.
@@ -1276,9 +1279,16 @@ class PitCrewController(QObject):
         if self._first_paint_done:
             return
         self._first_paint_done = True
-        # Before the load, not after: this decides which event the load shows.
-        self.open_on_next_round()
-        self.load_active_event()
+        # One calendar read for the three questions below - see
+        # `hub_proposals`. Scoped to this call and dropped in the `finally`.
+        self._hub_memo = {}
+        try:
+            # Before the load, not after: this decides which event the load
+            # shows.
+            self.open_on_next_round()
+            self.load_active_event()
+        finally:
+            self._hub_memo = None
         self._close_orphaned_sessions()
 
     # --------------------------------------------------------------- catalog
@@ -1405,23 +1415,42 @@ class PitCrewController(QObject):
         machine that is not his; the app raced for months without it and every
         screen behind this one has to go on working when it is not there.
 
-        Not cached. It is a handful of indexed reads against a local SQLite
-        file, and a cache here would be state that outlives a session - the
-        exact class of defect that had a race judging its fresh tyres against
-        practice's worn ones.
+        Not cached across calls. It is a handful of indexed reads against a
+        local SQLite file, and a cache here would be state that outlives a
+        session - the exact class of defect that had a race judging its fresh
+        tyres against practice's worn ones.
+
+        **With one exception, scoped to a single synchronous call:**
+        `_first_paint_work` asked this three times in a row - the calendar,
+        then the active round's regulations, then the picker - at ~30 ms
+        each, all of it in front of the window's first frame. Inside that
+        call only, `_hub_memo` hands back the same answer while the driver
+        name and the stored events it was read against are unchanged; a
+        round linked or created in between changes the events and is read
+        afresh. The memo is `None` everywhere else, and dropped in a
+        `finally`.
         """
         try:
             from pitcrew.hub.calendar import upcoming
             from pitcrew.hub.read import Hub
 
+            me = self.store.driver_name()
+            stored = self.store.list_events()
+            memo = self._hub_memo
+            if memo is not None and memo.get("key") == (me, stored):
+                return list(memo["proposals"])
             hub = Hub()
             try:
                 if not hub.available:
-                    return []
-                return upcoming(hub, me=self.store.driver_name(),
-                                stored_events=self.store.list_events())
+                    proposals = []
+                else:
+                    proposals = upcoming(hub, me=me, stored_events=stored)
             finally:
                 hub.close()
+            if memo is not None:
+                memo["key"] = (me, stored)
+                memo["proposals"] = list(proposals)
+            return proposals
         except Exception:
             log("pitcrew").exception("the league calendar could not be read")
             return []

@@ -1073,18 +1073,20 @@ def main() -> int:
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(None, "Pit Crew is already running", claim.message)
         return 0
-    # **The speech engine is chosen beside the screens, not after them.**
-    # Here rather than any earlier: after the sole-instance claim, so a copy
-    # about to be refused imports nothing, and after `QApplication`, which
-    # sets up the Qt thread's COM apartment before this thread's `pythoncom`
-    # import sets up its own. See `voice.start_engine_build`.
-    voice_engine = voice.start_engine_build()
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))
     theme.apply(app)
     diagnostics.mark("theme")
 
     try:
+        # **The speech engine is chosen beside the screens, not after them.**
+        # Here rather than any earlier: after the sole-instance claim, so a
+        # copy about to be refused imports nothing, after `QApplication`,
+        # which sets up the Qt thread's COM apartment before this thread's
+        # `pythoncom` import sets up its own, and inside the `try`, so the
+        # rig claim is given back whatever happens. See
+        # `voice.start_engine_build`.
+        voice_engine = voice.start_engine_build()
         store = Store(DEFAULT_DB_PATH)
         diagnostics.mark("store open")
         # **Built here, started after the window has drawn, joined by
