@@ -926,6 +926,13 @@ class Voice:
             return
 
         def run() -> None:
+            # **The accept as well as the refusal** (rule 10). This is the
+            # app's second model load - `PiperVoice.load` holds the GIL for
+            # its whole ~1.5 s - and until now it said nothing at all when it
+            # worked, so "did the voice load, and when" could not be answered
+            # from the log at all. It is answerable now, in the same shape as
+            # the speech warm-up's own finishing line.
+            began = time.perf_counter()
             try:
                 if warm is not None:
                     warm()
@@ -935,8 +942,13 @@ class Voice:
                     # the race, paused while they build.
                     timed(WARM_LINE)
             except Exception as exc:            # noqa: BLE001
-                log("voice").error("warm-up failed: %s: %s",
+                log("voice").error("warm-up failed after %.0f ms: %s: %s",
+                                   (time.perf_counter() - began) * 1000.0,
                                    type(exc).__name__, exc, exc_info=True)
+                return
+            log("voice").info("voice warm-up finished in %.0f ms - %s",
+                              (time.perf_counter() - began) * 1000.0,
+                              self.engine_name)
 
         threading.Thread(target=run, name="PitCrewVoiceWarm",
                          daemon=True).start()

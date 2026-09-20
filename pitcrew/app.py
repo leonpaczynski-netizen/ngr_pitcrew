@@ -63,7 +63,19 @@ MIN_WINDOW = (900, 560)
 # are pre-warmed (`PitCrewController.prewarm_for_sessions`). Long enough for
 # the first paint and the first-paint fill to land first; short, because a
 # press that arrives before the voice model has loaded still waits for it.
+#
+# **It is a floor, not the whole gate.** The pre-warm also waits for the
+# speech models to land - see `PitCrewWindow._prewarm_when_speech_has_landed`
+# for the order and why the two loads may never overlap.
 PREWARM_DELAY_MS = 500
+# How often, after that floor, the launch asks whether the speech models have
+# landed. A timer tick on an idle event loop, nothing more.
+PREWARM_POLL_MS = 50
+# How long it will wait for them before saying so out loud and pre-warming
+# anyway. **A load that never lands must be reported, not waited on for
+# ever**: the speech thread is a daemon that can be stuck in a loader with no
+# way back, and the first Practice press must not be the thing that finds out.
+PREWARM_SPEECH_LIMIT_S = 20.0
 
 # The rail, grouped by the job each screen belongs to. Two loops run through
 # this app and they are not the same work: PREPARE/LEARN is the setup loop
@@ -849,6 +861,14 @@ class PitCrewWindow(QMainWindow):
         super().__init__()
         # The launch's speech warm-up, held back until `release_speech`.
         self._warm = warm
+        # The gate that hands the session pre-warm to the launch once the
+        # speech models are in - see `_schedule_prewarm`. A QTimer parented
+        # to this window, so a window that goes away takes it with it.
+        self._prewarm_gate = None
+        self._prewarm_deadline = None
+        # Whether the pre-warm has been handed to the controller. The gate is
+        # armed once per window, not once per end of `warm_screens`.
+        self._prewarm_handed_over = False
         self.setWindowTitle("Next Gear Racing Pit Crew")
         # The floor is the *smaller* of what the layout wants and what the
         # screen can show. Pinning it above the work area makes the window
@@ -1064,8 +1084,7 @@ class PitCrewWindow(QMainWindow):
             # window is built, painted and answerable - see
             # `prewarm_for_sessions` for what they are and why the Practice
             # button and the race arm used to pay them with the window frozen.
-            QTimer.singleShot(PREWARM_DELAY_MS,
-                              self.controller.prewarm_for_sessions)
+            self._schedule_prewarm()
             return
         index = pending[0]
         try:
@@ -1084,10 +1103,108 @@ class PitCrewWindow(QMainWindow):
             # The chain ends here, and what waits on its end must not.
             self.finish_launch()
             # The pre-warm does not depend on the screen that failed.
-            QTimer.singleShot(PREWARM_DELAY_MS,
-                              self.controller.prewarm_for_sessions)
+            self._schedule_prewarm()
             return
         QTimer.singleShot(0, self.warm_screens)
+
+    # ------------------------------------------- the launch's one warm queue
+
+    def _schedule_prewarm(self) -> None:
+        """Arm the gate that pre-warms the session paths - **after** the
+        speech models, never beside them.
+
+        **The order, stated once, here.** A launch has two model loads and
+        they are not interchangeable:
+
+        1. **The speech models**, started on the window's first frame
+           (`after_launch_paint` -> `release_speech`) on the one warm-up
+           thread `ptt.start_warm_up` owns. First because a press can come at
+           any moment and a press with no recogniser is a driver talking to
+           nothing.
+        2. **The voice model and the session paths**
+           (`PitCrewController.prewarm_for_sessions`). Second because the
+           earliest it can be needed is the first Start, which is a deliberate
+           act several seconds away at best.
+
+        **Why they may not overlap.** `PiperVoice.load` holds the GIL outright
+        for ~1.5 s, so started beside the speech thread it does not run
+        alongside it - it stops it, and the Qt thread with it. Two model loads
+        racing at launch is also the arrangement that killed push to talk in
+        four launches of five (`ptt.start_warm_up`, "Why one thread and not
+        two"). Combining the two accepted launch branches did exactly this:
+        the first frame started the speech load and a bare
+        `QTimer.singleShot(PREWARM_DELAY_MS, ...)` started the voice load
+        500 ms later, whatever the first was doing.
+
+        **Why a timer this window owns.** The bare `singleShot` was also a
+        timer nothing could cancel: it fired against a window that had been
+        shut down, reached a closed database, and the exception out of the
+        slot ended the process (`0xC0000409`, twice, 20 Sep 2026). This one is
+        parented to the window and stopped in `closeEvent`, and the controller
+        refuses late work of its own accord as well.
+        """
+        if self._prewarm_gate is not None or self._prewarm_handed_over:
+            # `warm_screens` reaches its end again whenever a screen it had
+            # not built yet is visited first, and the pre-warm is a once-per
+            # -process job: one gate, one hand-over. (The controller is
+            # idempotent too - this is so that a second gate is never armed
+            # to find that out.)
+            return
+        gate = QTimer(self)
+        gate.setSingleShot(True)
+        gate.timeout.connect(self._prewarm_when_speech_has_landed)
+        self._prewarm_gate = gate
+        self._prewarm_deadline = (time.monotonic() + PREWARM_SPEECH_LIMIT_S)
+        gate.start(PREWARM_DELAY_MS)
+
+    def stop_prewarm_gate(self) -> None:
+        """Disarm the gate. Idempotent; called on the way out."""
+        gate, self._prewarm_gate = self._prewarm_gate, None
+        if gate is not None:
+            gate.stop()
+            gate.deleteLater()
+
+    def _prewarm_when_speech_has_landed(self) -> None:
+        """The gate's tick: pre-warm if the speech load is done, else look
+        again in `PREWARM_POLL_MS`.
+
+        Past `PREWARM_SPEECH_LIMIT_S` it says so - naming the wait, at ERROR,
+        because a speech load still running twenty seconds in is a fault
+        worth a line in the log - and pre-warms anyway. The alternative is a
+        first Practice press that pays the model load with the window frozen,
+        which is the thing this exists to prevent; and the load it starts
+        then is the voice, not a second run at the speech models, so it
+        cannot be the two-into-one-loader failure.
+        """
+        gate = self._prewarm_gate
+        if gate is None:                       # disarmed while we were queued
+            return
+        if self._warm is not None and not ptt.speech_landed(self._warm):
+            if time.monotonic() < self._prewarm_deadline:
+                gate.start(PREWARM_POLL_MS)
+                return
+            diagnostics.log().error(
+                "the speech warm-up has not landed %.0f s after the window "
+                "was up - pre-warming the session paths anyway; the voice "
+                "load may now run beside it",
+                PREWARM_SPEECH_LIMIT_S)
+        self.stop_prewarm_gate()
+        self._prewarm_handed_over = True
+        # **The accept, not only the refusals** (rule 10): the one line that
+        # says the second load started, and when. With "speech warm-up
+        # started" and "speech warm-up finished in N ms" either side of it,
+        # the log shows the order that was actually run rather than the one
+        # this file intends.
+        diagnostics.mark("session pre-warm started")
+        try:
+            self.controller.prewarm_for_sessions()
+        except Exception:                          # noqa: BLE001
+            # `prewarm_for_sessions` promises not to raise, and this is the
+            # net under that promise rather than a second opinion on it: an
+            # exception out of a Qt slot is not caught anywhere - PyQt calls
+            # `qFatal` and the process ends with no window and no message.
+            diagnostics.log().error("the session pre-warm raised",
+                                    exc_info=True)
 
     def after_first_paint(self, then) -> None:
         """Run `then` on the turn after this window first draws.
@@ -1185,6 +1302,10 @@ class PitCrewWindow(QMainWindow):
             self.practice_screen.export_requested.emit()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        # Before the controller goes: a gate still armed would fire into a
+        # shut-down controller and a closed store. It refuses that itself,
+        # and this is the half of the pair that means it never has to.
+        self.stop_prewarm_gate()
         self.controller.shutdown()
         super().closeEvent(event)
 

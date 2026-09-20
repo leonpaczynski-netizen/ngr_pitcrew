@@ -1329,6 +1329,15 @@ class PitCrewController(QObject):
         # which asks for a prefetch.
         self._prewarmed = False
         self._frame_prefetch = None
+        # **Set by `shutdown`, and read by everything that can arrive late.**
+        # A controller that has been shut down still exists - a timer, a
+        # thread or a Qt slot can reach it - and its store is closed, its
+        # widgets are gone and its session is ended. Work done against it is
+        # not merely wasted: it raises from inside the Qt event loop, and an
+        # exception that escapes a slot ends the process (measured 20 Sep
+        # 2026, 0xC0000409 from a stale pre-warm timer against a closed
+        # database). There is no restart: this is set once, on the way out.
+        self._shut_down = False
         # **What a stop leaves running, and how a start stands it down.**
         # A practice stop starts the debrief (every practice lap of the event
         # decoded, ~15 s on event 1) and, with a race stop, the straights
@@ -1480,20 +1489,45 @@ class PitCrewController(QObject):
         on the Qt thread, and it is built once and reused, so building it
         hidden now costs nothing later. Both are exactly what the start paths
         would have built - nothing here reads session state (rule 11).
+
+        **Second in the launch's order of model loads, never beside the
+        first.** The speech models (`ptt.start_warm_up`, released on the
+        window's first frame) load first; this one is held until they have
+        landed by `PitCrewWindow._prewarm_when_speech_has_landed`, which is
+        the only caller on the launch path. The order is stated there and the
+        reason is here: this load holds the GIL outright, so run beside the
+        speech thread it stops it - and two model loads racing each other at
+        launch is what killed push to talk in four launches of five
+        (`ptt.start_warm_up`, "Why one thread and not two").
+
+        **Never raises**, and that is load-bearing rather than tidy: every
+        caller is a Qt timer, and an exception out of a slot does not
+        propagate anywhere a person can see it - PyQt prints it and calls
+        `qFatal`, which ends the process. Measured 20 Sep 2026: a pre-warm
+        that arrived after its window had been shut down reached a closed
+        database and took the whole process down with `0xC0000409`.
         """
         if self._prewarmed:
             return
+        if self._shut_down:
+            # **Late, against a controller that is gone.** Not marked done:
+            # there is nothing left to pre-warm and nothing left to read the
+            # flag either.
+            log("session").info("pre-warm skipped - the controller has shut "
+                                "down")
+            return
         self._prewarmed = True
-        if self.session_id is not None:
-            # **Too late: a session is already running.** On a loaded machine
-            # the deferred screens can take longer than he waits before the
-            # first press, and the start paths have then paid all of this
-            # themselves. Anything here now is work beside a live session -
-            # the websocket import alone is 25-150 ms on the Qt thread, which
-            # is a stutter mid-race. Marked done, so the prefetch still runs
-            # after the session (it is gated on this flag).
-            log("session").info("pre-warm skipped - session %s opened first",
-                                self.session_id)
+        busy = self._busy_for_prewarm()
+        if busy is not None:
+            # **Too late: the driver is already out there.** On a loaded
+            # machine the deferred screens can take longer than he waits
+            # before the first press, and the start paths have then paid all
+            # of this themselves. Anything here now is work beside a live
+            # session - the websocket import alone is 25-150 ms on the Qt
+            # thread, and the voice load freezes every thread for ~1.5 s,
+            # which on the grid is a stutter and a missed call. Marked done,
+            # so the prefetch still runs afterwards (it is gated on the flag).
+            log("session").info("pre-warm skipped - %s", busy)
             return
         try:
             self.voice.warm()
@@ -1511,9 +1545,44 @@ class PitCrewController(QObject):
         # loopback probe answers before it is needed at all.
         try:
             import websockets.sync.client  # noqa: F401
-        except ImportError:
-            pass
-        self._prefetch_event_frames()
+        except Exception:                                    # noqa: BLE001
+            # Not only `ImportError`: a half-installed package raises from
+            # its own module body, and this runs in a Qt slot.
+            log("session").warning("could not import the OBS client",
+                                   exc_info=True)
+        try:
+            self._prefetch_event_frames()
+        except Exception:                                    # noqa: BLE001
+            # It reads the store, and the store can be closed under it - the
+            # app can be shut while this timer is in flight. Named and
+            # logged; NOT allowed out, see the docstring.
+            log("session").warning("could not start the frame prefetch",
+                                   exc_info=True)
+
+    def _busy_for_prewarm(self) -> str | None:
+        """Why the idle pre-warm must not run now, or None if it may.
+
+        Everything here is the driver already being out on track, in one
+        shape or another. The pre-warm freezes every Python thread for the
+        length of the voice load and builds widgets on the Qt thread; none
+        of that may land on a session, an armed race or a Free Run (rule
+        11).
+
+        **A session was the only one of the three it asked about**, and the
+        other two are the same driver in the same seat: `start_race` arms the
+        coordinator before a lap is recorded, and Free Run holds a live
+        listener with no session row at all. Asked as one question here so
+        that the answer cannot be half of itself.
+        """
+        if self.session_id is not None:
+            return f"session {self.session_id} opened first"
+        if self._rig_only_mode:
+            return "Free Run is running"
+        race = self.race
+        if race is not None and (getattr(race, "armed", False)
+                                 or getattr(race, "running", False)):
+            return "a race is armed"
+        return None
 
     def _stand_down_post_session_work(self) -> None:
         """First thing in every start: what the last stop left running stops
@@ -9497,6 +9566,11 @@ class PitCrewController(QObject):
         return path
 
     def shutdown(self) -> None:
+        # **First, before anything is torn down:** from here on this
+        # controller refuses the work that can still arrive on a timer. The
+        # store closes moments after this returns and the widgets go with it
+        # - see `_shut_down` and `prewarm_for_sessions`.
+        self._shut_down = True
         # A strip still held back is never started on the way out.
         self._strip_deferred = False
         # **The orphan sweep, if the event loop never got to it.** It is
