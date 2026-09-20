@@ -514,7 +514,18 @@ def test_the_tablet_words_what_each_figure_is_worth():
     assert rows["PUNISHED"]["fuel"] == "8 → 50"
     assert (rows["PUNISHED"]["prediction"], rows["PUNISHED"]["detail"]) == (
         "2 STOPS", "in by L23 · our burn")
-    assert rows["PUNISHED"]["tone"] == "stops" and rows["PUNISHED"]["gap"] == "1.4"
+    # **And the gap is withdrawn at twenty seconds, which is the point of
+    # reading this row at a board age of twenty.** The stop, the fuel and the
+    # prediction are facts about a stop that happened and do not go stale;
+    # the gap is a reading off an instrument that has gone quiet. Fresh, the
+    # same row draws the figure - below.
+    assert rows["PUNISHED"]["tone"] == "stops"
+    assert rows["PUNISHED"]["gap"] == "--"
+    assert rows["PUNISHED"]["gap_unread"] is True
+    fresh = {row["name"]: row
+             for row in compose(field_view(state, board, packet=1))["rows"]}
+    assert fresh["PUNISHED"]["gap"] == "1.4"
+    assert fresh["PUNISHED"]["gap_unread"] is False
     assert rows["K.Graebs"]["fuel"] == "8 → ≥30"
     assert rows["K.Graebs"]["prediction"] == "CAN'T TELL"
     assert rows["Close"]["prediction"] == "1 STOP SO FAR"
@@ -725,6 +736,99 @@ def test_a_gap_from_laps_ago_is_not_still_on_the_screen():
     state.lap += 5                              # five laps with no new read
     stale = {r.name: r for r in field_view(state, board, packet=1).rows}
     assert stale["PUNISHED"].gap_s is None
+
+
+def test_a_gap_the_reader_has_lost_is_drawn_as_missing_not_as_nothing():
+    """**An empty gap cell said two opposite things and he could tell them
+    apart on neither.**
+
+    A car that is not one of the two either side of us has no interval box
+    on his screen and never will: its cell is empty because there is nothing
+    to read. A gap that has expired is a number the app HAS and will not
+    stand behind. Drawn the same, the second reads as the first, and the
+    driver learns nothing from the column going quiet - which is exactly
+    when he needs to know (rule 3).
+    """
+    state = _state()                    # ahead is PUNISHED, cluster 277
+    board = BoardRead(packet=1, places={"PUNISHED": 3, "X-Man Oce": 6},
+                      visible=frozenset({3, 6}), windowed=False)
+    live = {r.name: r for r in field_view(state, board, packet=1).rows}
+    assert (live["PUNISHED"].gap_s, live["PUNISHED"].gap_unread) == (1.4, False)
+    # Never a neighbour: no box, nothing to lose.
+    assert (live["X-Man Oce"].gap_s, live["X-Man Oce"].gap_unread) == (None,
+                                                                      False)
+    state.lap += 3                              # the reading is laps behind
+    lost = {r.name: r for r in field_view(state, board, packet=1).rows}
+    assert lost["PUNISHED"].gap_s is None and lost["PUNISHED"].gap_unread
+    assert not lost["X-Man Oce"].gap_unread
+
+
+def test_a_reading_from_the_lap_before_the_crossing_is_not_this_laps_gap():
+    """**The bound is the lap he is DRIVING, and the two laps were counted in
+    different domains.**
+
+    `GapTrend` is keyed by `lap_now()` - laps behind him - and this file
+    counts in `lap_on_screen()`, the lap in progress. The old subtraction
+    crossed the two and its constant read `1`, so the comment beside it
+    promised "a reading from the lap before is still drawn" while the
+    arithmetic refused it. One lap of a GT3 at Monza is about 105 s; the
+    figure it would have carried is a car he has had a whole lap to pass.
+
+    This pins the behaviour the constant change preserves. Measured against
+    `bf84519`: `gap_s` was already `None` a lap on - which is why `E-boards`'
+    *"up to two laps stale, ~250 s"* overstated it; the real bound was one
+    lap, reached by an off-by-one rather than by the rule. The new half is
+    that the row now SAYS so instead of going blank.
+    """
+    state = _state()                              # trend key 18, HUD lap 19
+    board = BoardRead(packet=1, places={"PUNISHED": 3}, visible=frozenset({3}),
+                      windowed=False)
+    assert field_view(state, board, packet=1).rows[0].gap_s == 1.4
+    state.lap += 1                                # one crossing, no new read
+    only = field_view(state, board, packet=1).rows[0]
+    assert only.gap_s is None and only.gap_unread
+
+
+def test_a_gap_is_withdrawn_when_the_board_reader_has_gone_quiet():
+    """**The board and the gaps are one instrument reading one frame.**
+
+    `pit_wall._see` takes the ladder and the interval boxes off the same
+    grab in the same pass, and the archive says how tightly they travel: of
+    the gap readings this page can draw - a subject the roster named - 2054
+    of 2057 at session 204, and every one of 1507 at 188 and 771 at 176,
+    came off a frame that also produced a board read. So a board that has
+    not been read inside `BOARD_FRESH_S` is a reader that has stopped, and
+    the gap it left is not a current reading whatever lap it was taken on.
+
+    Replayed over session 204, the lap bound alone let a figure stand for up
+    to 83 s; with this it is 31 s ahead and 46 s behind. The bound is the
+    value George already refuses a board at, not a second number beside it
+    (rule 13).
+    """
+    from pitcrew.race.field import BOARD_FRESH_S
+
+    state = _state()
+    board = BoardRead(packet=0, places={"PUNISHED": 3}, visible=frozenset({3}),
+                      windowed=False)
+    inside = field_view(state, board,
+                        packet=int((BOARD_FRESH_S - 1) * SAMPLE_HZ)).rows[0]
+    assert inside.gap_s == 1.4 and not inside.gap_unread
+    past = field_view(state, board,
+                      packet=int((BOARD_FRESH_S + 1) * SAMPLE_HZ)).rows[0]
+    assert past.gap_s is None and past.gap_unread
+
+
+def test_a_gap_whose_age_cannot_be_established_is_not_a_fresh_gap():
+    """Rule 3, on the age itself. A board read refused as stamped in the
+    future takes its places with it - and it has to take the gap too, or the
+    page refuses to say where anybody is while asserting how far away one of
+    them is. No age is not an age of zero."""
+    state = _state()
+    board = BoardRead(packet=5_000, places={"PUNISHED": 3},
+                      visible=frozenset({3}), windowed=False)
+    view = field_view(state, board, packet=10)       # stamped in the future
+    assert view.board_age_s is None
+    assert all(row.gap_s is None for row in view.rows)
 
 
 def test_a_visit_the_wall_never_closed_stops_saying_he_is_standing_there():

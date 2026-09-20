@@ -9,6 +9,7 @@ from pitcrew.race.refuel import (
     RefuelWatch,
     SHORT,
     TARGET,
+    UNSIZED,
 )
 
 RATE_L_PER_S = 1.002
@@ -108,9 +109,18 @@ def test_a_tank_that_already_covers_the_stint_is_released_immediately():
     assert "already covers it" in said[0][0].reason
 
 
-def test_no_target_means_silence_and_not_an_invented_figure():
+def test_no_target_means_no_invented_figure_but_not_silence():
     """He is holding the trigger on a number. One the app guessed is worse
-    than none."""
+    than none - **and so is nothing at all.**
+
+    This used to assert silence, and silence is what the box sounded like at
+    Bathurst on 20 Sep 2026 when the adviser worked perfectly: four calls
+    made, four spoken, and nothing in the log, so a stop nobody could size
+    and an app that had died were the same event from the cockpit. The rule
+    that survives is rule 3 - no litre figure this app invented - and GT7's
+    own diamond marker is accurate (§5.4), so it is what an engineer with no
+    figure of his own points at. Said once, and carrying no number.
+    """
     watch = a_watch()
     fuel = drive_in(watch)
     for _ in range(int(5.3 * HZ)):
@@ -122,7 +132,8 @@ def test_no_target_means_silence_and_not_an_invented_figure():
         if call:
             said.append(call)
     assert watch.filling is True
-    assert said == []
+    assert [c.kind for c in said] == [UNSIZED]
+    assert not any(ch.isdigit() for ch in said[0].spoken())
 
 
 def test_leaving_short_is_a_lift_and_coast_call_at_pit_exit():

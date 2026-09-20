@@ -112,7 +112,7 @@ def read_frame(frame):
         return []
     flag_x0, flag_x1, ys = ladder
     right = max(0, flag_x0 - (flag_x1 - flag_x0 + 1))
-    name_x = R.name_column(frame, board, ys, (board[1] + board[3]) // 2, right)
+    name_x = R.name_column(frame, board, ys, right)
     return [(row.name, row.is_own,
              native_name(frame, row.y, name_x, right, row.is_own))
             for row in rows]

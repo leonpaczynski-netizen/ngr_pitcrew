@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pitcrew.diagnostics import log
 from pitcrew.race.expectations import FUEL_BASES_HEDGED
 
 # **A rise this big is a fill.** Sized against a channel that produced no
@@ -73,9 +74,23 @@ SHORT_EPSILON_L = 0.5
 # any. Two litres is also two seconds on the measured 1.001 L/s rig.
 TO_FLAG_EPSILON_L = 2.0
 
+# **How much has to go in before the app admits it cannot size the stop.**
+# At the measured 1.002 L/s that is five seconds into a fill - early enough
+# that he can still act on it, and far past any single-frame jump. It is
+# deliberately a fuel figure and not a clock: `note` has no clock, and the
+# quantity that matters is how much of the stop is already spent.
+UNSIZED_RISE_L = 5.0
+
 TARGET = "refuel-target"
 RELEASE = "refuel-release"
 SHORT = "refuel-short"
+# **Nothing could size this fill, and saying so beats saying nothing.**
+# Silence in the box is indistinguishable from an app that has died - which
+# is exactly the night this call was written on, when four calls WERE made
+# and nobody could tell from the log. The instruction carries no litre figure
+# the app invented (rule 3): GT7's own diamond marker is accurate (§5.4) and
+# it is the one number in the box that does not come from here.
+UNSIZED = "refuel-unsized"
 
 # **The caller did not say whose burn sized the target.** Distinct from None,
 # which is a statement - no race burn installed, so the figure is practice's
@@ -107,6 +122,11 @@ class RefuelWatch:
     strategy layer's job and it already does it from the race's own burn. This
     class only decides *when* the number is worth saying and when the tank has
     reached it.
+
+    **Pure arithmetic, and one log line per decision.** The logging is not
+    instrumentation bolted on - it is the only record that this class ran at
+    all, because nothing it says leaves a mark anywhere else (CLAUDE.md rule
+    10, and see `note`).
     """
 
     def __init__(self) -> None:
@@ -120,6 +140,7 @@ class RefuelWatch:
         self._said_target = False
         self._said_release = False
         self._said_short = False
+        self._said_unsized = False
         # The tank at the moment the fill was first seen, so the stop's own
         # figures can be reported afterwards without re-deriving them.
         self.started_l: float | None = None
@@ -140,6 +161,32 @@ class RefuelWatch:
              basis: str | None = None,
              burn_basis=BURN_UNSTATED,
              burn_laps: int | None = None) -> RefuelCall | None:
+        """One frame. See `_decide`; this only writes down what came out.
+
+        **Every call this watch makes is logged here** (rule 10, second
+        half). Four were made at Bathurst on 20 Sep 2026 - two fill targets,
+        a release and a shortfall, all filed in `race_revisions` and all
+        spoken - and not one of them left a mark in `pitcrew.log`, because
+        `voice.say` logs a line only when the caller passes an `on_done` and
+        this one did not. The record therefore could not tell "the adviser
+        spoke" from "the adviser has never run", which is a whole class of
+        question this one line closes.
+        """
+        call = self._decide(fuel_l, speed_kph=speed_kph, target_l=target_l,
+                            fuel_per_lap_l=fuel_per_lap_l,
+                            to_flag_l=to_flag_l, basis=basis,
+                            burn_basis=burn_basis, burn_laps=burn_laps)
+        if call is not None:
+            log("race").info("refuel: %s [%s]", call.spoken(), call.kind)
+        return call
+
+    def _decide(self, fuel_l: float | None, *, speed_kph: float | None,
+                target_l: float | None,
+                fuel_per_lap_l: float | None = None,
+                to_flag_l: float | None = None,
+                basis: str | None = None,
+                burn_basis=BURN_UNSTATED,
+                burn_laps: int | None = None) -> RefuelCall | None:
         """One frame. Returns what to say, or None - which is almost always.
 
         `target_l` is what the tank should read at pit exit, recomputed by the
@@ -147,6 +194,13 @@ class RefuelWatch:
         fill is first seen: the car is stationary for the whole of it, so
         nothing that feeds the figure can move while the hose is in, and a
         target that wobbled mid-fill would be chatter rather than news.
+
+        **`None` is the one thing that is not captured** (rule 10). It is not
+        a figure that might wobble - it is "I have not been told" - and
+        holding it for the stop is a refusal that becomes its own baseline,
+        with nothing able to retire it. So the watch keeps asking until a
+        real figure turns up, and the first real one wins. If none ever does,
+        `_unsized` says the one instruction that needs no figure from here.
 
         `burn_basis` is `RaceState.fuel_burn_basis` beside that target: one of
         `expectations.FUEL_BASIS_*` where this race's burn is installed, None
@@ -185,17 +239,49 @@ class RefuelWatch:
                 return None
             self._filling = True
             self.started_l = self._low_l
-            self._target_l = target_l
-            self._burn_basis = burn_basis
-            self._burn_laps = burn_laps
+            self._capture(target_l, burn_basis, burn_laps)
+            # **The accept, not only the refusals** (rule 10). The number
+            # setting the bar for everything this stop says never appeared in
+            # a log, so four calls made at Bathurst on 20 Sep 2026 were
+            # indistinguishable in the record from an adviser that had never
+            # run at all - and a night went into asking which it was.
+            log("race").info(
+                "refuel: the hose is in at %.1f L. Target %s; bound %s; "
+                "burn %s; laps behind it %s.",
+                self.started_l,
+                "NOT SIZED" if target_l is None else f"{target_l:.1f} L",
+                basis or "not named", _burn_words(burn_basis) or "not said",
+                burn_laps if burn_laps else "not said")
+        elif self._target_l is None:
+            # **A stop nothing could size is not a decision to hold** (rule
+            # 10). The target is captured once so it cannot wobble mid-fill,
+            # but a `None` is not a figure that could wobble - it is "I have
+            # not been told", and capturing it once latches the whole stop
+            # into silence with nothing able to retire it. So a real figure
+            # arriving later is taken; a real figure already captured is not
+            # replaced.
+            if target_l is not None:
+                self._capture(target_l, burn_basis, burn_laps)
+                log("race").info(
+                    "refuel: sized late, %.1f L into the fill - target "
+                    "%.1f L, bound %s, burn %s.",
+                    fuel_l - (self.started_l or fuel_l), target_l,
+                    basis or "not named",
+                    _burn_words(burn_basis) or "not said")
 
         target = self._target_l
         if target is None:
             # Filling, but nothing sized the stop - no burn measured, or no
-            # idea how many laps are left. **Silence is the right answer and
-            # a guessed litre figure is not**: he is holding the trigger on a
-            # number, and one the app invented is worse than none.
-            return None
+            # idea how many laps are left. **A guessed litre figure is not
+            # the answer**: he is holding the trigger on a number, and one
+            # the app invented is worse than none (rule 3).
+            #
+            # **Silence is not the answer either.** It is what the box
+            # sounded like when the adviser worked perfectly, so the driver
+            # cannot tell a stop nobody could size from an app that has
+            # stopped. `_unsized` says the one instruction that needs no
+            # figure from here.
+            return self._unsized(fuel_l, fuel_per_lap_l)
 
         if not self._said_target:
             self._said_target = True
@@ -239,6 +325,72 @@ class RefuelWatch:
             return RefuelCall(RELEASE, "Go.", f"{fuel_l:.0f} litres aboard.")
         return None
 
+    def _capture(self, target_l: float | None, burn_basis,
+                 burn_laps: int | None) -> None:
+        """The figure, and the words that qualify it, taken together.
+
+        Never separately. A count or a basis picked up from a later context
+        than the litres would have the sentence name the burn that did NOT
+        size the number (rules 12 and 13) - which is the whole reason the
+        three travel in one tuple from the controller in the first place.
+        """
+        self._target_l = target_l
+        self._burn_basis = burn_basis
+        self._burn_laps = burn_laps
+
+    def _unsized(self, fuel_l: float,
+                 fuel_per_lap_l: float | None) -> RefuelCall | None:
+        """The hose is in and nothing here can size the stop. Say so, once.
+
+        **Not a litre figure, and not silence.** GT7's own diamond marker is
+        accurate (CLAUDE.md §5.4) and it is the one number in the box that
+        does not come from this app, so it is what an engineer with no figure
+        of his own points at. "Plus a lap" is §5.4's margin, said in the
+        words the rest of the app uses for it.
+
+        Held until `UNSIZED_RISE_L` is aboard so it cannot fire on a jump
+        that was never a pit stop, and said once per stop: he is holding the
+        refuelling trigger, not listening to a conversation.
+
+        **And the refusal is logged with the reason that produced it** (rule
+        10). "No target" has two quite different causes - nothing reached the
+        watch at all, or a burn arrived with no lap count to spend it on -
+        and they are fixed in different places.
+        """
+        if self._said_unsized or self.started_l is None:
+            return None
+        if fuel_l - self.started_l < UNSIZED_RISE_L:
+            return None
+        # **A figure may still arrive after this, and if it does it wins.**
+        # Retiring the None-target latch made a target reachable mid-fill, so
+        # "I can't size this one" can be followed by "Fuel to 55 litres" a
+        # second later (measured: unsized at 10.0 L, target at 11.0 L).
+        #
+        # That is NOT fixed by holding this line back until a target can be
+        # ruled out. Tried and reverted: waiting a second rise delays the
+        # diamond instruction in the case that never resolves - the one where
+        # nothing reaches the watch at all - to spare a contradiction in the
+        # case that does. He is holding the trigger; late advice on a stop
+        # nothing can size costs more than a refinement he can obviously act
+        # on. The instruction here survives the figure anyway - filling to
+        # the diamond plus a lap is not wrong, it is only less precise - so
+        # the second call refines the first rather than reversing it.
+        #
+        # What this DOES require is that he knows the figure wins, which is
+        # a briefing line, not a code branch.
+        self._said_unsized = True
+        log("race").warning(
+            "refuel: %.1f L aboard and nothing sized this stop - %s. Saying "
+            "the diamond rather than a litre figure: a number this app "
+            "invented would be worse than none (rule 3).",
+            fuel_l,
+            f"a burn of {fuel_per_lap_l:.2f} L/lap arrived, but no lap count "
+            f"to spend it on" if fuel_per_lap_l else
+            "no figure reached the watch at all - the race is not running, "
+            "or no burn is installed yet")
+        return RefuelCall(UNSIZED, "Fill to the diamond, plus a lap.",
+                          "I can't size this one.")
+
     def left_early(self, fuel_l: float | None, *,
                    fuel_per_lap_l: float | None = None
                    ) -> RefuelCall | None:
@@ -250,19 +402,36 @@ class RefuelWatch:
         lift-and-coast he can start on the next straight, which is the whole
         reason to say it at pit exit rather than three laps later when the
         estimate finally crosses a threshold.
+
+        **Every exit is written down, whether it says anything or not** (rule
+        10). "He left and I said nothing" has four quite different causes
+        here and the log used to record none of them.
         """
         target = self._target_l
         if (not self._filling or self._said_short or self._said_release
                 or target is None or fuel_l is None):
+            log("race").info(
+                "refuel: out of the box with nothing to say - %s.",
+                "no fill was seen this stop" if not self._filling else
+                "the shortfall was already said" if self._said_short else
+                "he was released at the target" if self._said_release else
+                "nothing sized this stop" if target is None else
+                "no fuel reading at the exit")
             return None
         self._said_short = True
         short = target - fuel_l
         if short < SHORT_EPSILON_L:
+            log("race").info(
+                "refuel: out of the box on %.1f L against a %.1f L target - "
+                "%.2f L short, inside the %.1f L that is worth a word.",
+                fuel_l, target, short, SHORT_EPSILON_L)
             return None
         laps = (short / fuel_per_lap_l) if fuel_per_lap_l else None
         reason = (f"{short:.0f} litres light - about {laps:.1f} laps."
                   if laps is not None else f"{short:.0f} litres light.")
-        return RefuelCall(SHORT, "Save fuel from here.", reason)
+        call = RefuelCall(SHORT, "Save fuel from here.", reason)
+        log("race").info("refuel: %s [%s]", call.spoken(), call.kind)
+        return call
 
 
 class RefuelAdviser:

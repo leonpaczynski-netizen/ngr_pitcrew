@@ -185,6 +185,15 @@
      still there with its place, its stop and its fuel, and only the name
      reads as missing. */
   .txt.unnamed { color: var(--reg-absent); font-size: 3.4vh; letter-spacing: 0.06em; }
+  /* **A gap the reader has lost is withdrawn, not dimmed.** It is the one
+     figure on this page he acts on at racing speed, and one read before the
+     crossing - or left behind by a board reader that has gone quiet -
+     describes the car he has already passed. The cell draws "--" in the
+     absent ink, which an empty cell cannot say: a car that is not one of the
+     two either side of us has no interval box at all, and "no reading" and
+     "nothing to read" are opposite claims (rule 3). Same ink as the unnamed
+     driver, because it is the same statement about a different column. */
+  .num.unread { color: var(--reg-absent); }
 
   #foot { font-family: var(--label); font-weight: 700; font-size: 3vh; color: var(--dim); }
 
@@ -460,7 +469,10 @@
       // `=== false` and not `!r.named`: a page cached from before the field
       // existed would otherwise draw every driver as unnamed.
       row.appendChild(cell("", r.name, "txt" + (r.named === false ? " unnamed" : "")));
-      row.appendChild(cell("right", r.gap, "num"));
+      // `=== true` and not truthiness, for the same reason `named` is tested
+      // `=== false`: a page cached from before the field carried this would
+      // otherwise decide for itself what an absent flag meant.
+      row.appendChild(cell("right", r.gap, "num" + (r.gap_unread === true ? " unread" : "")));
       row.appendChild(cell("", r.lane ? el("span", "lane", "IN LANE") : r.stop, "num"));
       row.appendChild(cell("col-fuel", r.fuel, "num"));
       row.appendChild(cell(r.tone === "stops" ? "stops" : "", r.prediction, "txt", r.detail));

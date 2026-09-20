@@ -9,7 +9,8 @@ so a page cannot word a car two ways (rule 13).
 **Every figure says how much it is worth.** A board read that is a moment
 behind says its age. An exit fuel that is only a lower bound is drawn "≥50",
 never "50". A prediction inside the reading error ends in "?". A prediction
-made on OUR burn because his was never measured says so. None of those is a
+made on OUR burn because his was never measured says so. A gap the reader
+has lost draws "--" rather than the last figure it had. None of those is a
 decoration: each is the difference between a fact and an assumption, and the
 driver acts differently on the two (rules 3 and 5).
 
@@ -292,6 +293,7 @@ def compose(view: FieldView | None) -> dict:
     for car in rows:
         headline, detail, tone = prediction_words(car.prediction)
         name, named = driver_words(car)
+        gap_unread = bool(getattr(car, "gap_unread", False)) and car.gap_s is None
         drawn.append({
             "place": "" if car.place is None else f"P{car.place}",
             "name": name,
@@ -300,7 +302,17 @@ def compose(view: FieldView | None) -> dict:
             # row are all still his.
             "named": named,
             "us": car.us,
-            "gap": "" if car.gap_s is None else f"{car.gap_s:.1f}",
+            # **A dash, never a stale number** (rule 3, and `field.py`'s
+            # `gap_still_stands`). The gap is the one figure on this page he
+            # acts on at racing speed: a figure read before the crossing, or
+            # left behind by a board reader that has gone quiet, describes
+            # the car he has already passed. So past the bound it is not
+            # dimmed, it is withdrawn - and the cell says which of the two
+            # silences it is, because an empty cell is also what a car with
+            # no interval box draws and those are opposite claims.
+            "gap": ("--" if gap_unread
+                    else "" if car.gap_s is None else f"{car.gap_s:.1f}"),
+            "gap_unread": gap_unread,
             "lane": car.in_lane,
             "stop": "" if car.last_stop_lap is None else f"L{car.last_stop_lap}",
             "fuel": _fuel(car),

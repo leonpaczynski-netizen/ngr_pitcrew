@@ -340,7 +340,9 @@ class OwnFill:
     stop: Stop
     reads: int
     compound_reads: int
-    watched_s: float
+    # None where the two stamps disagree about which came first - rule 3 and
+    # rule 9: how long the fill was watched is then not known, and is not 0.
+    watched_s: float | None
     partial: bool
     # He is still in the box, as far as the wall can see. The figures are a
     # fill in progress, not a finished one.
@@ -655,6 +657,14 @@ class PitWall:
         # Rule 11: last race's fill is not this race's, and a stale one read
         # live is read as "he has just taken 40 litres".
         self._own_fills = []
+        # **And the field, for the same reason the entry call above is.**
+        # `_said_the_field` is a one-shot, so without this the first session
+        # of the run consumes it and every later race's health line carries
+        # the PREVIOUS race's field size - a 7-car Supercars grid printed
+        # against a 20-car GT3 one, which is the comparison the line exists
+        # to make.
+        self._said_the_field = False
+        self._field_size = None
         self.ahead.new_session()
         self.behind.new_session()
         self.samples = []
@@ -698,7 +708,15 @@ class PitWall:
                        reads=len(visit.readings),
                        compound_reads=(1 if visit.compound_changed
                                        else len(visit.compounds)),
-                       watched_s=max(0.0, visit.last_s - visit.started_s),
+                       # **Not `max(0.0, ...)` - rule 9.** Both stamps come
+                       # off one monotonic clock so this cannot go negative
+                       # today, and that is exactly why the clamp was free to
+                       # write and worthless: the day the clock does fault, a
+                       # clamp reports "watched for 0 s" - a well-formed
+                       # reading nothing downstream can tell from a real one -
+                       # where None says the duration is not known.
+                       watched_s=(None if visit.last_s < visit.started_s
+                                  else visit.last_s - visit.started_s),
                        partial=visit.partial, standing=standing,
                        exit_is_a_bound=exit_is_a_bound)
 
@@ -1176,10 +1194,12 @@ class PitWall:
             self._own_fills.append(fill)
             _log.info("pit-wall: own stop on lap %s not filed as a rival's - "
                       "kept as ours: in %s L, out %s L, %s L taken, %d reads "
-                      "over %.0f s%s%s", fill.lap, fill.fuel_in_l,
+                      "over %s s%s%s", fill.lap, fill.fuel_in_l,
                       fill.fuel_out_l,
                       "?" if fill.litres is None else "%.0f" % fill.litres,
-                      fill.reads, fill.watched_s,
+                      fill.reads,
+                      "?" if fill.watched_s is None
+                      else "%.0f" % fill.watched_s,
                       " (joined mid-fill)" if fill.partial else "",
                       " (exit is a lower bound)" if fill.exit_is_a_bound
                       else "")

@@ -383,7 +383,17 @@ def _kind_classes() -> dict[str, int]:
                     calls.STOP_BACK, calls.UNDERCUT, calls.FUEL_SHORT,
                     calls.FUEL_SAVE, calls.FUEL_REACHES, calls.REJOIN,
                     calls.STAY_OUT_FUEL, calls.REPLAN_OFFER,
-                    refuel.TARGET, refuel.RELEASE, refuel.SHORT)
+                    refuel.TARGET, refuel.RELEASE, refuel.SHORT,
+                    # **And the one that fires when nothing could size the
+                    # stop.** It is an instruction - "fill to the diamond,
+                    # plus a lap" - said with the car stationary and the hose
+                    # in, and it is the only thing he gets on that stop. Left
+                    # out of this tuple it classed as EVENT, which is the one
+                    # class that may be dropped for a higher one or queued
+                    # behind it, so the line whose whole purpose is to arrive
+                    # before he lets go of the trigger was the only refuel
+                    # line that could arrive late or not at all.
+                    refuel.UNSIZED)
     # Said mid-lap, off a frame or the pit wall's worker - never at the
     # crossing. Everything else not listed is EVENT.
     news = (calls.POSITION, calls.RIVAL_BOXED, calls.RIVAL_COMMITTED,

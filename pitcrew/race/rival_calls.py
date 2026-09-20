@@ -54,6 +54,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from pitcrew.diagnostics import log
 from pitcrew.race.calls import (
     CLOSING,
     as_his_hud_numbers_it,
@@ -99,9 +100,11 @@ from pitcrew.race.rivals import (
 # about our own car, because a car of ours about to run dry outranks news of
 # what somebody else just did.
 __all__ = ["CLOSING", "REJOIN", "RIVAL_BOXED", "RIVAL_COMMITTED",
-           "RIVAL_SHORT", "STAY_OUT_FUEL", "Rival", "candidates",
-           "closing_call", "fuel_shortfall", "must_stop_by", "rejoin_call",
-           "rival_boxed", "short_to_the_flag", "stay_out"]
+           "RIVAL_SHORT", "STAY_OUT_FUEL", "Rival", "box_advice_void",
+           "candidates", "closing_call", "fuel_shortfall", "must_stop_by",
+           "rejoin_call", "rival_boxed", "short_to_the_flag", "stay_out"]
+
+_log = log(__name__)
 
 # A rival's stop has to be worth this many seconds more than ours before it is
 # worth saying. Below it he is being told about a difference he cannot drive to.
@@ -426,10 +429,123 @@ def _whose(rival: Rival) -> str:
     return "" if rival.burn_per_lap_l else ", on our burn"
 
 
+# --------------------------------------------- once the decision is made
+
+def box_advice_void(state) -> str | None:
+    """Why advice about WHETHER to box is inadmissible right now, or None.
+
+    **The fault, measured.** Bathurst, session 204, race run 29, 20 Sep 2026,
+    lap 11. The car was taken into the box by GT7 at t=122.68 s of that lap -
+    86.4 to 0.1 km/h between two adjacent frames with the car moved 0.0 m,
+    which is `pit_detect.entered_the_pits` exactly - and `PIT_ENTRY` was
+    raised there. The start/finish line at Mount Panorama is inside the lane,
+    so the lap closed 20.8 s later, at t=143.47 s, in the same frame GT7
+    relocated the car 206 m and set it rolling at 50.5 km/h down the pit lane
+    (`pit_detect.placed_in_pit_lane`). On that crossing `candidates` offered
+    `stay_out`, which has no notion of a lane, and at 20:40:10 he was told
+    *"Don't box yet. Too much fuel aboard to fill. Lap 17 at the earliest."*
+    while rolling to a stop in his own pit box. Six seconds later the same
+    voice sized the stop he was in - *"Fuel to 52 litres."* - and 21 s after
+    that released him. Two contradictory instructions from one engineer, at
+    the one moment he is wearing a helmet and cannot ask which.
+
+    **And the ranking was the only thing holding it back.** Replayed over
+    that race's own laps, `stay_out` produced that identical sentence at
+    every crossing from lap 7 to lap 12 - while the box ladder was saying
+    "Box this lap. No tyres." on laps 7, 8, 9 and 10. `URGENCY` puts
+    `BOX_NOW` above `STAY_OUT_FUEL`, so on those four laps the box call won
+    the crossing and the contradiction was never voiced. On lap 11 the box
+    call was correctly refused for being in the lane, the stay-out was the
+    only candidate left, and it was said. A call that contradicts the plan on
+    six consecutive laps and is kept quiet by a sort order is a defect
+    waiting for its competitor to fall silent.
+
+    **The rule.** Once the car is committed to the lane, *whether* to box is
+    not a live question and no call may answer it. Only advice about THIS
+    stop - the fill, the tyres, the release - is admissible. Every box call
+    in `calls.py` already knew this and refuses on `state.in_pit`
+    (`_box_now`, `_box_soon`, `_stops_off`, `_stop_back`, the wear cliff and
+    the coordinator's stay-out fold); so does `undercut_call` here. The two
+    calls in this module that argue the other way did not, and this is the
+    one expression all of them can be read against (rule 12).
+
+    **The signal.** `state.in_pit` is the strongest thing reachable from a
+    `RaceState`: it is set from `EventKind.PIT_ENTRY`, which `session_state`
+    raises off the frame-exact speed step above, or off fuel actually rising,
+    or off a tyre swap - whichever comes first - and cleared at `PIT_EXIT`.
+    Two weaker signals are read beside it so a missed entry is not a silent
+    hole. `crossed_in_box` is set when the line is crossed with `in_pit`
+    true, which is this defect's own geometry. And `box_declared_lap` is the
+    driver's own hand on the tablet saying "I'm pitting this lap"; it is his
+    report, which CLAUDE.md §4.1 makes primary evidence, so arguing against
+    it is the same fault one lap earlier.
+
+    **Every one of the three retires itself, which rule 10 asks of any rule
+    that refuses.** `in_pit` and `crossed_in_box` are both cleared at
+    `PIT_EXIT`, and `box_declared_lap` can only equal `lap + 1` for the one
+    lap in progress - the lap counter walks out from under it. Nothing here
+    can latch the way the tyre gauge did, and there is no state to reset
+    between sessions (rule 11), because all three live on the `RaceState`
+    the race builds.
+
+    **Named for what it decides, not for "committed".** `RIVAL_COMMITTED` in
+    this module already means *a rival is committed to another stop*, and one
+    word with two meanings in one voice is rule 13.
+
+    Returns the reason, so the refusal and its log line come out of the same
+    expression that made the refusal.
+    """
+    if getattr(state, "in_pit", False):
+        return "he is in the pit lane"
+    if getattr(state, "crossed_in_box", False):
+        # Strictly a subset of `in_pit` as the coordinator sets it today, and
+        # kept as a belt: it is the only flag that survives a `PIT_ENTRY` the
+        # detector never saw but a crossing in the lane recorded.
+        return "the line was crossed inside the lane"
+    declared = getattr(state, "box_declared_lap", None)
+    lap = getattr(state, "lap", None)
+    # Both have to be numbers: this runs inside a Qt slot during a race, and
+    # a `TypeError` here would take the whole crossing's calls with it.
+    if declared is not None and lap is not None and declared == lap + 1:
+        return "he declared this lap as his in-lap"
+    return None
+
+
+def _offer_box_advice(state, kind: str, call: Call | None) -> Call | None:
+    """`call`, unless the box decision is already made - and say so either way.
+
+    **CLAUDE.md rule 10: log the accepts, not only the refusals.** A call
+    suppressed in silence is the next invisible defect, and the ratchet that
+    cost a whole race was invisible precisely because the number setting the
+    bar never reached the log. So the line carries the words that would have
+    been spoken, the gate's reason, and the three readings it was taken from,
+    whichever way it went.
+    """
+    if call is None:
+        return None
+    why = box_advice_void(state)
+    readings = (f"in_pit={getattr(state, 'in_pit', None)} "
+                f"crossed_in_box={getattr(state, 'crossed_in_box', None)} "
+                f"box_declared_lap={getattr(state, 'box_declared_lap', None)} "
+                f"lap={getattr(state, 'lap', None)}")
+    if why is None:
+        _log.info("rival-calls: %s offered on lap %s - the box decision is "
+                  "still open (%s): %r %r",
+                  kind, getattr(state, "lap", None), readings,
+                  call.call, call.reason)
+        return call
+    _log.info("rival-calls: %s SUPPRESSED on lap %s - %s, so advice about "
+              "whether to box is void (%s). Would have said: %r %r",
+              kind, getattr(state, "lap", None), why, readings,
+              call.call, call.reason)
+    return None
+
+
 def stay_out(*, lap: int, laps_left: int | None,
              burn_per_lap_l: float | None, refuel_rate_lps: float | None,
              capacity_l: float | None, laps_total: int | None,
-             planned_stop_lap: int | None) -> Call | None:
+             planned_stop_lap: int | None,
+             further_stop_planned: bool | None = None) -> Call | None:
     """Every lap deferred takes a lap's fuel out of our own stop.
 
     **The call the first design had inverted.** It is about our own tank and
@@ -439,8 +555,34 @@ def stay_out(*, lap: int, laps_left: int | None,
     It refuses to fire before the tank can still reach the flag: a stop called
     earlier than that does not waste seconds, it forces a second stop worth
     most of a minute. Rule 12 - where that is what binds, that is what is said.
+
+    **Whether we are already in the lane is NOT asked here** - `box_advice_void`
+    asks it, once, for every call in this module that argues about whether to
+    box, and `candidates` refuses on it out loud. This function stays pure over
+    its own arithmetic.
     """
+    # **The plan's box lap first, because the box ladder owns that decision**
+    # (Bathurst, session 204, 20 Sep 2026). `planned_stop_lap` is the plan's
+    # IN-LAP and `lap` counts laps completed, so the in-lap is in progress at
+    # `planned_stop_lap - 1` - where the box call says "Box this lap."
+    # (14 Sep 2026). This check sat BELOW the floor branch, so on a lap the
+    # ladder was calling him in the floor branch spoke first and argued the
+    # other way. Both are this app's voice and the driver cannot ask which.
+    # Rule 13.
+    if planned_stop_lap is not None and lap >= planned_stop_lap - 1:
+        return None
     floor = earliest_stop_lap(laps_total, lap, burn_per_lap_l, capacity_l)
+    # **`earliest_stop_lap` prices the LAST fill and nothing else** - it is
+    # "the first lap on which a stop can still reach the flag". With a further
+    # stop planned after the next one, the next one was never going to reach
+    # the flag and was never meant to, so the floor argues against a stop it
+    # does not describe: at Bathurst, lap 11 of a three-stop plan, it named
+    # "lap 17 at the earliest" about stop one of three. `undercut_call` guards
+    # the same way and says why ("only the last stop fills to the flag").
+    # `None` is "nobody said" - a state built by hand - and is taken at its
+    # word, as everywhere else in this module.
+    if further_stop_planned is True:
+        floor = None
     if floor is not None and lap < floor:
         # **Not "the tank cannot reach the flag".** Under a helmet those are
         # the words of an emergency, and this call means the opposite: there is
@@ -455,13 +597,6 @@ def stay_out(*, lap: int, laps_left: int | None,
                     "Don't box yet.",
                     f"Too much fuel aboard to fill. Lap {floor} at the "
                     f"earliest.", HIGH)
-    # `planned_stop_lap` is the plan's IN-LAP and `lap` counts laps completed,
-    # so the in-lap is in progress at `planned_stop_lap - 1` - where the box
-    # call says "Box this lap." (14 Sep 2026). This compared `lap >=
-    # planned_stop_lap`, the old ladder's zero, and on the in-lap argued
-    # "Every lap you stay out is a shorter stop" against "Box this lap."
-    if planned_stop_lap is not None and lap >= planned_stop_lap - 1:
-        return None
     # **Above the clamp there is no seconds argument, so there is no call.**
     # The fill is the same length whatever lap it happens on, and saying "every
     # lap you stay out is a shorter stop" was not a small overstatement - it
@@ -1264,13 +1399,17 @@ def candidates(state) -> list:
     out.append(undercut_call(state))
 
     if _a_stop_is_in_question(state):
-        out.append(stay_out(
+        # **Both of the next two argue about WHETHER to box**, so both go
+        # through the one gate that knows the question is already answered -
+        # see `box_advice_void` for the Bathurst lap it was written from.
+        out.append(_offer_box_advice(state, STAY_OUT_FUEL, stay_out(
             lap=lap, laps_left=laps_left,
             burn_per_lap_l=state.fuel_per_lap_l,
             refuel_rate_lps=state.refuel_rate_lps,
             capacity_l=state.fuel_capacity_l,
             laps_total=state.laps_total,
-            planned_stop_lap=state.stint_ends_on_lap))
+            planned_stop_lap=state.stint_ends_on_lap,
+            further_stop_planned=state.further_stop_planned)))
 
     behind = _snapshot(getattr(state, "gap_behind", None))
     if behind is not None:
@@ -1281,7 +1420,10 @@ def candidates(state) -> list:
         # silent on the lap it exists for. Its own module calls it "the call,
         # and it dominates everything else here".
         if _a_stop_is_in_question(state):
-            out.append(rejoin_call(
+            # **"If you box now" is a question about whether to box**, and in
+            # the lane it is already answered - the stop is happening. Same
+            # gate, same reason, said out loud either way.
+            out.append(_offer_box_advice(state, REJOIN, rejoin_call(
                 lap=lap, gap_behind_s=behind.latest(),
                 litres_to_take=_fill_at_the_stop(state),
                 refuel_rate_lps=state.refuel_rate_lps,
@@ -1293,7 +1435,7 @@ def candidates(state) -> list:
                 # was `laps_to_stop() <= 1` written for the old ladder, where
                 # 1 was "Box next lap."; the number is the same and the
                 # meaning is now taken from the ladder's own expression.
-                due=state.laps_overdue() is not None))
+                due=state.laps_overdue() is not None)))
     # **`closing_call` is no longer offered at the crossing** (14 Sep 2026).
     # Pace against the car ahead or behind is volunteered mid-lap now, as
     # `calls.PACE` from `race/news.py`, on the same five-lap rule and figure

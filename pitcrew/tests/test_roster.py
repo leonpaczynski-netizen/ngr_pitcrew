@@ -283,6 +283,60 @@ def test_a_rung_inside_the_plate_is_ours_however_far_from_its_midpoint():
         "and it is read as dark ink on a white plate, not bright on a dark one")
 
 
+def test_the_column_vote_asks_the_same_question_as_everything_else():
+    """**`name_column` kept its own version of "is this row ours", and the
+    better the box got the more often it answered wrong.** Rule 13.
+
+    `read()` computed `(board[1] + board[3]) // 2` and handed it down, and
+    `name_column` tested `abs(y - own_y) <= ROW_MATCH_TOL` - the exact
+    relation `is_own_row` replaced, two lines above the loop that already
+    called `is_own_row`. The answer chooses between DARK glyphs on his white
+    plate and BRIGHT glyphs on everyone else's dark one, so getting it wrong
+    inverts the ink test for that row.
+
+    And it gets it wrong precisely when the box is right: with the plate
+    clipped the midpoint sat near the rung and the midpoint test said yes;
+    with the box repaired to the plate's true extent the midpoint is the
+    plate's centre while the ladder's rungs are its EDGES, so it says no.
+    The bright test then lights the WHOLE white plate as one ink group and
+    the row votes for the plate's left edge, x=40, instead of where his name
+    starts, x=90 - and `name_x` is a consensus across all rows, so one row
+    voting on a plate edge re-keys every name bitmap on the frame at once.
+
+    Asserted on the question rather than on the vote it produces, because
+    the vote is a majority: on a full board the six correct rows outvote the
+    one wrong one, so the board's `name_x` is the same either way and the
+    defect hides behind the majority it corrupts. What is on trial is which
+    relation the row is classified by, and there is now one of those.
+    """
+    import pitcrew.telemetry.roster as roster_module
+
+    frame, box, ladder = a_board_frame()
+    flag_x0, flag_x1, _ = ladder
+    right = max(0, flag_x0 - (flag_x1 - flag_x0 + 1))
+    rungs = sorted(OTHER_RUNGS + [OWN_RUNG])
+
+    asked: list[bool] = []
+    real_ink = roster_module._ink
+
+    def watched(strip, is_own):
+        asked.append(bool(is_own))
+        return real_ink(strip, is_own)
+
+    roster_module._ink = watched
+    try:
+        roster_module.name_column(frame, box, rungs, right)
+    finally:
+        roster_module._ink = real_ink
+
+    assert asked == [roster_module.is_own_row(box, y) for y in rungs], (
+        "the column vote classifies rows by its own midpoint test, not by "
+        "the one relation `read`, `is_own_row` and `PitWall._own_driver` "
+        "share")
+    assert asked == [False] * 4 + [True] + [False] * 2, (
+        "and on this board that is his row and only his")
+
+
 def test_only_one_row_of_a_frame_is_ever_ours():
     """Two rows marked ours at once is what a box grown past its own row
     would cause. Measured over 474 frames of two races: 0."""
@@ -290,3 +344,38 @@ def test_only_one_row_of_a_frame_is_ever_ours():
 
     frame, box, ladder = a_board_frame()
     assert sum(row.is_own for row in read(frame, box, ladder)) == 1
+
+
+def test_one_plate_is_one_row_although_the_ladder_put_two_rungs_in_it():
+    """**A plate holds one row, so at most one rung of it is ours.**
+
+    `is_own_row` is a containment test, and the whole premise of the box
+    repair is that one white plate yields TWO rungs - its top and bottom
+    edge. `board.flag_ladder` folds that pair before it ever leaves, but it
+    refuses to fold a crowd of three (rule 3), so a plate with more than one
+    rung still in it is reachable: measured 21 Sep 2026, one frame of 292 at
+    Bathurst.
+
+    Marking both is a reading the frame itself disproves - one car cannot
+    hold two rows, which is the fact `Roster._together` is built on. And it
+    is not harmless: `PitWall._see` takes `next(row for row in rows if
+    row.is_own)` for `own_row_place`, which is insertion order, i.e.
+    whichever half of the plate is higher up the screen - and
+    `own_row_place` is what the car ahead and the car behind are read off.
+
+    The rung nearest the plate's centre is the row, which is how
+    `PitWall._own_driver` already settles the same tie (rule 13).
+    """
+    from pitcrew.telemetry.roster import read
+
+    frame, box, ladder = a_board_frame()
+    flag_x0, flag_x1, ys = ladder
+    # The plate's other edge, the rung the fold upstream did not remove.
+    crowded = (flag_x0, flag_x1, sorted(ys + [OWN_BOTTOM - 1]))
+    rows = read(frame, box, crowded)
+
+    ours = [row.y for row in rows if row.is_own]
+    assert len(ours) == 1, f"one plate, one row - got rungs {ours}"
+    assert ours == [OWN_RUNG], (
+        "and it is the rung nearest the plate's centre, not the first one "
+        "the board reader happened to hand over")

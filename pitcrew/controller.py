@@ -4256,6 +4256,14 @@ class PitCrewController(QObject):
                 from pitcrew.race.pit_wall import POSITION_FRESH_S
                 self.race.note_rival_positions(
                     wall.positions(max_age_s=POSITION_FRESH_S))
+                # **The field the packet counted, so the wall's health line
+                # can size the roster against it** (rule 10). `note_field_size`
+                # was written with a docstring and a health field and called
+                # from nowhere, so the line read "for a field of unknown"
+                # every race - while the roster founded 1,683 clusters for a
+                # grid of seven and nothing put those two numbers side by side.
+                wall.note_field_size(
+                    getattr(self.race.state, "field_size", None))
                 # **Every gap reading since the last crossing, filed and
                 # binned.** Persisted so the race can be replayed with its
                 # gaps (assessment S8: the 6 Sep race cannot be); handed to
@@ -9540,12 +9548,36 @@ class PitCrewController(QObject):
                 race.state.fuel_burn_basis, race.state.fuel_burn_laps)
 
     def _voice_refuel(self, call) -> None:
-        """Say it, show it, and file it with the rest of the race's calls."""
+        """Say it, show it, and file it with the rest of the race's calls.
+
+        **And write down whether it was HEARD** (rule 10, second half).
+        Bathurst, 20 Sep 2026: the adviser made four calls in the box - two
+        fill targets, a release and a shortfall - filed all four in
+        `race_revisions` and spoke all four, and left nothing whatever in
+        `pitcrew.log`. `voice.say` logs a line only when the caller hands it
+        an `on_done` (`voice._finish`), and this one did not, so the race
+        record could not tell a working adviser from one that had never been
+        armed. A night went into asking which it was.
+
+        The callback only writes a line. It runs on the voice thread and
+        must not touch this object's state there - `_say_volunteered` routes
+        its answer back through a Qt signal because the race retires a fact
+        on it; nothing here retires anything, so a log line is the whole job.
+        """
         spoken = call.spoken()
         if self._engineer_speaks:
             # The fill, the release and "short": instructions, said with the
             # car stationary - never held behind a queued line.
-            self.voice.say(spoken, kind=call.kind)
+            def booked(played: bool, text=spoken, kind=call.kind) -> None:
+                log("race").info("refuel: %s %r [%s]",
+                                 "heard" if played else "NOT heard",
+                                 text, kind)
+
+            self.voice.say(spoken, kind=call.kind, on_done=booked)
+        else:
+            log("race").info("refuel: %r [%s] - the engineer is silent this "
+                             "race, so the screen is the delivery",
+                             spoken, call.kind)
         self.ptt.last_call = spoken
         self.last_call = spoken
         if self.race_screen is not None:

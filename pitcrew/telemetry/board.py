@@ -256,6 +256,33 @@ COL_MERGE = 6
 # against 5% of s188's, because a seven-car field draws a short board. The
 # median is what survives both.
 CLIPPED_PLATE = 0.6
+# **Two rungs closer together than this fraction of the ladder's own median
+# gap are one row, not two cars** - and the row is between them.
+#
+# GT7 draws the board at a constant pitch, so a step meaningfully under that
+# pitch is not a row boundary. What it is, measured, is the driver's own
+# white plate: it registers as flag ink over its whole height and comes back
+# as its top and bottom edges rather than as one row at its centre.
+#
+# Measured 21 Sep 2026 over the same frames as `CLIPPED_PLATE`, normalising
+# every consecutive step by its own frame's median gap:
+#
+#   Sardegna (s188), the 163 frames that return exactly the field's 8 rungs
+#       1,141 steps, smallest 0.85, three under 0.90
+#   Bathurst (s204), the 152 frames that return exactly the field's 7
+#         912 steps, 39 under 0.85 - and the low tail piles up on 0.775,
+#                                    which is a 31 px plate on a 40 px pitch
+#
+# So the two populations are separated, and 0.82 sits between them: above
+# the plate's own 0.775 and below the smallest step any correctly-read board
+# has ever drawn. A pair is folded to its midpoint, which is where the row
+# actually is; a run of THREE or more close rungs is left alone and said out
+# loud, because that is not a plate and a guess at which two of them to fold
+# is rule 3 again.
+SPLIT_RUNG = 0.82
+# Cumulative since the process started, a log throttle only - as with
+# `PLATE_GUARD_COUNTS` above, and for the same reason.
+RUNG_MERGE_COUNTS = {"folded": 0, "whole": 0, "refused": 0}
 # How far either side of the winning rung the REPAIRED search looks, in median
 # rung gaps. Wide enough to contain a whole plate that the strip cut in half,
 # narrow enough not to reach the neighbouring row.
@@ -526,6 +553,115 @@ def _flag_extent(ink, x0: int, probe: int, ys, height: int):
     return low + left, low + right
 
 
+def _one_rung_per_row(ys):
+    """One rung per row: `(rungs, folded, refused)`.
+
+    **The ladder was returning rungs that are not cars, and 54% of the
+    roster's foundings arrived on the frames where it did.** Measured 20 Sep
+    2026 over 292 frames of Bathurst against a seven-car field
+    (`scratchpad/findings/G-bench.md` §4):
+
+        rows offered   frames   readable rows   foundings   per row
+        under 7            68             319          10     0.031
+        exactly 7         149             875          51     0.058
+        MORE than 7        73             412          73     0.177  - 3x
+
+    A row founds a cluster three times as often on a frame carrying more
+    rungs than there are cars, because the surplus rungs are not cars: each
+    one is handed to `name_bitmap`, comes back as a bitmap that resembles
+    nothing on file, and starts an identity of its own. Sardegna, where only
+    4% of frames exceed the field, has no such population.
+
+    This folds the commonest of the two surplus families - the driver's own
+    plate arriving as its top and bottom edge instead of as one row. See
+    `SPLIT_RUNG` for the two measured distributions that set the threshold.
+
+    **The other family is not treated here, and the reason is a
+    measurement.** G-bench attributes the rest to a rung group detached from
+    the ladder's body by more than 1.6x the pitch. Normalising every step of
+    every frame by its own median gap, a step above 1.6x is not rare on a
+    correctly-read board: it is 294 of 1,214 steps on Bathurst's frames at
+    or under the field, and 315 of 1,190 on Sardegna's clean ones, sitting
+    at 1.70 almost exactly. That is the gap readout GT7 draws above and
+    below the driver's own row - the wide step `_ladder` exists to allow -
+    and a rule that rejected it would cut nearly every board in half at the
+    driver's own row. Detachment is real but it is not separable by step
+    size, so nothing is refused on that basis.
+    """
+    if len(ys) < 3:
+        return list(ys), 0, 0
+    steps = [ys[index + 1] - ys[index] for index in range(len(ys) - 1)]
+    floor = SPLIT_RUNG * sorted(steps)[len(steps) // 2]
+    close = [step < floor for step in steps]
+    out: list[int] = []
+    folded = refused = 0
+    index = 0
+    while index < len(ys):
+        run = 0
+        while index + run < len(close) and close[index + run]:
+            run += 1
+        if run == 1:
+            out.append((ys[index] + ys[index + 1]) // 2)
+            folded += 1
+            index += 2
+        elif run > 1:
+            # Three or more rungs inside a row is not a plate, and folding
+            # some pair of them would be a guess. Rule 3: left as found.
+            refused += 1
+            out.extend(ys[index:index + run + 1])
+            index += run + 1
+        else:
+            out.append(ys[index])
+            index += 1
+    return out, folded, refused
+
+
+def _say_rung_merge(before, after, folded: int, refused: int) -> None:
+    """One line per ladder, whichever way it went - rule 10's accepts.
+
+    The plate guard one level down was invisible for a whole race because
+    only its refusals could have been logged and nothing logged them. This
+    counts the ladders it left alone as well as the ones it folded, and
+    every line carries the running totals, so the bar is always in the
+    record even after the detail stops printing.
+    """
+    outcome = "folded" if folded else ("refused" if refused else "whole")
+    RUNG_MERGE_COUNTS[outcome] = RUNG_MERGE_COUNTS.get(outcome, 0) + 1
+    seen = RUNG_MERGE_COUNTS[outcome]
+    if seen > PLATE_GUARD_LOG_MAX:
+        decided = sum(RUNG_MERGE_COUNTS.values())
+        if decided % PLATE_GUARD_TALLY_EVERY == 0:
+            _log.info("board: one rung per row over %d ladders - %d folded, "
+                      "%d already whole, %d refused as too crowded to fold",
+                      decided, RUNG_MERGE_COUNTS["folded"],
+                      RUNG_MERGE_COUNTS["whole"], RUNG_MERGE_COUNTS["refused"])
+        return
+    last = "" if seen < PLATE_GUARD_LOG_MAX else " (last of these)"
+    steps = sorted(before[i + 1] - before[i] for i in range(len(before) - 1))
+    median_gap = steps[len(steps) // 2] if steps else 0
+    if outcome == "whole":
+        _log.info("board: ladder of %d rungs, closest pair %d px against a "
+                  "%d px median row (floor %.1f) - one rung a row already "
+                  "(%d of these so far)%s",
+                  len(before), steps[0] if steps else 0, median_gap,
+                  SPLIT_RUNG * median_gap, seen, last)
+        return
+    if outcome == "refused":
+        _log.info("board: ladder of %d rungs carries three or more inside "
+                  "one %d px row (floor %.1f) - that is not a split plate "
+                  "and which pair to fold would be a guess, so the ladder "
+                  "stands as found (%d of these so far)%s",
+                  len(before), median_gap, SPLIT_RUNG * median_gap, seen,
+                  last)
+        return
+    _log.info("board: ladder of %d rungs folded to %d - %d pair%s under the "
+              "floor of %.1f px on a %d px median row, each one plate read "
+              "as its two edges; rungs %s -> %s (%d of these so far)%s",
+              len(before), len(after), folded, "" if folded == 1 else "s",
+              SPLIT_RUNG * median_gap, median_gap, list(before), list(after),
+              seen, last)
+
+
 def flag_ladder(frame):
     """`(x0, x1, [row centres])` for the country flag column, or None.
 
@@ -586,8 +722,13 @@ def flag_ladder(frame):
     if best is None:
         return None
     x0, probe, rungs, flag_h = best
-    left, right = _flag_extent(ink, x0, probe, rungs, flag_h)
-    return int(left), int(right), rungs
+    # One rung per row, AFTER the column is chosen: the score above is a rung
+    # count, and folding before it would change which column wins rather than
+    # only what the winner reports.
+    folded_rungs, folded, refused = _one_rung_per_row(rungs)
+    _say_rung_merge(rungs, folded_rungs, folded, refused)
+    left, right = _flag_extent(ink, x0, probe, folded_rungs, flag_h)
+    return int(left), int(right), folded_rungs
 
 
 def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
@@ -672,12 +813,37 @@ def _plate_box(bright, lo: int, rung: int, reach: int, *, containing: bool):
     a strip centred off the plate's centre clips it, and the longest run in
     that strip is the clipped remnant, while the run containing the rung is
     the plate itself once the strip is wide enough to hold it.
+
+    ### 21 Sep 2026 - the rows are settled first, and the columns are then
+    ### measured over THOSE rows rather than over the whole strip
+
+    A column was called lit when it was bright down the entire +-reach strip,
+    and `PLATE_REACH` widened that strip to three-quarters of a row either
+    side precisely so it could hold a plate the old one cut in half. So on
+    the frames the repair exists for, the strip spans the neighbouring rows -
+    which are dark - and a column carrying the plate can only score about
+    half. Everything fell under the 0.4 floor, `cols` became the longest
+    surviving run, and that is the blank margin beside the name rather than
+    the plate.
+
+    Measured on the branch's own `SPLIT_RUNGS` fixture, against a plate that
+    really spans x 40-243: the box came back `(40, 366, 89, 397)` - right in
+    height, **49 px of a 203 px plate** in width. `gap_lines` searches
+    `x0 -> x1 + 0.25(x1 - x0)` off that width, so a quartered box puts the
+    two interval readouts outside the band: on a real Daytona frame the same
+    box returns `(None, None)` where the whole one returns both. The repair
+    was working against the gaps it was made to recover.
+
+    The plate's own rows are the only rows a column should be judged on, and
+    they are known by the time the columns are wanted - so they are taken
+    first. On 290 real s204 frames the box was already narrower than 150 px
+    on 8, so this is a tail on the bench and the whole width on the fixture;
+    both are the same defect.
     """
     top, bottom = max(0, rung - reach), rung + reach
     strip = bright[top - lo:bottom - lo]
     lit_rows = np.where(strip.mean(axis=1) > 0.4)[0]
-    lit_cols = np.where(strip.mean(axis=0) > 0.4)[0]
-    if len(lit_rows) < 3 or len(lit_cols) < 10:
+    if len(lit_rows) < 3:
         return None
     runs = _runs(lit_rows, ROW_MERGE)
     if containing:
@@ -687,8 +853,15 @@ def _plate_box(bright, lo: int, rung: int, reach: int, *, containing: bool):
             return None
     else:
         rows = max(runs, key=len)
+    if len(rows) < 3:
+        return None
+    # The plate's own rows, not the whole strip - see above.
+    plate = strip[rows[0]:rows[-1] + 1]
+    lit_cols = np.where(plate.mean(axis=0) > 0.4)[0]
+    if len(lit_cols) < 10:
+        return None
     cols = max(_runs(lit_cols, COL_MERGE), key=len)
-    if len(rows) < 3 or len(cols) < 10:
+    if len(cols) < 10:
         return None
     return (int(cols[0]), int(top + rows[0]),
             int(cols[-1]), int(top + rows[-1]))

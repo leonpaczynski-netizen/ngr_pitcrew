@@ -121,7 +121,12 @@ def replay_stop(race, watch: RefuelWatch, frames: list[dict], lap_num: int,
         call = watch.note(frame.get("fuel_l"), speed_kph=frame.get("speed_kph"),
                           target_l=target, fuel_per_lap_l=race.state.fuel_per_lap_l,
                           to_flag_l=fuel_to_flag_l(race.state), basis=basis,
-                          burn_basis=race.state.fuel_burn_basis)
+                          burn_basis=race.state.fuel_burn_basis,
+                          # **The sixth element the live path carries** (rule
+                          # 4). Without it the replay showed a burn with no
+                          # sample count behind it and the transcript read as
+                          # though the count had never been added.
+                          burn_laps=race.state.fuel_burn_laps)
         if call is not None:
             out(f"lap {lap_num:>2}  {frame.get('fuel_l', 0):5.1f}L  "
                 f"{'box':>12} | {call.call} {call.reason}".strip())

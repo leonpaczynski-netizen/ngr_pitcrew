@@ -200,6 +200,61 @@ def is_own_row(board, y: int) -> bool:
     return board[1] <= y <= board[3]
 
 
+# Frames on which the ladder put one rung inside the plate, and more than
+# one. A log throttle and a running tally, never read as a measurement.
+OWN_RUNG_COUNTS = {"one": 0, "crowded": 0, "none": 0}
+OWN_RUNG_LOG_MAX = 20
+
+
+def own_rung(board, ys) -> int | None:
+    """Which single rung of this ladder is the driver's own row, or `None`.
+
+    **`is_own_row` says whether a rung is inside the plate; this says which
+    rung IS the row, because a plate holds one.** One car cannot hold two
+    rows at once - the fact `Roster._together` is built on - so a plate with
+    two rungs in it is a ladder fault, not two cars, and marking both is a
+    reading the frame itself disproves.
+
+    It can happen, rarely. `board.flag_ladder` folds a pair of rungs closer
+    together than a row (see `board.SPLIT_RUNG`) and refuses to fold a run
+    of three, so a crowded plate survives: measured 21 Sep 2026, one frame
+    of 292 at Bathurst and none of 182 at Sardegna.
+
+    Where it does, the rung nearest the plate's centre is the row. **That is
+    a tie-break among rungs already inside the plate, not a second
+    membership test** - `is_own_row` remains the one relation, here, in
+    `read` and in `PitWall._own_driver`, which settles the same tie the same
+    way (rule 13). What it replaces is worse than a tie-break: `read` marked
+    every rung inside the plate, and `PitWall._see` takes
+    `next(row for row in rows if row.is_own)` - insertion order, which is
+    top-of-screen, not a statement about which row is his. `own_row_place`
+    is what `_neighbour` reads the car ahead and behind off, so the wrong
+    half of a plate puts the gap on the wrong car.
+    """
+    inside = [y for y in ys if is_own_row(board, y)]
+    if not inside:
+        OWN_RUNG_COUNTS["none"] += 1
+        return None
+    middle = (board[1] + board[3]) / 2.0
+    best = min(inside, key=lambda y: abs(y - middle))
+    if len(inside) == 1:
+        OWN_RUNG_COUNTS["one"] += 1
+        return best
+    OWN_RUNG_COUNTS["crowded"] += 1
+    # Rule 10: the refusal is said, with the numbers that decided it AND the
+    # count of the frames it did not fire on, so the bar is in the line.
+    if OWN_RUNG_COUNTS["crowded"] <= OWN_RUNG_LOG_MAX:
+        _log.info("roster: %d rungs %s fall inside the one plate y %d-%d - "
+                  "a plate is one row, so the rung nearest its centre "
+                  "(%.1f) is ours and the rest are the board's own edges: "
+                  "y=%d. %d crowded plate%s against %d with a single rung",
+                  len(inside), inside, board[1], board[3], middle, best,
+                  OWN_RUNG_COUNTS["crowded"],
+                  "" if OWN_RUNG_COUNTS["crowded"] == 1 else "s",
+                  OWN_RUNG_COUNTS["one"])
+    return best
+
+
 def _half(board) -> int:
     return max(6, (board[3] - board[1]) // 3)
 
@@ -228,23 +283,62 @@ def _merged(on) -> list[tuple[int, int]]:
     return out
 
 
-def name_column(frame, board, ys: list[int], own_y: int,
-                right: int | None = None) -> int | None:
+# "Work it out yourself" - distinct from `None`, which is `own_rung`'s own
+# answer when no rung of the ladder falls inside the plate.
+_DERIVE = object()
+
+
+def name_column(frame, board, ys: list[int], right: int | None = None, *,
+                mine=_DERIVE) -> int | None:
     """Where names start, by majority vote of the rows.
 
     Every row agrees, so a row that disagrees is wrong - and one always might
     be, because the own row's white plate picks up artifacts a dark plate does
     not.
+
+    **Which row is ours is `is_own_row`'s question, here as everywhere**
+    (rule 13). This asked its own version of it - `abs(y - own_y) <=
+    ROW_MATCH_TOL` against the box's midpoint - which is exactly the relation
+    `is_own_row` replaced, two lines above the loop that already called it.
+    The answer decides whether `_ink` looks for DARK glyphs on his white
+    plate or BRIGHT ones on everyone else's dark plate, so getting it wrong
+    inverts the ink test for that row and the row votes on noise.
+
+    And the midpoint answers worse the better the box is: with the plate
+    clipped the midpoint sat near the rung and the test said yes; with the
+    box repaired to the plate's true extent the midpoint is its centre, 381,
+    while the ladder's rungs are its EDGES at 365 and 396 - so it says no,
+    the bright-ink test is applied to a white plate, the whole plate lights
+    as one ink group, and the vote can land on the plate's left edge. The
+    tie-break below is `(count, -x)` and favours the smaller x, so a split
+    vote resolves onto that edge and re-keys every name bitmap on the frame
+    at once.
+
+    `own_y` is gone rather than ignored: a parameter that no longer decides
+    anything is a second answer to a question that now has one. `mine` is
+    the rung `own_rung` picked, passed by `read` because it already has it -
+    the same "hand the located landmark on" `ladder` gets, and it keeps
+    `own_rung`'s tally and its log line to one per frame rather than two.
+    Left out, it is worked out here, so a caller with only a board and a
+    ladder still gets the same answer.
+
+    **Keyword-only, and that is the point.** The parameter it replaces was
+    the fourth positional one, so a caller still passing `own_y` there would
+    hand its midpoint to `right` and its `right` to `mine` - five arguments,
+    no error, and every name on the frame cropped to the wrong bound by a
+    row that matched nothing. A stale call now raises instead, which is the
+    failure this module is allowed to have.
     """
     half = _half(board)
+    if mine is _DERIVE:
+        mine = own_rung(board, ys)
     votes: dict[int, int] = {}
     for y in ys:
         strip = frame[max(0, y - half):y + half,
                       0:(board[2] if right is None else right)]
         if strip.size == 0:
             continue
-        is_own = abs(y - own_y) <= ROW_MATCH_TOL
-        ink = _ink(strip, is_own)
+        ink = _ink(strip, y == mine)
         groups = _merged((ink.sum(axis=0) / strip.shape[0]) > GLYPH_FRAC)
         if groups:
             votes[groups[-1][0]] = votes.get(groups[-1][0], 0) + 1
@@ -309,7 +403,6 @@ def read(frame, board, ladder=None) -> list[BoardRow]:
     """
     if frame is None or getattr(frame, "ndim", 0) != 3 or board is None:
         return []
-    own_y = (board[1] + board[3]) // 2
     if ladder is None:
         ladder = flag_ladder(frame)
     if not ladder:
@@ -325,13 +418,16 @@ def read(frame, board, ladder=None) -> list[BoardRow]:
     # the flag, and every name on all fourteen measured frames came back
     # unreadable while the rows themselves were found perfectly.
     right = max(0, flag_x0 - (flag_x1 - flag_x0 + 1))
-    name_x = name_column(frame, board, ys, own_y, right)
+    # Inside the plate, not near its midpoint - see `is_own_row`; and ONE
+    # rung of it, because a plate is one row - see `own_rung`. Found once
+    # and handed to the column vote, which needs the same answer.
+    mine = own_rung(board, ys)
+    name_x = name_column(frame, board, ys, right, mine=mine)
     if name_x is None or name_x >= right:
         return []
     out = []
     for y in ys:
-        # Inside the plate, not near its midpoint - see `is_own_row`.
-        is_own = is_own_row(board, y)
+        is_own = y == mine
         out.append(BoardRow(
             y=y, is_own=is_own,
             name=name_bitmap(frame, board, y, name_x, is_own, right)))

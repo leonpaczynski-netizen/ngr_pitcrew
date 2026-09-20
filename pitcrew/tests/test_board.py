@@ -16,8 +16,10 @@ from pitcrew.telemetry.board import (
     CLIPPED_PLATE,
     PLATE_GUARD_COUNTS,
     PLATE_MIN,
+    SPLIT_RUNG,
     Board,
     _ladder,
+    _one_rung_per_row,
     _own_from_ladder,
     _own_row_by_plate,
     find,
@@ -492,6 +494,124 @@ def test_a_plate_split_into_two_rungs_is_re_derived_whole():
     assert box[1] <= OWN_CENTRE <= box[3], (
         "the repaired box holds the plate's own centre")
     assert abs(box[1] - OWN_TOP) <= 4 and abs(box[3] - OWN_BOTTOM) <= 4
+
+
+def test_the_repaired_box_is_the_whole_plate_across_as_well_as_down():
+    """**The repair was right in height and wrong in width, and only here.**
+
+    `_plate_box` scored a column lit when it was bright down the ENTIRE
+    +-reach strip, and `PLATE_REACH` widened that strip to three-quarters of
+    a row either side precisely so it could hold a plate the old one cut in
+    half. So on the frames the repair fires on - and only those - the strip
+    spans the dark neighbouring rows, every column carrying the plate scores
+    about half, and `cols` falls back to the longest run that survives: the
+    blank margin beside the name. Measured on these very rungs, the box came
+    back `(40, 366, 89, 397)` - 49 px of a 203 px plate.
+
+    It is not cosmetic. `gap_lines` searches `x0 -> x1 + 0.25(x1 - x0)` off
+    the box's own width, so a quartered box puts both interval readouts
+    outside the band it looks in: on `daytona-race-board-p13.png` the whole
+    box frames both gaps and the quartered one frames neither. The repair was
+    working against the readings it exists to recover.
+
+    The declined path asserts this already
+    (`test_the_guard_does_not_fire_on_a_board_that_reads_correctly`); the
+    repaired path asserted nothing about x at all, which is why the whole
+    fault shipped. Same claim, both paths - there is one plate and its width
+    does not depend on which route found it.
+    """
+    frame, ladder = a_board_with_one_bright_plate(rungs=SPLIT_RUNGS)
+    box = own_row(frame, ladder)
+    assert box is not None
+    assert (abs(box[0] - BOARD_PLATE_X0) <= 2
+            and abs(box[2] - BOARD_PLATE_X1) <= 2), (
+        f"the repaired box is {box[2] - box[0]} px wide against a "
+        f"{BOARD_PLATE_X1 - BOARD_PLATE_X0} px plate")
+    whole, whole_ladder = a_board_with_one_bright_plate(rungs=WHOLE_RUNGS)
+    stood = own_row(whole, whole_ladder)
+    assert (box[0], box[2]) == (stood[0], stood[2]), (
+        "the repaired and the declined route disagree about one plate")
+
+
+# --- one rung a row -------------------------------------------------------
+#
+# **The ladder was returning rungs that are not cars, and that is where the
+# roster's churn lives.** Measured over the same 292 Bathurst frames against
+# a seven-car field (`G-bench.md` §4): a readable row founds a cluster on
+# 0.058 of the frames that offer exactly seven rows and on **0.177 of the
+# frames that offer more - three times as often** - and those frames carry
+# 54% of all the foundings. Sardegna, where 4% of frames exceed the field
+# rather than 25%, has no such population.
+
+
+def test_two_rungs_inside_one_row_are_folded_into_the_row():
+    """The measured surplus: one plate arriving as its top and bottom edge.
+
+    GT7 draws the board at a constant pitch, so a step well under that pitch
+    is not a row boundary. On the traced frame the pair sits 31 px apart on
+    a 40 px pitch - 0.775 of a row - and the row is between them, at 380.
+    """
+    folded, pairs, refused = _one_rung_per_row(SPLIT_RUNGS)
+    assert (pairs, refused) == (1, 0)
+    assert folded == [192, 232, 272, 312, OWN_CENTRE, 448, 488], (
+        "the pair becomes the one row it is, at its own midpoint")
+    assert len(folded) == 7, "seven cars, seven rungs"
+
+
+def test_a_ladder_that_is_already_one_rung_a_row_is_left_alone():
+    """It is a no-op on a board read correctly, which is 95% of Sardegna.
+
+    Measured over 1,141 steps of the 163 Sardegna frames that return exactly
+    the field's eight rungs, the smallest step is 0.85 of that frame's
+    median gap and only three are under 0.90 - so a floor at 0.82 touches
+    none of them, while the split plate it exists for sits at 0.775.
+    """
+    assert _one_rung_per_row(WHOLE_RUNGS) == (WHOLE_RUNGS, 0, 0)
+    frame, _ = a_board_with_one_bright_plate(rungs=WHOLE_RUNGS)
+    found = flag_ladder(frame)
+    assert found is not None
+    steps = [b - a for a, b in zip(found[2], found[2][1:])]
+    assert min(steps) >= SPLIT_RUNG * sorted(steps)[len(steps) // 2], (
+        "a whole board comes back with every rung it was drawn with")
+
+
+def test_three_rungs_in_one_row_are_refused_rather_than_folded():
+    """CLAUDE.md rule 3, again. Three rungs inside a row is not a split
+    plate, and folding some pair of them would be a well-formed guess that
+    nothing downstream could tell from a reading."""
+    crowded = [192, 232, 272, 312, 358, 378, 396, 448, 488]
+    assert _one_rung_per_row(crowded) == (crowded, 0, 1)
+
+
+def test_both_rung_fold_decisions_are_said_out_loud(monkeypatch):
+    """**Rule 10: the accepts, not only the refusals.** A fold that only
+    speaks when it fires cannot be told from one that never runs, and the
+    line carries the closest pair, the median row and the floor between
+    them - the numbers that decided - plus the running counts, so the bar
+    stays in the record after the detail stops printing."""
+    import pitcrew.telemetry.board as board_module
+
+    lines = []
+    monkeypatch.setattr(board_module._log, "info",
+                        lambda msg, *a, **k: lines.append(msg % a if a
+                                                          else msg))
+    monkeypatch.setattr(board_module, "RUNG_MERGE_COUNTS",
+                        {"folded": 0, "whole": 0, "refused": 0})
+    board_module._say_rung_merge(SPLIT_RUNGS,
+                                 _one_rung_per_row(SPLIT_RUNGS)[0], 1, 0)
+    board_module._say_rung_merge(WHOLE_RUNGS, WHOLE_RUNGS, 0, 0)
+    crowded = [192, 232, 272, 312, 358, 378, 396, 448, 488]
+    board_module._say_rung_merge(crowded, crowded, 0, 1)
+
+    assert len(lines) == 3, lines
+    redone, stood, crowded_line = lines
+    assert "folded to 7" in redone and "median row" in redone
+    assert "one rung a row already" in stood
+    assert "three or more" in crowded_line
+    for line in lines:
+        assert "floor" in line, "the number setting the bar is in the line"
+    assert board_module.RUNG_MERGE_COUNTS == {"folded": 1, "whole": 1,
+                                              "refused": 1}
 
 
 def test_the_guard_does_not_fire_on_a_board_that_reads_correctly():

@@ -358,3 +358,196 @@ def test_a_short_car_on_an_unknown_side_gets_no_instruction():
     call = short_to_the_flag(car, 5.0, lap=12, laps_total=30, our_position=4)
     assert call is not None
     assert call.call == "Rocky is short to the flag."
+
+
+# --- once he is in the lane, whether to box is not a live question ---------
+#
+# Bathurst, session 204, race run 29, 20 Sep 2026, lap 11. Every figure below
+# is that lap's: the burn measured over the stint (10.6 L/lap), the 100 L
+# tank, 8.36 L aboard at the crossing, and the ~26-lap distance the timed
+# race had resolved to. Reproduced, the state on track says the sentence the
+# driver actually heard:
+#
+#   20:40:10  "Don't box yet. Too much fuel aboard to fill. Lap 17 at the
+#              earliest."
+#   20:40:16  "Fuel to 52 litres. The next 6-lap stint, at this race's burn."
+#   20:40:37  "Go. 51 litres aboard."
+#
+# The lap closed at t=143.47 s in the same frame GT7 moved the car 206 m and
+# set it rolling at 50.5 km/h down the pit lane; `PIT_ENTRY` had been raised
+# 20.8 s earlier on the frame-exact speed step (86.4 -> 0.1 km/h, moved
+# 0.0 m). So the app knew, and only the box ladder was asking.
+
+BATHURST_L11 = dict(lap=11, laps_total=26, fuel_l=8.36, fuel_per_lap_l=10.6,
+                    fuel_capacity_l=100.0, refuel_rate_lps=1.0,
+                    # `drop_stop_granted=False` is the shortest way to make
+                    # `stop_still_needed` true without a whole plan, which is
+                    # what `_a_stop_is_in_question` asks for.
+                    drop_stop_granted=False)
+
+
+def _bathurst(**kw):
+    from pitcrew.race.calls import RaceState
+    # A box lap three ahead: inside `STAY_OUT_WINDOW`, so the stop is in
+    # question, and not yet the in-lap, so the plan branch does not answer
+    # first. The fuel floor is then the thing that speaks.
+    fields = dict(BATHURST_L11, stint_ends_on_lap=14)
+    fields.update(kw)
+    return RaceState(**fields)
+
+
+def test_on_the_road_the_stay_out_argument_is_still_made():
+    """The control. Nothing here is suppressed by being in a race - the same
+    state with the car on the track says the Bathurst sentence verbatim."""
+    from pitcrew.race.rival_calls import candidates
+
+    said = [c for c in candidates(_bathurst()) if c.kind == STAY_OUT_FUEL]
+    assert len(said) == 1
+    assert said[0].call == "Don't box yet."
+    assert said[0].reason == ("Too much fuel aboard to fill. Lap 17 at the "
+                              "earliest.")
+
+
+def test_nothing_argues_against_boxing_while_he_is_in_the_lane():
+    """The defect. `PIT_ENTRY` was 20.8 s old when this was said."""
+    from pitcrew.race.rival_calls import candidates
+
+    assert [c for c in candidates(_bathurst(in_pit=True))
+            if c.kind == STAY_OUT_FUEL] == []
+
+
+def test_a_crossing_taken_inside_the_lane_voids_it_too():
+    """Mount Panorama closes the lap in the pit lane, which is the geometry
+    that put the call and the stop six seconds apart."""
+    from pitcrew.race.rival_calls import candidates
+
+    assert [c for c in candidates(_bathurst(crossed_in_box=True))
+            if c.kind == STAY_OUT_FUEL] == []
+
+
+def test_his_own_declared_in_lap_is_not_argued_with():
+    """He pressed "I'm pitting this lap" on the tablet. The driver's report is
+    primary evidence (CLAUDE.md §4.1), so this is the same fault a lap
+    earlier - `box_declared_lap` is the lap in progress, `lap + 1`."""
+    from pitcrew.race.rival_calls import candidates
+
+    assert [c for c in candidates(_bathurst(box_declared_lap=12))
+            if c.kind == STAY_OUT_FUEL] == []
+    # And a declaration for a LATER lap is not a decision about this one.
+    assert [c for c in candidates(_bathurst(box_declared_lap=14))
+            if c.kind == STAY_OUT_FUEL] != []
+
+
+def test_the_rejoin_call_asks_whether_to_box_and_is_gated_with_it():
+    """"...if you box now" is the same question in the other direction, and
+    it was offered from the same crossing, ungated."""
+    from pitcrew.race.calls import REJOIN
+    from pitcrew.race.rival_calls import candidates
+
+    behind = GapTrend(side="behind")
+    behind.note(11, 40.0)
+    # A tank that reaches the box, so the stop can be priced at all, and the
+    # three-stop plan's own next in-lap for the fill to be sized against.
+    racing = dict(gap_behind=behind, gap_behind_name="Rocky", fuel_l=40.0,
+                  pit_loss_s=19.5, next_stint_laps=6,
+                  further_stop_planned=True)
+    assert [c for c in candidates(_bathurst(**racing))
+            if c.kind == REJOIN] != []
+    assert [c for c in candidates(_bathurst(in_pit=True, **racing))
+            if c.kind == REJOIN] == []
+
+
+def _logged(state) -> str:
+    """Everything `candidates` wrote to the app log for this state.
+
+    **Not `caplog`.** `diagnostics.install` sets `propagate = False` on the
+    `pitcrew` logger so the app's own file is the record, and pytest's
+    fixture hangs its handler on the root - so under the full suite, where
+    the app has been installed, `caplog` reads empty and the test passes on
+    nothing.
+    """
+    import logging
+
+    from pitcrew.race import rival_calls
+
+    lines: list[str] = []
+    handler = logging.Handler()
+    handler.emit = lambda record: lines.append(record.getMessage())
+    logger = rival_calls._log
+    before = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        rival_calls.candidates(state)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(before)
+    return "\n".join(lines)
+
+
+def test_the_suppression_is_logged_with_the_words_it_swallowed():
+    """CLAUDE.md rule 10: a call suppressed in silence is the next invisible
+    defect, and the log has to carry the number that set the bar - here, the
+    three readings the gate was taken from and the sentence not said."""
+    text = _logged(_bathurst(in_pit=True))
+    assert "SUPPRESSED" in text
+    assert "he is in the pit lane" in text
+    assert "in_pit=True" in text
+    assert "Don't box yet." in text
+
+
+def test_the_admitted_call_is_logged_too():
+    """Rule 10 again, and this is the half that was missing when the ratchet
+    ran for a whole race: log the accepts, not only the refusals."""
+    text = _logged(_bathurst())
+    assert "offered" in text and "the box decision is still open" in text
+    assert "in_pit=False" in text
+
+
+# --- and two reasons the sentence itself was wrong ------------------------
+
+def test_the_plans_box_lap_is_answered_before_the_fuel_floor():
+    """Rule 13. The floor branch sat above the plan branch, so on a lap the
+    ladder was saying "Box this lap." this said "Don't box yet." - which is
+    the Bathurst pair, since the box call had been made on laps 7, 8, 9 and
+    10 and `stint_ends_on_lap` was behind him."""
+    assert stay_out(lap=11, laps_left=15, burn_per_lap_l=10.6,
+                    refuel_rate_lps=1.0, capacity_l=100.0, laps_total=26,
+                    planned_stop_lap=8) is None
+
+
+def test_the_floor_prices_the_last_fill_so_a_further_stop_silences_it():
+    """`earliest_stop_lap` is "the first lap on which a stop can still reach
+    the flag". Stop one of three never could and was never meant to, so
+    naming "lap 17 at the earliest" argued against a stop it does not
+    describe. `undercut_call` guards the same way."""
+    common = dict(lap=11, laps_left=15, burn_per_lap_l=10.6,
+                  refuel_rate_lps=1.0, capacity_l=100.0, laps_total=26,
+                  planned_stop_lap=14)
+    assert stay_out(**common, further_stop_planned=True) is None
+    # None is "nobody said" - a state built by hand - and is taken at its
+    # word, so the one-stop behaviour is unchanged.
+    for said in (None, False):
+        call = stay_out(**common, further_stop_planned=said)
+        assert call is not None and call.call == "Don't box yet."
+
+
+def test_the_stay_out_argument_ran_under_the_box_call_for_six_laps():
+    """The ranking was the only thing holding it back.
+
+    Replayed over session 204's own laps and the plan the ladder was running
+    (box lap 8, three stops), the pre-change `stay_out` said "Don't box yet.
+    Lap 17 at the earliest." at every crossing from lap 7 to lap 12, while
+    the box call said "Box this lap. No tyres." on 7, 8, 9 and 10. `URGENCY`
+    ranks `BOX_NOW` above `STAY_OUT_FUEL`, so the sort order - not a guard -
+    kept the contradiction inaudible until lap 11, when the box call was
+    refused for being in the lane and this was the only candidate left.
+    """
+    from pitcrew.race.rival_calls import candidates
+
+    aboard = {7: 40.80, 8: 32.34, 9: 24.12, 10: 16.22, 11: 8.36, 12: 91.87}
+    for lap, fuel in aboard.items():
+        state = _bathurst(lap=lap, fuel_l=fuel, stint_ends_on_lap=8,
+                          further_stop_planned=True, in_pit=(lap == 11))
+        assert [c for c in candidates(state) if c.kind == STAY_OUT_FUEL] == [], \
+            f"lap {lap} still argues against the stop the plan is calling"

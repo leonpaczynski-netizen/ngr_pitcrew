@@ -1237,7 +1237,8 @@ def refuel_lines() -> tuple[str, ...]:
                                            FUEL_BASIS_HIGHER_STINT,
                                            FUEL_BASIS_RACE,
                                            FUEL_BASIS_STINT)
-    from pitcrew.race.refuel import BURN_UNSTATED, RefuelWatch
+    from pitcrew.race.refuel import (BURN_UNSTATED, UNSIZED_RISE_L,
+                                     RefuelWatch)
 
     bases = [None]
     for state in _box_fuel_states():
@@ -1271,6 +1272,18 @@ def refuel_lines() -> tuple[str, ...]:
     short = watch.left_early(10.0)
     if short is not None:
         lines.append(short.spoken())
+    # **And the stop nothing could size.** It carries no number at all, so it
+    # is one clip and a cheap one - and it is exactly the line that must not
+    # arrive late, because it is said to a driver holding the refuelling
+    # trigger with no figure of his own to work to.
+    unsized = RefuelWatch()
+    unsized.note(5.0, speed_kph=100.0, target_l=None)
+    fuel = 5.0
+    while fuel < 5.0 + UNSIZED_RISE_L + 2.0:
+        fuel += 0.5
+        call = unsized.note(fuel, speed_kph=0.0, target_l=None)
+        if call is not None:
+            lines.append(call.spoken())
     return _pieces(*lines)
 
 

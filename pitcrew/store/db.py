@@ -1470,16 +1470,38 @@ class Store:
                  None if is_teammate is None else (1 if is_teammate else 0)))
 
     def driver_exemplars(self) -> dict:
-        """Every named driver's bitmap, for seeding the next race's roster.
+        """Every NAMED driver's bitmap, for seeding the next race's roster.
 
         Drivers with no exemplar are skipped rather than seeded with nothing: a
         name with no bitmap cannot recognise anybody, and a cluster seeded from
         an empty array would swallow the first row it saw.
+
+        **And a minted `Car #N` handle is not a driver.** It is the name the
+        app gave a cluster it could NOT identify, so its exemplar is by
+        construction the bitmap of an unidentified cluster rather than of a
+        person. Seeding it cannot put a name to anybody; it can only take a
+        row away from the driver that row belongs to - and `rival_book`
+        profiles key on the name string, so a row landing on `Car #1`
+        inherits another race's stop history as if it were this driver's.
+
+        Measured 21 Sep 2026, replaying the stored board rows against a seed
+        of all 187 stored exemplars: **1,197 of session 204's 1,964 rows
+        (61%) landed on a minted handle** - `Car #1` took 200, `Car #9` 188,
+        `Car #11` 188. Seeded with named drivers only, none do, and
+        `Magical daddy` rises from 73 rows to 152. On session 188: 777 of
+        1,435 rows (54%) landed on a handle; named-only lifts `TommyTbone`
+        from 112 to 167 and `ZenPhilosopher` from 0 to 73.
+
+        This needs no field size, no hub entry list and no `races_seen`
+        threshold - it follows from what a handle IS. The handles stay in the
+        table: they hold real stop observations, and the migration that
+        classifies them is a separate job.
         """
         out = {}
         for row in self._query(
                 "SELECT name, exemplar, rows, cols FROM drivers "
-                "WHERE exemplar IS NOT NULL AND rows IS NOT NULL"):
+                "WHERE exemplar IS NOT NULL AND rows IS NOT NULL "
+                "AND name NOT LIKE 'Car #%'"):
             wanted = int(row["rows"]) * int(row["cols"])
             bits = np.unpackbits(
                 np.frombuffer(row["exemplar"], dtype=np.uint8))[:wanted]
