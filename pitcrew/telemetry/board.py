@@ -131,6 +131,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from pitcrew.diagnostics import log
+
+_log = log(__name__)
+
 # The plate is near-white and unsaturated; a flag or a red box is not.
 PLATE_MIN = 150
 PLATE_SPREAD = 40
@@ -224,6 +228,56 @@ GAP_MARGIN_L, GAP_MARGIN_R = 6, 8
 ROW_MERGE = 12
 # ...and columns across this many, for the same reason in the other axis.
 COL_MERGE = 6
+
+# **A box shorter than this fraction of a row is a CLIPPED PLATE, not a short
+# row** - and the row it is measured against is the ladder's own MEDIAN rung
+# gap, never the minimum.
+#
+# Measured 20 Sep 2026 over 292 frames of the Bathurst race (s204) and 182 of
+# Sardegna (s188), `scratchpad/findings/G-bench.md`. The driver's own white
+# plate registers as flag colour over its whole height, so `flag_ladder` takes
+# TWO rungs out of it - its top and bottom edge, 365 and 396 on the traced
+# frame - and never one at its centre, 381. `min` over the consecutive gaps is
+# then 31 where the row pitch is 40, `half` is 13 instead of 18, and the box
+# comes back **15 px of a 35 px plate**. That is not a cosmetic error: it is
+# the height `roster._half` sizes every name crop on the frame from, so the
+# own row's ink falls under `NAME_MIN_INK`, its bitmap comes back `None`, and
+# the matcher is never even asked. Measured on s204, **81.5% of the frames
+# that lost the own row lost it that way** and only 18.5% to geometry; and the
+# whole-frame name rate is 47% under a 28 px box against 95% at or above it.
+#
+# The gaps go with it. `gap_lines` places the two interval boxes at
+# `y0 - 0.95h` and `y1 + 0.10h` off the box's own height, so a clipped box
+# puts both in the wrong place: **0 of 186 interval boxes on a clipped frame
+# ever read a value**, against 53.9% on the rest.
+#
+# The rung gaps are non-uniform by design - `_ladder` allows two wide steps
+# for the gap readouts - and irregular in practice on 49% of s204's frames
+# against 5% of s188's, because a seven-car field draws a short board. The
+# median is what survives both.
+CLIPPED_PLATE = 0.6
+# How far either side of the winning rung the REPAIRED search looks, in median
+# rung gaps. Wide enough to contain a whole plate that the strip cut in half,
+# narrow enough not to reach the neighbouring row.
+PLATE_REACH = 0.75
+# How many of each plate-guard decision reach the log before it goes quiet.
+#
+# **Rule 10's second half: the accepts are logged, not only the refusals.**
+# This fault hid for months because nothing counted it - the clipped frames
+# produced no gap reading at all, so they left no row in `gap_reads` and were
+# invisible to every statistic computed from it. The guard fires on a third
+# of the frames at Bathurst, so a line per frame would be the whole log;
+# these counts keep rising after the last line and every line carries the
+# running total, so the number setting the bar is always in the record.
+PLATE_GUARD_LOG_MAX = 20
+# ...and after that the tally goes out this often, so the record ends with
+# the counts rather than with them frozen where the detail stopped.
+PLATE_GUARD_TALLY_EVERY = 500
+# Cumulative since the process started, and a LOG THROTTLE only - nothing
+# reads these as a measurement of a session, which is why there is no reset
+# (rule 11 is about state that gets read as this session's; a throttle that
+# prints its own running total cannot be).
+PLATE_GUARD_COUNTS = {"fired": 0, "declined": 0, "unresolved": 0}
 
 
 @dataclass(frozen=True)
@@ -548,20 +602,42 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
     scenery beside the board, one pixel of it - stretched a plate that starts
     at 39 all the way to the frame edge, and `pit_columns` takes the board's
     left edge as the bound its pit flag is looked for in.
+
+    ### 20 Sep 2026 - the box was a fraction of a row high, and that is what
+    ### lost the driver's own name on two frames in five
+
+    The strip is cut from `min` over the rung gaps, and **the driver's own
+    white plate registers as flag colour over its whole height**, so the
+    ladder takes two rungs out of one plate and the minimum gap is an edge-
+    to-edge measurement of the plate rather than the row pitch. The box came
+    back 15 px of a 35 px plate, `roster._half` sized every name crop on the
+    frame from it, and the own row's bitmap came back `None` - so the identity
+    matcher was never asked, on 81.5% of the frames that lost the own row.
+    `CLIPPED_PLATE` carries the measurement and the bench that settled it.
+
+    Two halves, and **neither works without the other**: growing the box while
+    `roster.read` still asked whether a rung was within 8 px of the box's
+    MIDPOINT measured worse than doing nothing (82.9% -> 58.9%), because a box
+    grown to the plate moves its own midpoint away from the rung. The other
+    half is `roster.py`'s `board[1] <= y <= board[3]`.
     """
     if found is None:
         return None
     flag_x0, _, ys = found
     if len(ys) < 2 or flag_x0 < 20:
         return None
-    pitch = min(ys[i + 1] - ys[i] for i in range(len(ys) - 1))
+    steps = sorted(ys[i + 1] - ys[i] for i in range(len(ys) - 1))
+    pitch, median_gap = steps[0], steps[len(steps) // 2]
     half = max(3, int(pitch * 0.45))
+    # How far the repair may look, if it is needed. The band is cut to it
+    # up front because the repair is cut from the band - see `CLIPPED_PLATE`.
+    reach = max(half, int(median_gap * PLATE_REACH))
     # Only the band left of the flag is ever looked at, so only that band is
     # computed: the whole-frame version of these two reductions was 181 ms of
     # the 271 ms this function cost, for pixels it then sliced away.
     # And only the rows the rungs span: every strip below is cut from them.
-    lo = max(0, min(ys) - half)
-    band = np.asarray(frame)[lo:max(ys) + half, :flag_x0]
+    lo = max(0, min(ys) - reach)
+    band = np.asarray(frame)[lo:max(ys) + reach, :flag_x0]
     bright = ((band.min(axis=2) > PLATE_MIN)
               & (np.ptp(band, axis=2) < PLATE_SPREAD))
     best, score = None, 0.0
@@ -573,18 +649,101 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
                 best, score = y, filled
     if best is None or score < PLATE_FILL:
         return None
-    top, bottom = max(0, best - half), best + half
+    box = _plate_box(bright, lo, best, half, containing=False)
+    if box is not None and (box[3] - box[1]) >= CLIPPED_PLATE * median_gap:
+        _say_plate_guard("declined", box, best, median_gap, reach, box)
+        return box
+    # The box is a fraction of a row high, so the strip it was cut from was
+    # centred on the wrong y and was too short to hold the plate anyway. Take
+    # the lit run the winning rung falls INSIDE, over a strip wide enough to
+    # contain a whole row. **`None` where no run contains the rung** - rule 3:
+    # a plate that cannot be re-derived is not a plate of some other size.
+    repaired = _plate_box(bright, lo, best, reach, containing=True)
+    _say_plate_guard("fired" if repaired is not None else "unresolved",
+                     box, best, median_gap, reach, repaired)
+    return repaired
+
+
+def _plate_box(bright, lo: int, rung: int, reach: int, *, containing: bool):
+    """The driver's plate about one rung, as `(x0, y0, x1, y1)`, or None.
+
+    `containing` is the repair: the lit run the rung falls INSIDE, rather than
+    the longest run in the strip. The two differ exactly where they matter -
+    a strip centred off the plate's centre clips it, and the longest run in
+    that strip is the clipped remnant, while the run containing the rung is
+    the plate itself once the strip is wide enough to hold it.
+    """
+    top, bottom = max(0, rung - reach), rung + reach
     strip = bright[top - lo:bottom - lo]
     lit_rows = np.where(strip.mean(axis=1) > 0.4)[0]
     lit_cols = np.where(strip.mean(axis=0) > 0.4)[0]
     if len(lit_rows) < 3 or len(lit_cols) < 10:
         return None
-    rows = max(_runs(lit_rows, ROW_MERGE), key=len)
+    runs = _runs(lit_rows, ROW_MERGE)
+    if containing:
+        here = rung - top
+        rows = next((run for run in runs if run[0] <= here <= run[-1]), None)
+        if rows is None:
+            return None
+    else:
+        rows = max(runs, key=len)
     cols = max(_runs(lit_cols, COL_MERGE), key=len)
     if len(rows) < 3 or len(cols) < 10:
         return None
     return (int(cols[0]), int(top + rows[0]),
             int(cols[-1]), int(top + rows[-1]))
+
+
+def _say_plate_guard(outcome: str, box, rung: int, median_gap: int,
+                     reach: int, repaired) -> None:
+    """One line per plate-guard decision, with the numbers that decided it.
+
+    **Both directions, because rule 10 asks for the accepts.** A guard that
+    only says when it fires cannot be told apart from one that never runs, and
+    a guard that only says when it declines cannot be told apart from one that
+    fires on everything. Both go out at INFO and both are throttled at
+    `PLATE_GUARD_LOG_MAX` of their own outcome - a decision the log level
+    hides is a decision that was not logged, and 20 lines of each is 60 lines
+    a race.
+
+    After the cap the tally still goes out every `PLATE_GUARD_TALLY_EVERY`
+    decisions, so a long race ends with the three counts in the record rather
+    than with the count frozen where the detail stopped printing.
+    """
+    PLATE_GUARD_COUNTS[outcome] = PLATE_GUARD_COUNTS.get(outcome, 0) + 1
+    seen = PLATE_GUARD_COUNTS[outcome]
+    if seen > PLATE_GUARD_LOG_MAX:
+        decided = sum(PLATE_GUARD_COUNTS.values())
+        if decided % PLATE_GUARD_TALLY_EVERY == 0:
+            _log.info("board: own-row plate guard over %d frames - "
+                      "%d re-derived, %d stood, %d refused outright",
+                      decided, PLATE_GUARD_COUNTS["fired"],
+                      PLATE_GUARD_COUNTS["declined"],
+                      PLATE_GUARD_COUNTS["unresolved"])
+        return
+    last = "" if seen < PLATE_GUARD_LOG_MAX else " (last of these)"
+    floor = CLIPPED_PLATE * median_gap
+    was = ("no box at all" if box is None
+           else f"a box spanning {box[3] - box[1]} px")
+    if outcome == "declined":
+        _log.info("board: own row at rung y=%d is %s against a %d px median "
+                  "row and a %.1f px floor - not clipped, the plate stands "
+                  "(%d of these so far)%s",
+                  rung, was, median_gap, floor, seen, last)
+        return
+    if repaired is None:
+        _log.info("board: own row at rung y=%d came back %s against a %d px "
+                  "median row (floor %.1f), and no lit run within +-%d px "
+                  "contains that rung - no own row this frame rather than a "
+                  "guessed one (%d of these so far)%s",
+                  rung, was, median_gap, floor, reach, seen, last)
+        return
+    _log.info("board: own row at rung y=%d came back %s against a %d px "
+              "median row (floor %.1f) - re-derived from the run containing "
+              "the rung over +-%d px to y %d-%d, spanning %d px "
+              "(%d of these so far)%s",
+              rung, was, median_gap, floor, reach, repaired[1], repaired[3],
+              repaired[3] - repaired[1], seen, last)
 
 
 def own_row(frame, ladder=None) -> tuple[int, int, int, int] | None:

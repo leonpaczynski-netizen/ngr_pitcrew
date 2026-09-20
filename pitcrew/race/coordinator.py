@@ -433,6 +433,14 @@ class RaceCoordinator:
         # laps under this one's (rule 11).
         self.state.lap_history = []
         self.state.stint_burns = []
+        # **And the per-lap target goes back to the plan's burn** (rule 11).
+        # `PlanTargets` is built once in `__init__` and a re-arm on the same
+        # coordinator would open the next attempt judging its laps against
+        # the burn the last one measured - which is the practice-burn-in-a-
+        # race failure with the sides swapped. The reset has a caller here,
+        # which is the half rule 11 says is usually missing.
+        if self.targets is not None:
+            self.targets.install_measured_burn(None)
         self._reset_mid_lap()
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
@@ -1053,6 +1061,18 @@ class RaceCoordinator:
         # **Against the plan's target**, before the mode latch below moves on
         # to the next lap - the verdict needs the column this lap was driven on.
         self._judge_against_target(lap, incident=incident is not None)
+        # **And only now does the per-lap target move with this lap in it.**
+        # Not a second calculation and not a second number: the figure the
+        # driver is judged against is the figure every other fuel call is
+        # already using (rule 12). See `_rebase_target_burn`.
+        #
+        # **The order is the whole point.** `expect.note_lap` put this lap
+        # into the population before any of this ran, so rebasing ahead of the
+        # verdict judged the lap against a reference that contained it - and
+        # on the s204 fixture laps 8, 13 and 26 came back at exactly 0.000,
+        # "burn on target", because the target WAS that lap. A reference has
+        # to be older than the reading it judges.
+        self._rebase_target_burn(lap)
         # **The lap into the pace record of the cars either side**, with the
         # reason where it is not a lap of anybody's pace (rule: exclude the
         # excursions before correlating). Keyed on the wall's own read key.
@@ -2684,13 +2704,21 @@ class RaceCoordinator:
             # average never pools the two beeps (`stint_burn`).
             self.state.stint_burns.append((bool(saving),
                                            verdict.burn_delta_l))
+        # **The burn's reference and its lap count travel with the figure.**
+        # A log of 28 lines all reading `against 10.625 L` said nothing about
+        # which burn that was or how many laps stood behind it, which is how
+        # a frozen target went a whole race unnoticed (rules 4 and 13).
+        behind = ("" if target.burn_laps is None
+                  else f" over {target.burn_laps} laps")
         log("race").info(
             "target: lap %s on %s (%s, set lap %d): %s ms against %s ms "
-            "(%s) - burn %s against %s L", lap.lap_num, target.compound,
+            "(%s) - burn %s against %s L (%s%s; the plan asked %s)",
+            lap.lap_num, target.compound,
             "saving" if saving else "full revs", target.lap_on_set,
             lap.lap_time_ms, target.lap_ms,
             target.lap_source or target.why_no_lap,
-            None if verdict is None else verdict.burn_l, target.burn_l)
+            None if verdict is None else verdict.burn_l, target.burn_l,
+            target.burn_source, behind, target.planned_burn_l)
 
     def _file_lap_history(self, lap, verdict, saving, why) -> None:
         """This lap, as it was judged, for the monitor to draw afterwards."""
@@ -2705,6 +2733,11 @@ class RaceCoordinator:
                        if verdict is not None
                        else getattr(lap, "fuel_used", None)),
             "burn_delta_l": getattr(verdict, "burn_delta_l", None),
+            # The reference the delta was judged against, filed WITH it: the
+            # rack draws twelve laps that can straddle two references, and
+            # read off live state at draw time it would say what is installed
+            # now about a lap judged then.
+            "burn_source": getattr(verdict, "burn_source", None),
             "saving": saving,
             "why": why,
             "pit": bool(getattr(lap, "is_pit_lap", False)),
@@ -3077,6 +3110,59 @@ class RaceCoordinator:
             state.next_compound = None
             state.next_tyres = None
         return call
+
+    def _rebase_target_burn(self, lap) -> None:
+        """Put the per-lap burn target on this race's own burn, or back.
+
+        **The defect this closes, measured.** At Bathurst Rd 8 (20 Sep 2026)
+        the race's own burn was installed for every fuel call on lap 7 and
+        held 8.2-8.5 L/lap to the flag, while `PlanTargets.burn_full_l` was
+        frozen at the plan's 10.625 - there was no setter anywhere in
+        `pitcrew/`. All 28 `target:` lines read `against 10.625 L`, so "Burn
+        2.2 litres under" on lap 25 restated the plan's 22% error instead of
+        saying anything about lap 25. The driver had chosen fuel map 3 at the
+        last minute; the app cannot predict that and does not have to - it
+        has to absorb it.
+
+        **Read off `RaceState`, deliberately.** `fuel_per_lap_l` with
+        `fuel_burn_basis` beside it is the one expression the fill, the box
+        call and the re-planner all size on. Taking the target from anywhere
+        else would put two burns in the race again, which is the defect and
+        not the fix.
+
+        **And it retires** (rule 10): a basis of None - no race burn
+        installed, or one withdrawn - puts the target straight back on the
+        plan's figure, and that is logged too. The plan's own number is never
+        written over; it stays on `burn_full_l` and travels on every
+        `LapTarget` as `planned_burn_l`.
+        """
+        targets = self.targets
+        if targets is None:
+            return
+        basis = self.state.fuel_burn_basis
+        burn = self.state.fuel_per_lap_l if basis is not None else None
+        laps = self.state.fuel_burn_laps if basis is not None else None
+        if not targets.install_measured_burn(burn, laps=laps, basis=basis):
+            return
+        # **The stint average cannot span two references.** `stint_burn`
+        # pools this stint's deltas, and a delta against the plan's 10.625 and
+        # one against the race's 8.47 are not one population - pooling them
+        # lands between two references and belongs to neither, which is the
+        # same defect as pooling the two beep columns (rule 13). The average
+        # restarts here and carries its own lap count (rule 4).
+        self.state.stint_burns.clear()
+        planned = targets.burn_full_l
+        said = f"{planned:.3f} L/lap" if planned else "no burn"
+        if targets.measured_burn_l is None:
+            log("race").info(
+                "target burn back on the plan on lap %s (%s) - this race's "
+                "own burn is not installed", lap.lap_num, said)
+            return
+        log("race").info(
+            "target burn re-based on lap %s: %.3f L/lap over %d laps of %s, "
+            "against the plan's %s - every lap verdict from here is judged "
+            "on the race's figure", lap.lap_num, targets.measured_burn_l,
+            targets.measured_burn_laps, basis, said)
 
     def _refuse_the_burn(self, lap, green: float | None) -> None:
         """Say once why this race's own burn is not sizing the fuel calls.

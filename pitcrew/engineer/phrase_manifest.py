@@ -1226,9 +1226,16 @@ def refuel_lines() -> tuple[str, ...]:
     sweeps, so a reworded basis is a re-rendered clip - and over each burn
     the sentence can name: this race's (every `FUEL_BASIS_*`), practice's
     (None), and none where the caller did not say.
+
+    **And over the lap counts the evidence sentence can carry.** "Measured
+    over N laps." is its own numberless-but-for-one sentence precisely so the
+    pack can hold it; `_pieces` renders the words around the number, so one
+    sweep of a singular and a plural covers every count a race can reach.
     """
     from pitcrew.race.calls import fuel_target_basis
-    from pitcrew.race.expectations import (FUEL_BASIS_HIGHER, FUEL_BASIS_RACE,
+    from pitcrew.race.expectations import (FUEL_BASIS_HIGHER_RACE,
+                                           FUEL_BASIS_HIGHER_STINT,
+                                           FUEL_BASIS_RACE,
                                            FUEL_BASIS_STINT)
     from pitcrew.race.refuel import BURN_UNSTATED, RefuelWatch
 
@@ -1237,23 +1244,26 @@ def refuel_lines() -> tuple[str, ...]:
         basis = fuel_target_basis(state)
         if basis:
             bases.append(basis)
-    burns = (None, FUEL_BASIS_STINT, FUEL_BASIS_RACE, FUEL_BASIS_HIGHER,
-             BURN_UNSTATED)
+    burns = (None, FUEL_BASIS_STINT, FUEL_BASIS_RACE,
+             FUEL_BASIS_HIGHER_RACE, FUEL_BASIS_HIGHER_STINT, BURN_UNSTATED)
     lines = []
     for basis in dict.fromkeys(bases):
         for burn_basis in burns:
-            for start_l, to_flag_l in ((5.0, None), (5.0, 40.0), (19.9, None),
-                                       (19.9, 40.0)):
-                watch = RefuelWatch()
-                watch.note(start_l, speed_kph=100.0, target_l=None)
-                fuel = start_l
-                while fuel < 30.0:
-                    fuel += 0.5
-                    call = watch.note(fuel, speed_kph=0.0, target_l=20.0,
-                                      fuel_per_lap_l=2.5, to_flag_l=to_flag_l,
-                                      basis=basis, burn_basis=burn_basis)
-                    if call is not None:
-                        lines.append(call.spoken())
+            for burn_laps in (None, 1, 19):
+                for start_l, to_flag_l in ((5.0, None), (5.0, 40.0),
+                                           (19.9, None), (19.9, 40.0)):
+                    watch = RefuelWatch()
+                    watch.note(start_l, speed_kph=100.0, target_l=None)
+                    fuel = start_l
+                    while fuel < 30.0:
+                        fuel += 0.5
+                        call = watch.note(
+                            fuel, speed_kph=0.0, target_l=20.0,
+                            fuel_per_lap_l=2.5, to_flag_l=to_flag_l,
+                            basis=basis, burn_basis=burn_basis,
+                            burn_laps=burn_laps)
+                        if call is not None:
+                            lines.append(call.spoken())
     watch = RefuelWatch()
     watch.note(5.0, speed_kph=100.0, target_l=None)
     for fuel in (5.5, 6.0, 6.5, 7.0):
@@ -1345,9 +1355,14 @@ def target_lines() -> tuple[str, ...]:
     they can say: each tenth from the on-target band to a second in both
     directions, the seconds form past it, and the burn either way - so a
     reworded clause is a re-rendered clip.
+
+    **And over both burn references**, which is why the reference is its own
+    numberless sentence: "Against the plan." and "Against this race's burn."
+    are one clip each and cover every burn verdict of every race.
     """
     from pitcrew.race.targets import (ON_TARGET_L, ON_TARGET_S, burn_sentence,
                                       pace_sentence)
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
 
     lines = []
     tenths = [tenth / 10.0 for tenth in range(int(ON_TARGET_S * 10), 10)]
@@ -1356,7 +1371,8 @@ def target_lines() -> tuple[str, ...]:
             lines.append(pace_sentence(sign * gap))
     for litres in (ON_TARGET_L, 0.3, 0.0):
         for sign in (1.0, -1.0):
-            lines.append(burn_sentence(sign * litres))
+            for against in (None, BURN_BASIS_PLAN, BURN_BASIS_RACE):
+                lines.append(burn_sentence(sign * litres, against))
     return _pieces(*lines)
 
 

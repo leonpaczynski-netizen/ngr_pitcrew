@@ -36,9 +36,9 @@ from dataclasses import dataclass
 
 from pitcrew.ui.driver_view import (
     DECLARED, DERIVED, Block, DriverState, abs_light, box_block,
-    face_best_block, face_burn_block, face_delta_block, face_lap_block,
-    face_last_block, fuel_stop_block, fuel_target_block, release_block,
-    stamped, tcs_light, tyres_block, wet_light)
+    face_best_block, face_burn_block, face_burn_caption, face_delta_block,
+    face_lap_block, face_last_block, fuel_stop_block, fuel_target_block,
+    release_block, stamped, tcs_light, tyres_block, wet_light)
 
 CENTRE_RELEASE = "release"
 CENTRE_BOX = "box"
@@ -157,8 +157,17 @@ class StripComposer:
                 "lap": Item("LAP", face_lap_block(state)).to_json(),
                 # **Absent, not dashed, outside a race**: practice has no plan
                 # burn, and a dash there would be a reason nobody needs.
+                #
+                # **And the caption names which burn the target is** - the
+                # plan's or this race's own (`face_burn_caption`). The figure
+                # under it steps 2.2 L when the race's burn is installed and
+                # the slot said "BURN VS TARGET" over both halves, which is
+                # rule 13 on the screen right of his wheel. The caption
+                # carries it rather than the sub, because the sub is the
+                # stint's mean and ITS lap count, and two counts on one line
+                # is the same defect one line down.
                 "burn": (None if burn is None
-                         else Item("BURN VS TARGET", burn).to_json()),
+                         else Item(face_burn_caption(state), burn).to_json()),
             }
         lights = [wet_light(state.wet),
                   abs_light(state.abs_setting, state.front_lock),

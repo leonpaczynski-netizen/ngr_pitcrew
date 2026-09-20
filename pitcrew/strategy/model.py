@@ -202,8 +202,83 @@ def fuel_margin_l(laps: int | float | None, fuel_per_lap_l: float | None, *,
                     f"rather than a flat lap")
 
 # Fuel map: index 1..6. Multipliers on consumption and power relative to map 1.
+# CLAUDE.md §5.3: level 1 is richest, 6 is leanest, roughly -4% power and -8%
+# consumption a step, with step 6 anomalous (~50% consumption for ~80% power)
+# and modelled separately rather than extrapolated.
 FUEL_MAP_CONSUMPTION = {1: 1.00, 2: 0.92, 3: 0.85, 4: 0.78, 5: 0.72, 6: 0.50}
 FUEL_MAP_POWER = {1: 1.00, 2: 0.96, 3: 0.92, 4: 0.88, 5: 0.85, 6: 0.80}
+
+# **The consumption table is a published rule of thumb, not a measurement of
+# this car** (rule 5). The one race where both ends are known - Bathurst Rd 8,
+# 20 Sep 2026, a Shelby GT350R raced on map 3 against a plan costed off map-1
+# laps - measured a ratio of 8.27 / 10.625 = **0.778** where the table says
+# 0.85, so the table under-states the saving by about 9% for that car. One
+# race and one car is not enough to re-measure it from; it is enough to say
+# the figure is derived and must never be quoted as measured.
+FUEL_MAP_SOURCE = "assumed"
+
+
+def burn_at_fuel_map(burn_l: float | None, *, measured_on: int | None,
+                     racing_on: int | None) -> tuple[float | None, str | None]:
+    """A burn measured on one fuel map, re-costed for another.
+
+    `(litres per lap, what happened in words)`. The words are always there and
+    are meant to be read by a human - they go on the plan's evidence row, and
+    the plan is the only place this question can be asked at all.
+
+    **Nothing in the feed carries the fuel map.** There are zero readers of it
+    in `pitcrew/telemetry/`, because GT7 broadcasts no such channel: the map is
+    a property of how the round is being driven and it reaches the app only
+    because somebody declared it on the event page. So this cannot detect a map
+    change and does not try. What it can do is stop a burn measured on one map
+    being spent as though it were the other.
+
+    Why it exists, dated. At Bathurst Rd 8 the driver chose map 3 at the last
+    minute for throttle stability and the race burned 8.2-8.5 L/lap against a
+    plan costed at 10.625 - 22% out, on the one number that decides the stop
+    count. 10.625 x 0.85 is 9.03, which over 28 laps needs 253 L: **two stops,
+    not three**, and the right answer would have fallen out of a table this
+    repo already had. Nothing consumed that table outside its own tests.
+
+    Three refusals, and each returns the burn unchanged or not at all rather
+    than guessing:
+
+    * **Nobody declared the race's map** - the common case, and today's
+      behaviour. The burn stands as measured and says nothing.
+    * **Nobody recorded the evidence laps' map.** `laps.fuel_map` is NULL on
+      every lap since session 83, so this is the usual state of the archive.
+      A conversion needs both ends; with one end missing the honest answer is
+      the burn unchanged **and a sentence saying it could not be re-costed**,
+      not a silent assumption that practice was run on map 1 (rule 3).
+    * **An index outside 1-6**, which is a typed value that means nothing.
+
+    Where both ends are known and equal, the burn is returned with the map
+    named - which is the answer that lets a reader see the question was asked.
+    """
+    if burn_l is None or racing_on is None:
+        return burn_l, None
+    if racing_on not in FUEL_MAP_CONSUMPTION:
+        return burn_l, (f"fuel map {racing_on!r} is not one of 1-6, so the "
+                        f"burn was not re-costed")
+    if measured_on is None:
+        return burn_l, (
+            f"the race is declared on fuel map {racing_on} and no practice "
+            f"lap records which map it was run on, so the burn is NOT "
+            f"re-costed - declare the map on the sessions this plan is built "
+            f"from, or measure a burn on map {racing_on}")
+    if measured_on not in FUEL_MAP_CONSUMPTION:
+        return burn_l, (f"the practice laps record fuel map {measured_on!r}, "
+                        f"which is not one of 1-6, so the burn was not "
+                        f"re-costed")
+    if measured_on == racing_on:
+        return burn_l, f"measured and raced on fuel map {racing_on}"
+    ratio = (FUEL_MAP_CONSUMPTION[racing_on]
+             / FUEL_MAP_CONSUMPTION[measured_on])
+    return round(burn_l * ratio, 3), (
+        f"measured on fuel map {measured_on}, re-costed for map {racing_on} "
+        f"at x{ratio:.3f} [ASSUMED] - the published step table, not a "
+        f"measurement of this car; one race measured x0.778 where it says "
+        f"x0.850. Calibrate by running a stint on map {racing_on}")
 
 CONSTRAINT_TYRE = "tyre"
 CONSTRAINT_FUEL = "fuel"
@@ -380,6 +455,19 @@ class RaceInputs:
     # back to `laps * fuel_per_lap_l`, which is what it did before this field
     # existed. See `strategy/fuel_model.py`.
     fuel_reference_load_l: float | None = None
+    # **Which fuel map the race is being run on, as declared on the event.**
+    # There is no telemetry channel for it (zero readers in
+    # `pitcrew/telemetry/`) and there never will be - the app cannot observe
+    # it, only be told. None where nobody said, which is most events.
+    fuel_map: int | None = None
+    # And which map the practice laps behind `fuel_per_lap_l` were run on,
+    # where they agree on one. None where nobody recorded it, which is every
+    # lap since session 83 - so a burn usually CANNOT be re-costed, and
+    # `fuel_map_note` says so out loud rather than assuming map 1.
+    evidence_fuel_map: int | None = None
+    # What `burn_at_fuel_map` did, in words, for the evidence row and the
+    # plan's assumptions. None where the question did not arise.
+    fuel_map_note: str | None = None
     # Lap-to-lap scatter on the reference lap, seconds. Only a timed race
     # needs it, and only to decide whether its own distance is resolvable -
     # see `lap_count_firm`. None where too few laps exist to take one from,

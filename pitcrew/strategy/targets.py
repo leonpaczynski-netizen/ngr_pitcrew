@@ -26,9 +26,43 @@ from practice at `stamp`, and says so**: each filled field carries a
 field that practice could not answer either is stored as None with its source
 - missing, never zero (rule 3) - and George gives no target that rests on it.
 
-**The burn is not copied here.** It is already on the plan: `fuel_burns` (save
-and full) where the author measured them, else `expects.expected_fuel_per_lap_l`.
-A second copy would be a second value (CLAUDE.md §1a).
+**The plan's burn is not copied here.** It is already on the plan:
+`fuel_burns` (save and full) where the author measured them, else
+`expects.expected_fuel_per_lap_l`. A second copy of the PLAN's figure would be
+a second value.
+
+**But this race's own burn is a different quantity, and it is installed beside
+it** (20 Sep 2026). This module used to hold the plan's burn as the sole
+reference and cite CLAUDE.md §1a for it. That citation was misapplied: §1a is
+about the *setup record* - a declared input that must have exactly one copy -
+and a measured burn is not that. Rule 1 makes a measurement primary evidence
+and rule 4 gives it a sample count.
+
+What it cost, measured: at Bathurst on 20 Sep 2026 the race ran map 3 by the
+driver's own last-minute choice and burned 8.2-8.5 L/lap against a plan costed
+at 10.625. The race's own burn was installed for every fuel call on lap 7 and
+the per-lap target was still judging him against 10.625 on lap 28 - all 28
+`target:` lines of the race read `against 10.625 L`. "Burn 2.2 litres under"
+on lap 25 said nothing about lap 25; it restated the plan's error. That is
+rule 10's latch: a reference that disagrees with everything is the thing that
+is wrong.
+
+So there are two figures and they never merge (rule 13):
+
+* `burn_full_l` / `burn_save_l` - **what the plan asked for**, set once from
+  the plan and never written again.
+* `measured_burn_l` - **what this race is burning**, handed over by the
+  coordinator from the same expression that sizes every other fuel call
+  (`RaceState.fuel_per_lap_l`, with `fuel_burn_basis` and `fuel_burn_laps`
+  beside it), so the target and the fill cannot disagree about one number
+  (rule 12).
+
+`for_lap` reports against the measured burn once it is installed and **names
+which one it used** (`LapTarget.burn_source`) with the laps behind it
+(`LapTarget.burn_laps`), and carries the plan's figure alongside as
+`planned_burn_l` so the two are always both readable. Nothing overwrites
+anything: clearing the measured burn - which is what happens if the race's own
+burn is ever retired - puts the target straight back on the plan's figure.
 
 ### What a lap's target is
 
@@ -47,6 +81,20 @@ from dataclasses import dataclass
 from pitcrew.strategy.model import FUEL_WEIGHT_S_PER_L_PER_LAP, planned_lap_s
 
 TARGETS_KEY = "targets"
+
+# **What a lap's burn target was measured against, said out loud.** Two
+# references for one word is rule 13, and "Burn 2.2 litres under" meant the
+# plan's 10.625 all through a race run at 8.4.
+#
+# `BURN_BASIS_RACE` is word for word `refuel._burn_words`': the same figure
+# said in two places has to be said the same way. The other one deliberately
+# is NOT - the box says "the practice burn" because before a race burn is
+# installed `RaceState.fuel_per_lap_l` holds `build_inputs`' practice figure,
+# while the target's fallback is the plan's own `fuel_burns.full`. Those are
+# two numbers reached by two routes and they can differ, so they get two
+# names; that is rule 13 kept, not broken.
+BURN_BASIS_PLAN = "the plan"
+BURN_BASIS_RACE = "this race's burn"
 
 SOURCE_AUTHOR = "author"
 SOURCE_PRACTICE = "practice"
@@ -324,6 +372,17 @@ class LapTarget:
     lap_source: str | None = None
     # Why there is no lap time, in words, where there is none.
     why_no_lap: str | None = None
+    # **Which burn `burn_l` is** - `BURN_BASIS_PLAN` or `BURN_BASIS_RACE` -
+    # or None where there is no burn target at all. Never absent while
+    # `burn_l` is set: a delta with no stated reference is rule 13.
+    burn_source: str | None = None
+    # Green laps behind `burn_l` where it is this race's own (rule 4). None
+    # on the plan's figure, whose sample count is the plan's own `expects`
+    # and is not a count of laps run today.
+    burn_laps: int | None = None
+    # **What the plan asked for, always** - kept beside the figure actually
+    # used so the two can be shown together and never merge into one word.
+    planned_burn_l: float | None = None
 
 
 @dataclass(frozen=True)
@@ -344,8 +403,50 @@ class PlanTargets:
                  burn_save_l: float | None) -> None:
         self.compounds = compounds
         self.fuel_weight = fuel_weight
+        # The plan's, set once here and never written again.
         self.burn_full_l = burn_full_l
         self.burn_save_l = burn_save_l
+        # This race's own, installed by `install_measured_burn` and cleared
+        # by it. None until the race has shown one.
+        self.measured_burn_l: float | None = None
+        self.measured_burn_laps: int | None = None
+        self.measured_burn_basis: str | None = None
+
+    def install_measured_burn(self, burn_l: float | None, *,
+                              laps: int | None = None,
+                              basis: str | None = None) -> bool:
+        """This race's own burn, beside the plan's. True when it moved.
+
+        **Handed over, never derived here.** The caller passes the figure
+        that is already sizing every other fuel call - the coordinator's
+        `RaceState.fuel_per_lap_l` with its `fuel_burn_basis` and
+        `fuel_burn_laps` - so the per-lap target and the fill are two readings
+        of one number rather than two numbers (rule 12).
+
+        **And it can be retired** (rule 10). `None` puts the target back on
+        the plan's figure, which is what must happen if the race's own burn is
+        ever withdrawn: this is a reference that judges every lap, and a
+        reference nothing can clear is the ratchet.
+
+        A non-positive burn or a burn with no laps behind it is not a burn and
+        is refused rather than clamped (rules 3 and 9).
+
+        **The return value is the change of REFERENCE, not of figure.** The
+        race's own burn moves a hundredth of a litre most crossings and the
+        coordinator already logs every one of those (`burn installed on lap
+        N`); what is news is the target moving between the plan's figure and
+        the race's, because that is the moment "Burn 2.2 litres under" starts
+        meaning something else. Returning True on every wobble would log
+        twenty-two lines a race and retire the stint average on each of them.
+        """
+        got = _number(burn_l)
+        if got is None or got <= 0.0 or not laps or laps <= 0:
+            got, laps, basis = None, None, None
+        rebased = (got is None) != (self.measured_burn_l is None)
+        self.measured_burn_l = got
+        self.measured_burn_laps = int(laps) if laps else None
+        self.measured_burn_basis = basis
+        return rebased
 
     @classmethod
     def from_plan(cls, plan) -> "PlanTargets | None":
@@ -385,17 +486,32 @@ class PlanTargets:
 
     def for_lap(self, *, compound: str | None, saving: bool, lap_on_set: int,
                 fuel_at_start_l: float | None) -> LapTarget:
-        burn = self.burn_save_l if saving else self.burn_full_l
+        """What this lap is asked to be, and against whose burn.
+
+        **The burn half reports against this race's own figure the moment one
+        is installed**, and names it. The measured burn is already filed under
+        the beep column being driven (`expectations.current_fuel_basis` reads
+        the column), so it stands in for whichever of the plan's two columns
+        this lap is on - which is the same figure the fill and the box call
+        are using at that instant.
+        """
+        planned = self.burn_save_l if saving else self.burn_full_l
+        burn, burn_laps = planned, None
+        source = BURN_BASIS_PLAN if planned is not None else None
+        if self.measured_burn_l is not None:
+            burn = self.measured_burn_l
+            burn_laps = self.measured_burn_laps
+            source = BURN_BASIS_RACE
         entry = self.compounds.get(compound) if compound else None
         why = None
-        lap_ms = source = None
+        lap_ms = lap_source = None
         if compound is None:
             why = "compound not known"
         elif entry is None:
             why = f"no {compound} target on the plan"
         else:
             base = entry.save_lap_time_ms if saving else entry.lap_time_ms
-            source = entry.save_source if saving else entry.lap_source
+            lap_source = entry.save_source if saving else entry.lap_source
             if base is None:
                 why = (f"no fuel-save {compound} target" if saving
                        else f"no {compound} target on the plan")
@@ -410,5 +526,8 @@ class PlanTargets:
                 lap_ms = int(round(seconds * 1000.0))
         return LapTarget(lap_ms=lap_ms, burn_l=burn, compound=compound,
                          saving=saving, lap_on_set=lap_on_set,
-                         lap_source=source if lap_ms is not None else None,
-                         why_no_lap=why)
+                         lap_source=lap_source if lap_ms is not None else None,
+                         why_no_lap=why,
+                         burn_source=source if burn is not None else None,
+                         burn_laps=burn_laps if burn is not None else None,
+                         planned_burn_l=planned)

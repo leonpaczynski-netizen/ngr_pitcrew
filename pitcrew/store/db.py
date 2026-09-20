@@ -1657,34 +1657,145 @@ class Store:
                 "UPDATE race_revisions SET verdict = ?, verdict_detail = ? "
                 "WHERE id = ?", (verdict, detail, int(revision_id)))
 
+    # **Every table that holds a driver's name as a string.** The rename has
+    # to reach all of them or it does not rename the driver, it splits him:
+    # measured on the live archive 20 Sep 2026, against a `rename_driver` that
+    # rewrote `rival_stops` alone - 0 orphans there, and 234 in
+    # `board_positions`, 343 in `traffic`, 3,057 in `gap_reads`, and both rows
+    # of `series_teammates`, which is the whole teammate feature.
+    #
+    # `gap_reads.subject` is the odd one: it carries three namespaces at once
+    # (real names, `Car #N` handles, and bare roster indices that meant
+    # something only inside the process that wrote them). Matching on the
+    # exact string is still right - an integer never equals a name - so a
+    # rename moves the rows it should and leaves the legacy ones for the
+    # migration that will classify them.
+    _NAME_COLUMNS = (("rival_stops", "driver"),
+                     ("board_positions", "driver"),
+                     ("board_sightings", "driver"),
+                     ("traffic", "rival"),
+                     ("gap_reads", "subject"),
+                     ("series_teammates", "driver"))
+
     def rename_driver(self, old: str, new: str) -> int:
-        """Give a driver his real name, and carry his stops across with him.
+        """Give a driver his real name, and carry his whole history with him.
 
-        **Both tables in one transaction, or the rename loses the history.**
-        `rival_stops.driver` is the name, not an id - deliberately, so a stop
-        is readable without a join - which means renaming the driver and
-        renaming his stops are the same act. Returns the stops moved.
+        **Seven tables hold that name, and this used to rewrite one.** The
+        docstring here claimed "both tables in one transaction, or the rename
+        loses the history" and it was right about the principle and wrong
+        about the scope: `rival_stops`, `board_positions`, `board_sightings`,
+        `traffic`, `gap_reads`, `series_teammates` and the names frozen inside
+        `race_knowledge.rivals_json` all key on the string. Everything not
+        rewritten was orphaned on the spot, silently, and the orphan count
+        measured on the live archive was zero in exactly the one table this
+        touched.
 
-        Merging onto an existing name is allowed: two provisional clusters that
-        turn out to be one person is the expected reason to do this at all.
+        All of it in one transaction, because a half-renamed driver is two
+        drivers - which is the defect this operation exists to repair.
+
+        Merging onto an existing name is allowed: two provisional clusters
+        that turn out to be one person is the expected reason to do this at
+        all. **On a merge the provisional row's exemplar is carried across
+        before the row goes**, where the survivor has none. Deleting it was
+        how the cleanup operation generated the next race's phantoms: the
+        exemplar is the only artefact that would have recognised that car
+        again, and destroying it guaranteed a fresh handle next time.
+
+        `races_seen` is deliberately NOT summed: it counts races per NAME and
+        cannot say which races, so two handles that were the same car in the
+        same race would count that race twice - and that is precisely the case
+        a merge repairs. It stays the survivor's own count until something
+        records appearances per session.
+
+        Returns the stops moved, as before, so the tools that print it are
+        unchanged; the full per-table breakdown goes to the log.
         """
         if not new or old == new:
             return 0
+        moved = 0
+        carried: dict[str, int] = {}
         with self._write() as conn:
-            moved = conn.execute(
-                "UPDATE rival_stops SET driver = ? WHERE driver = ?",
-                (new, old)).rowcount
+            for table, column in self._NAME_COLUMNS:
+                try:
+                    rows = conn.execute(
+                        f"UPDATE {table} SET {column} = ? WHERE {column} = ?",
+                        (new, old)).rowcount
+                except sqlite3.OperationalError:
+                    # A table this database predates. Said, not swallowed:
+                    # a name left behind in it is an orphan either way.
+                    log("store").warning(
+                        "rename_driver: no %s.%s in this database, so any "
+                        "%r in it keeps the old name", table, column, old)
+                    continue
+                if rows:
+                    carried[f"{table}.{column}"] = int(rows)
+                if table == "rival_stops":
+                    moved = int(rows)
+            blobs = self._rename_in_knowledge(conn, old, new)
+            if blobs:
+                carried["race_knowledge.rivals_json"] = blobs
             existing = conn.execute(
-                "SELECT id FROM drivers WHERE name = ?", (new,)).fetchone()
+                "SELECT id, exemplar, rows, cols FROM drivers WHERE name = ?",
+                (new,)).fetchone()
             if existing is None:
                 conn.execute(
                     "UPDATE drivers SET name = ?, updated_at = ? "
                     "WHERE name = ?", (new, _now(), old))
             else:
-                # The target already exists, so this is a merge: keep the one
-                # that is already named and retire the provisional row.
+                going = conn.execute(
+                    "SELECT exemplar, rows, cols FROM drivers WHERE name = ?",
+                    (old,)).fetchone()
+                if (going is not None and going["exemplar"] is not None
+                        and existing["exemplar"] is None):
+                    # **The exemplar outlives the handle it was filed under.**
+                    conn.execute(
+                        "UPDATE drivers SET exemplar = ?, rows = ?, cols = ?, "
+                        "updated_at = ? WHERE id = ?",
+                        (going["exemplar"], going["rows"], going["cols"],
+                         _now(), existing["id"]))
+                    carried["drivers.exemplar"] = 1
                 conn.execute("DELETE FROM drivers WHERE name = ?", (old,))
-            return int(moved)
+        log("store").info(
+            "renamed %r to %r: %s", old, new,
+            ", ".join(f"{what} {count}" for what, count
+                      in sorted(carried.items())) or "nothing on file")
+        return moved
+
+    @staticmethod
+    def _rename_in_knowledge(conn, old: str, new: str) -> int:
+        """Carry the name into `race_knowledge.rivals_json`. Rows rewritten.
+
+        **A name frozen inside a JSON blob is still that driver's name**, and
+        no `UPDATE ... SET column = ?` can reach it. The blob is a list of
+        `{"rival": ..., "tendency": ...}` written by `analysis/rivals.py`;
+        anything else in there is left exactly as it was found rather than
+        rewritten on a guess.
+        """
+        try:
+            rows = conn.execute(
+                "SELECT id, rivals_json FROM race_knowledge "
+                "WHERE rivals_json IS NOT NULL").fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        changed = 0
+        for row in rows:
+            try:
+                records = json.loads(row["rivals_json"])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(records, list):
+                continue
+            touched = False
+            for record in records:
+                if isinstance(record, dict) and record.get("rival") == old:
+                    record["rival"] = new
+                    touched = True
+            if touched:
+                conn.execute(
+                    "UPDATE race_knowledge SET rivals_json = ? WHERE id = ?",
+                    (json.dumps(records), row["id"]))
+                changed += 1
+        return changed
 
     def provisional_driver_name(self, taken=None) -> str:
         """A handle for a cluster nobody has named yet.

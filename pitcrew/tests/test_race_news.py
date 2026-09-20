@@ -331,6 +331,230 @@ def test_the_refresher_does_not_alternate_between_two_cars():
     assert figures == {"The car ahead, 1.2."}, said
 
 
+def test_one_car_under_two_handles_is_never_a_new_car():
+    """Session 204 (Bathurst, 20 Sep 2026): the slot changed handle 71 times
+    for a seven-car field and 43 of those were an immediate A -> B -> A
+    return of one driver between two roster clusters - `PUNISHED` and `277`
+    alternating 11 times. 22 of the 31 gap calls George made that night were
+    triggered by nothing but that churn.
+
+    The figure decides, not the handle: the returning run's first reading is
+    continuous with the slot's last, so it is one car's series and nothing
+    is announced.
+    """
+    co = a_race()
+    said = [c for c in spaced(co, "ahead", [2.1, 2.1, 2.1], "PUNISHED")
+            + run(co, 1) if c.kind == GAPS]
+    assert [c.spoken() for c in said] == ["PUNISHED ahead, 2.1."]
+    for lap in range(6, 12):
+        co.state.lap = lap
+        said += [c for c in
+                 spaced(co, "ahead", [2.12, 2.14, 2.11], "277")
+                 + spaced(co, "ahead", [2.13, 2.1, 2.12], "PUNISHED")
+                 + run(co, 5) if c.kind == GAPS]
+    # Whatever is said after the first line is the once-a-lap refresher, at a
+    # gap that has not moved. No handle change is news.
+    triggers = [c.why_spoken.split(";")[0] for c in said[1:]]
+    assert triggers and all("new" not in t for t in triggers), triggers
+    # Rule 13: one car in the slot, so one name, whichever handle was read.
+    assert {c.spoken() for c in said} == {"PUNISHED ahead, 2.1."}
+    assert co.news._slot_new["ahead"] == 1       # the first fill, and no more
+    assert co.news._slot_bound["ahead"] == 1     # 277, taken as the same car
+    assert co.news._bound["ahead"] == {"PUNISHED", "277"}
+
+
+def test_a_pass_under_a_second_handle_is_a_new_car_on_the_same_reading():
+    """The flicker's suppression may not cost a real overtake its call. The
+    new car arrives under a handle the slot has never bound, and its figure
+    is one no car's gap could have reached - so it is announced on the third
+    agreeing reading, exactly as a new handle always was."""
+    co = a_race(position=8)
+    assert gap_lines(spaced(co, "ahead", [0.4, 0.4, 0.4], "PUNISHED",
+                            packet=_Packet(8))
+                     + run(co, 1, packet=_Packet(8))) == ["PUNISHED ahead, 0.4."]
+    run(co, RaceCoordinator.MID_LAP_SPACING_S, packet=_Packet(8))
+    run(co, 2, packet=_Packet(7))                # we pass him
+    assert gap_lines(spaced(co, "ahead", [4.0, 4.02], "277",
+                            packet=_Packet(7))) == []      # two, held
+    said = [c for c in spaced(co, "ahead", [4.04], "277", packet=_Packet(7))
+            if c.kind == GAPS]                             # the third
+    assert [c.spoken() for c in said] == ["The car ahead, 4.0."]
+    assert "a new car is ahead" in said[0].why_spoken
+    assert co.news._slot_new["ahead"] == 2
+    # Rule 13: the car that left took its name with it - the new one is not
+    # PUNISHED, and is not called PUNISHED.
+    assert co.news.neighbour("ahead") is None
+
+
+def test_a_new_car_does_not_wear_the_last_ones_name():
+    """Rule 13. The slot keeps one name while one car is in it, whichever
+    handle was read - but a name is evidence about a car, not about a box,
+    and the car leaving takes it. Otherwise a person's name is said about
+    somebody else."""
+    co = a_race(position=8)
+    spaced(co, "ahead", [0.4, 0.4, 0.4], "PUNISHED", packet=_Packet(8))
+    run(co, 1, packet=_Packet(8))
+    # The same car read under a bare cluster id: still PUNISHED.
+    spaced(co, "ahead", [0.42, 0.41, 0.43], "277", packet=_Packet(8))
+    assert co.news.neighbour("ahead") == "PUNISHED"
+    assert gap_lines(spaced(co, "ahead", [0.4], "277", packet=_Packet(8))
+                     + run(co, RaceCoordinator.MID_LAP_SPACING_S,
+                           packet=_Packet(8))) == []
+    # We pass him, and the box shows the next car up the road under `277` -
+    # a handle the slot has bound, so the break is in the FIGURE. The name
+    # belonged to the car that left, and goes with it.
+    run(co, 2, packet=_Packet(7))
+    said = gap_lines(spaced(co, "ahead", [4.5, 4.52, 4.54], "277",
+                            packet=_Packet(7))
+                     + run(co, 1, packet=_Packet(7)))
+    assert said == ["The car ahead, 4.5."]
+    assert co.news.neighbour("ahead") is None
+    assert co.news._bound["ahead"] == {"277"}
+
+
+def test_a_handle_refused_as_a_slot_may_not_name_the_car_through_a_binding():
+    """`gaps_call` drops the name of a handle that named a slot rather than
+    a car - but it checks the handle the slot is keyed on. A refused handle
+    bound to the slot beside it would hand the same name back through the
+    side door."""
+    co = a_race(position=8)
+    spaced(co, "ahead", [0.3, 0.3, 0.3], "78", packet=_Packet(8))
+    run(co, 1, packet=_Packet(8))
+    run(co, 2, packet=_Packet(7))                # we pass: 78 names the slot
+    spaced(co, "ahead", [2.4, 2.4, 2.4], "78", packet=_Packet(7))
+    assert "78" in co.news._merged
+    co.news._neighbour_name["ahead"] = None
+    spaced(co, "ahead", [2.42, 2.41], "PUNISHED", packet=_Packet(7))
+    co.news._merged["PUNISHED"] = "held a slot"
+    spaced(co, "ahead", [2.43, 2.44, 2.45], "PUNISHED", packet=_Packet(7))
+    assert "PUNISHED" in co.news._bound["ahead"]
+    assert co.news.neighbour("ahead") is None
+
+
+def test_a_refusal_that_disagrees_with_every_reading_since_is_retired(caplog):
+    """CLAUDE.md rule 10. On session 204 `PUNISHED` held the behind slot
+    across one place change at 20:51:32, was written off as naming a slot
+    rather than a car - no name, no pace - and nothing could reinstate him.
+    He was one of two real names in a seven-car field and went unnamed for
+    the last 26 minutes while still racing us.
+
+    A refusal correctly never becomes the baseline, so something else has to
+    retire it: `CLEAR_AFTER_CLEAN_READS` readings running that the car in the
+    slot accepted as its own. And the accepts are logged with the count
+    that set the bar, not only the refusal.
+    """
+    co = a_race(position=8)
+    spaced(co, "ahead", [0.3, 0.3, 0.3], "PUNISHED", packet=_Packet(8))
+    run(co, 1, packet=_Packet(8))
+    run(co, 2, packet=_Packet(7))
+    spaced(co, "ahead", [2.4, 2.4, 2.4], "PUNISHED", packet=_Packet(7))
+    assert "PUNISHED" in co.news._merged
+    assert not co.news.one_car("PUNISHED")
+    with caplog.at_level("INFO", logger="pitcrew.race"):
+        spaced(co, "ahead", [2.4] * (news_module.CLEAR_AFTER_CLEAN_READS - 1),
+               "PUNISHED", packet=_Packet(7))
+        assert "PUNISHED" in co.news._merged      # one short is still refused
+        spaced(co, "ahead", [2.4], "PUNISHED", packet=_Packet(7))
+    assert co.news.one_car("PUNISHED")
+    assert co.news.neighbour("ahead") == "PUNISHED"
+    cleared = [r.message for r in caplog.records if "is one car again" in
+               r.message]
+    assert cleared and str(news_module.CLEAR_AFTER_CLEAN_READS) in cleared[0]
+
+
+def test_an_unconfirmed_handle_is_believed_again_once_its_readings_are(caplog):
+    """Rule 10, the other refusal. `_unreliable` hedges every gap line about
+    a handle with "Unconfirmed." and says no pace off it at all, and it
+    could not be taken back either: on session 204 `Car #9` earned it on its
+    second jump and every later line about the car ahead carried the word to
+    the flag.
+
+    **The hedge is not the defect - the latch is.** §5.5 gives him
+    "unconfirmed" to act on, so this does not delete the word; it retires it
+    on the same sustained clean run that retires `_merged`, and drops the
+    jump count with it so the hedge has to be earned from nothing again.
+
+    Replayed over session 204's 2,057 named readings: two handles earned the
+    hedge, `PUNISHED` on lap 13 and `Car #9` on lap 18, and neither could
+    shed it - 5 of the 29 gap calls carried "Unconfirmed." and both handles
+    were still refused at the flag. With the retirement each cleared on the
+    next lap, after 12 readings of its own gap: `PUNISHED` held it for 71 s
+    and `Car #9` for 74 s. **One call of the 29 still carries the word** -
+    the one made inside `Car #9`'s 74 s, which is the call the hedge is for.
+    The other four were spoken 250 s, 27 s, 117 s and 427 s after the reader
+    had settled. Each handle jumped once more afterwards and neither reached
+    the bar again, so the word was not said when it was not earned.
+    """
+    co = a_race()
+    spaced(co, "ahead", [3.0, 3.0, 3.0], "80")
+    run(co, 1)
+    spaced(co, "ahead", [6.0, 6.0, 6.0], "80")         # jump one
+    spaced(co, "ahead", [3.2, 3.2, 3.2], "80")         # jump two
+    assert "80" in co.news._unreliable and co.news._jumps["80"] == 2
+    run(co, 60)
+    co.state.lap = 7
+    said = [c for c in spaced(co, "ahead", [3.2, 3.2], "80") + run(co, 1)
+            if c.kind == GAPS]
+    assert [c.spoken() for c in said] == ["The car ahead, 3.2. Unconfirmed."]
+    assert said[0].confidence == LOW
+    with caplog.at_level("INFO", logger="pitcrew.race"):
+        spaced(co, "ahead", [3.2] * (news_module.CLEAR_AFTER_CLEAN_READS - 3),
+               "80")
+        assert "80" in co.news._unreliable   # one short is still unconfirmed
+        spaced(co, "ahead", [3.2], "80")
+    assert "80" not in co.news._unreliable
+    assert co.news.one_car("80") and "80" not in co.news._jumps
+    cleared = [r.message for r in caplog.records
+               if "is one car again" in r.message]
+    assert cleared and "jump(s) are forgotten" in cleared[0]
+    run(co, 60)
+    co.state.lap = 8
+    said = [c for c in spaced(co, "ahead", [3.2, 3.2], "80") + run(co, 1)
+            if c.kind == GAPS]
+    assert [c.spoken() for c in said] == ["The car ahead, 3.2."]
+    assert said[0].confidence == MEDIUM
+
+
+def test_a_reader_that_keeps_jumping_stays_unconfirmed():
+    """The other half of rule 10 again: a retirement that lets a real
+    refusal go is no better than a latch. Every jump restarts the clean run,
+    and after a clear the handle re-earns the hedge from nothing - which a
+    reader that really jumps does in seconds."""
+    co = a_race()
+    spaced(co, "ahead", [3.0, 3.0, 3.0], "80")
+    run(co, 1)
+    for _ in range(4):
+        # A jump, then a clean run that stops short of the bar, over and
+        # over: the hedge is earned, cleared, and earned again.
+        spaced(co, "ahead", [6.0, 6.0, 6.0], "80")
+        spaced(co, "ahead", [3.2, 3.2, 3.2], "80")
+        assert "80" in co.news._unreliable
+        spaced(co, "ahead", [3.2] * (news_module.CLEAR_AFTER_CLEAN_READS - 4),
+               "80")
+        assert "80" in co.news._unreliable, "cleared without a clean run"
+    # And a handle whose jumps stop is believed again, so the word means
+    # something when it is said.
+    spaced(co, "ahead", [3.2] * news_module.CLEAR_AFTER_CLEAN_READS, "80")
+    assert "80" not in co.news._unreliable
+
+
+def test_a_handle_that_really_names_a_slot_never_clears():
+    """The other half of rule 10: the retirement may not let a genuine
+    refusal go. Every fresh hold across a place change writes it again and
+    restarts the count, so the handle keeps earning it."""
+    co = a_race(position=8)
+    spaced(co, "ahead", [0.3, 0.3, 0.3], "78", packet=_Packet(8))
+    run(co, 1, packet=_Packet(8))
+    place = 7
+    for gap in (2.4, 5.0, 8.0, 12.0):
+        run(co, 2, packet=_Packet(place))
+        spaced(co, "ahead", [gap] * (news_module.CLEAR_AFTER_CLEAN_READS - 2),
+               "78", packet=_Packet(place))
+        place -= 1
+        assert "78" in co.news._merged
+    assert not co.news.one_car("78")
+
+
 def test_a_jump_across_a_place_change_is_a_new_car_once_three_agree():
     co = a_race(position=8)
     assert gap_lines(spaced(co, "ahead", [0.3, 0.3, 0.3], "78",
@@ -416,9 +640,12 @@ def test_the_one_car_state_is_reset_with_the_race():
     assert co.news._merged
     co.news.new_session()
     news = co.news
-    assert (news._merged, news._unreliable, news._jumps, news._segment,
-            news._key_ref, len(news._moments)) == ({}, {}, {}, {}, {}, 0)
+    assert (news._merged, news._clean_run, news._unreliable, news._jumps,
+            news._segment, len(news._moments)) == ({}, {}, {}, {}, {}, 0)
     assert news._ref == {"ahead": None, "behind": None}
+    assert news._bound == {"ahead": set(), "behind": set()}
+    assert news._slot_seen == news._slot_new == news._slot_bound == {
+        "ahead": 0, "behind": 0}
 
 
 # ------------------------------------------------------------ pace

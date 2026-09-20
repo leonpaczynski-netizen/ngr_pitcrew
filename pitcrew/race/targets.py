@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pitcrew.engineer import say
+from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
 
 # **Inside this, the lap is on target.** Two tenths: the finest gap the voice
 # says in words ("two tenths"), so "on target" never covers a gap that would
@@ -35,6 +36,31 @@ ON_TARGET_L = 0.1
 # noise is about 1.7% of a lap and measured incidents run 5-10% over.
 OFF_TARGET_FRACTION = 0.04
 
+# **The two references, in the one word a tile has room for.** The voice says
+# `strategy.targets.BURN_BASIS_PLAN` ("the plan") and `BURN_BASIS_RACE` ("this
+# race's burn"); a caption on the phone strip is fourteen characters wide and
+# a rack row's note column is narrower than that, so neither sentence fits
+# where the number is.
+#
+# **Each word is the head noun of the sentence he hears, and nothing else.**
+# "vs race" is what "Against this race's burn." shortens to and could not be
+# mistaken for "Against the plan."; the two stay a glance apart. An
+# abbreviation of the spoken reference is the same vocabulary as the spoken
+# reference - a third word for either of them, chosen for a screen, would be
+# rule 13 with extra steps.
+#
+# Keyed off the constants themselves rather than off a string typed here, and
+# **unknown is None, not a guess**: a basis added to `strategy.targets` later
+# arrives with no word and the surfaces draw no qualifier, which is a gap
+# somebody notices, where inheriting whichever word was nearest is the defect
+# this exists to close (rule 3).
+BURN_WORDS = {BURN_BASIS_PLAN: "plan", BURN_BASIS_RACE: "race"}
+
+
+def burn_source_word(source: str | None) -> str | None:
+    """"plan" or "race" for a screen, or None where nothing was said."""
+    return BURN_WORDS.get(source) if source else None
+
 
 @dataclass(frozen=True)
 class TargetVerdict:
@@ -46,6 +72,15 @@ class TargetVerdict:
     burn_l: float | None
     target_burn_l: float | None
     burn_delta_l: float | None
+    # **Which burn `target_burn_l` is** - `strategy.targets.BURN_BASIS_PLAN`
+    # or `BURN_BASIS_RACE` - and the green laps behind it where it is this
+    # race's own. Rule 4 and rule 13: the delta is meaningless without its
+    # reference, and the reference changed mid-race at Bathurst Rd 8.
+    burn_source: str | None = None
+    burn_laps: int | None = None
+    # What the plan asked for, whatever was actually used. Kept so the audit
+    # can read both halves off one row.
+    planned_burn_l: float | None = None
 
     @property
     def pace_on_target(self) -> bool | None:
@@ -101,7 +136,17 @@ def judge(lap, target) -> TargetVerdict | None:
     return TargetVerdict(lap=int(lap.lap_num), lap_ms=lap_ms,
                          target_ms=target.lap_ms, lap_delta_s=lap_delta,
                          burn_l=burn, target_burn_l=target.burn_l,
-                         burn_delta_l=burn_delta)
+                         burn_delta_l=burn_delta,
+                         # **From the same target the delta was taken off**
+                         # (rule 12): a reference read from anywhere else
+                         # could name a burn this delta was not measured
+                         # against.
+                         burn_source=(getattr(target, "burn_source", None)
+                                      if burn_delta is not None else None),
+                         burn_laps=(getattr(target, "burn_laps", None)
+                                    if burn_delta is not None else None),
+                         planned_burn_l=getattr(target, "planned_burn_l",
+                                                None))
 
 
 def pace_sentence(delta_s: float | None) -> str:
@@ -119,19 +164,38 @@ def pace_sentence(delta_s: float | None) -> str:
             f"{'slow' if delta_s > 0 else 'quick'}.")
 
 
-def burn_sentence(delta_l: float | None) -> str:
-    """"Burn on target." / "Burn 0.3 litres over." / "Burn 0.2 litres under."
+def burn_sentence(delta_l: float | None, against: str | None = None) -> str:
+    """"Burn on target. Against the plan." / "Burn 0.3 litres over. ..."
 
     **"Burn", not "Fuel"**: the heartbeat's last clause is "Fuel good to the
-    stop", which is the tank. This is the lap's consumption against the plan's
-    per-lap figure - a different quantity, so a different word (rule 13).
+    stop", which is the tank. This is the lap's consumption against a per-lap
+    figure - a different quantity, so a different word (rule 13).
+
+    **And the reference is a sentence of its own, every time.** Until 20 Sep
+    2026 this said "Burn 2.2 litres under" whether the figure behind it was
+    the plan's or this race's own, and at Bathurst Rd 8 it was the plan's for
+    all 28 laps of a race run 22% under it. Two calls in the same words
+    meaning two things is rule 13, and under a helmet he cannot ask which one
+    he just heard.
+
+    A separate sentence rather than a longer clause, for a mechanical reason
+    as well as a spoken one: `phrase_manifest._pieces` can only render a
+    sentence carrying ONE number, so "Burn 0.3 litres under this race's burn
+    over 19 laps" would be a line the voice pack cannot hold and every
+    decisive burn call would fall to live synthesis. The reference sentence
+    carries no number at all, so it is one clip for the race.
+
+    `against` is `strategy.targets.BURN_BASIS_PLAN` or `BURN_BASIS_RACE`.
+    None names nothing rather than guessing - the caller did not say.
     """
     if delta_l is None:
         return ""
     if abs(delta_l) < ON_TARGET_L:
-        return "Burn on target."
-    return (f"Burn {abs(delta_l):.1f} litres "
-            f"{'over' if delta_l > 0 else 'under'}.")
+        said = "Burn on target."
+    else:
+        said = (f"Burn {abs(delta_l):.1f} litres "
+                f"{'over' if delta_l > 0 else 'under'}.")
+    return f"{said} Against {against}." if against else said
 
 
 def stint_burn(state) -> tuple[float | None, int, bool | None]:
@@ -157,6 +221,24 @@ def board_target_fields(state) -> dict:
     A function rather than a controller method so the board's stubbed tests
     need nothing bound to reach it. Every field None where there is nothing:
     no plan targets, the out lap, a lap that got no verdict (rule 3).
+
+    **The burn target's reference travels with it, and so does its lap
+    count.** `target_burn_l` steps from the plan's figure to this race's the
+    moment one is installed - 10.625 to 8.47 around lap 7 at Bathurst Rd 8,
+    a drop of 2.2 L - and until 21 Sep 2026 nothing on any screen said so.
+    The voice names it and the log names it; the tile drew a number that
+    changed what it meant with no mark on it, which is rule 13 on the surface
+    he actually looks at. `target_burn_laps` is rule 4 beside it: the plan's
+    figure has no lap count and this race's does, so the count appearing IS
+    the figure turning from a plan into a measurement.
+
+    **`last_burn_source` is the verdict's, not the target's, and they are two
+    references for one lap.** `target_verdict` is the lap just finished and
+    `lap_target` is the lap now being driven, so on the lap the reference
+    changes the delta was judged against the old one while the target beside
+    it is the new one. They are carried apart rather than pooled so the
+    surfaces can mark that lap instead of quietly wording it as either
+    (rule 12: the reference shown comes off the same object the figure did).
     """
     target = getattr(state, "lap_target", None)
     verdict = getattr(state, "target_verdict", None)
@@ -167,11 +249,14 @@ def board_target_fields(state) -> dict:
         "stint_burn_saving": stint_saving,
         "target_lap_ms": getattr(target, "lap_ms", None),
         "target_burn_l": getattr(target, "burn_l", None),
+        "target_burn_source": getattr(target, "burn_source", None),
+        "target_burn_laps": getattr(target, "burn_laps", None),
         "target_why": (getattr(target, "why_no_lap", None)
                        if target is not None else None),
         "target_saving": getattr(target, "saving", None),
         "last_vs_target_s": getattr(verdict, "lap_delta_s", None),
         "last_burn_vs_target_l": getattr(verdict, "burn_delta_l", None),
+        "last_burn_source": getattr(verdict, "burn_source", None),
     }
 
 
@@ -179,6 +264,6 @@ def verdict_sentence(verdict: TargetVerdict | None) -> str:
     """Both halves, pace first. Empty where there is no verdict."""
     if verdict is None:
         return ""
-    return " ".join(part for part in (pace_sentence(verdict.lap_delta_s),
-                                      burn_sentence(verdict.burn_delta_l))
-                    if part)
+    return " ".join(part for part in (
+        pace_sentence(verdict.lap_delta_s),
+        burn_sentence(verdict.burn_delta_l, verdict.burn_source)) if part)

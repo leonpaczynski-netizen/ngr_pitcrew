@@ -23,6 +23,13 @@
   big type, no thin grey. Our row stands out by its plate, not by colour.
   A car standing in its box says so in amber, because that is the one thing
   on this screen that is happening right now.
+
+  **Two faces, and the payload says which** (20 Sep 2026). In a race, the
+  timing tower above. In practice there is no field at all - `field.py` needs
+  a race - and this page was a cover reading "no race running" beside three
+  inert buttons, so it carries the practice board instead: the four corners,
+  the three sectors, the lap face and the lamps. `compose_practice` words all
+  of it; see `#practice` in the styles for why they share one grid cell.
 -->
 <style>
   :root {
@@ -170,8 +177,77 @@
     padding: 0.3vh 0.6vw; font-family: var(--label); font-weight: 700; font-size: 3vh;
     letter-spacing: 0.06em; }
   .stops .txt { color: var(--good); }
+  /* **A car the app cannot name is drawn as the absence it is.** The minted
+     handle "Car #164" - a global counter, not his race number and not on the
+     driver's screen anywhere - used to print in the measured ink beside real
+     names. Same column, same case, same weight: nothing said one was read
+     and the other invented. Absent ink and a smaller face, so the row is
+     still there with its place, its stop and its fuel, and only the name
+     reads as missing. */
+  .txt.unnamed { color: var(--reg-absent); font-size: 3.4vh; letter-spacing: 0.06em; }
 
   #foot { font-family: var(--label); font-weight: 700; font-size: 3vh; color: var(--dim); }
+
+  /* ---- the practice face (20 Sep 2026). His ask: *"in practice board on
+     monitor should move to tablet as it has nothing on it"* - outside a race
+     this page was a cover reading "no race running" and three inert buttons,
+     while the only practice instrument in the app was on the monitor, which
+     is now the lap rack.
+
+     It shares the table's grid cell rather than sitting under it: one of the
+     two is displayed and the other is `none`, so neither can add its height
+     to the other's. The rack itself is NOT here - it is on the monitor,
+     which is the half of his ask this page is the other side of. */
+  #practice { display: none; grid-row: 2; min-height: 0; row-gap: 0.6vh;
+    grid-template-rows: repeat(6, min-content); align-content: space-evenly; }
+  #practice.on { display: grid; }
+  #table.off { display: none; }
+  .band { display: grid; column-gap: 1.2vw; }
+  #p-faces, #p-sectors, #p-lights { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #p-tyres { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* **The register is on the CAPTION, never on the value** - `driver_view`'s
+     own rule, in its own words: the value's colour already means quick or
+     slow, and a second meaning on the same pixels is a collision. */
+  .pf { display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    min-width: 0; text-align: center; }
+  .pf .cap { font-family: var(--label); font-weight: 700; font-size: 2.6vh;
+    letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+    color: var(--aged-measured, var(--reg-measured)); }
+  .pf.r-derived .cap { color: var(--reg-derived); }
+  .pf.r-absent .cap { color: var(--reg-absent); }
+  .pf .val { font-family: var(--number); font-weight: 700; font-variant-numeric: tabular-nums;
+    font-size: 8vh; line-height: 1; white-space: nowrap; }
+  .pf .sub { font-family: var(--label); font-weight: 700; font-size: 2.4vh; color: var(--dim);
+    min-height: 1.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .t-good .val { color: var(--good); } .t-urgent .val { color: var(--near); }
+  /* A sector is a framed box, as it is on the monitor - three boxes read as
+     three pieces of one lap where three bare numbers read as a row. */
+  .pf.sector { border: 2px solid var(--edge); border-radius: 1vh; background: var(--panel);
+    padding: 0.4vh 0.6vw; justify-content: center; }
+  .pf.sector .val { font-size: 6vh; }
+  /* The corners. **The number carries the state and there is no box round
+     it** - the monitor's own note: on a glance instrument the furniture is
+     what you read first and it is never the thing you needed. */
+  .pf.tyre .val { font-size: 11vh; }
+  .pf.tyre .cap { font-size: 2.2vh; letter-spacing: 0.3em; }
+  .pf.tyre.s-over .val { color: var(--over); }
+  .pf.tyre.s-near .val { color: var(--near); }
+  .pf.tyre.s-missing .val { color: var(--dim); }
+  .pf.tyre .sub { font-family: var(--number); font-size: 2.6vh; color: var(--near); }
+  .pf.tyre.g-good .sub { color: var(--good); }
+  .pcap { font-family: var(--label); font-weight: 700; font-size: 2.4vh; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--dim); text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .plight { border: 2px solid var(--edge); border-radius: 0.8vh; padding: 0.4vh 0.6vw;
+    text-align: center; font-family: var(--label); font-weight: 700; font-size: 3.2vh;
+    letter-spacing: 0.08em; color: var(--dim); text-transform: uppercase;
+    white-space: nowrap; overflow: hidden; }
+  /* An unread lamp is not a lamp reading "no": `abs_light(None)` is "no
+     reading" and `abs_light(False)` is "no lock", and both draw unlit. */
+  .plight.unread { border-style: dashed; }
+  .plight .lsub { display: block; font-family: var(--number); font-size: 2.2vh;
+    letter-spacing: 0; text-transform: none; }
 
   /* **The cover takes the table, not the buttons.** Over the whole screen it
      swallowed every press - including George on/off, which is meant to work
@@ -188,6 +264,23 @@
     .col-fuel { display: none; }
     .num { font-size: 3.4vw; } .txt { font-size: 3.6vw; } .small { font-size: 2.3vw; } .th { font-size: 2.2vw; }
     #head .big { font-size: 5vw; } #board { font-size: 2.8vw; }
+    /* **The practice face sizes off the WIDTH here, as the table does.** Its
+       columns are four corners across a panel that is now the narrow way up,
+       and 11vh of Cascadia is wider than a quarter of it - the temperature
+       would have run over the corner beside it, on the reading this face
+       exists for. Nothing is dropped: there are only four columns and all
+       four are the car. */
+    /* Sized to the LONGEST thing each holds in its own column, not to the
+       common case: a lap face is `1:44.900` in a third of the panel, and a
+       split is `+13 vs FR  WIDENING` in a quarter of it. Measured at 800 x
+       1280: at 6vw and 1.9vw the two lap times touched and the split
+       ellipsed away the word that says which way it is going. */
+    .pf .val { font-size: 4.6vw; } .pf.tyre .val { font-size: 7.5vw; }
+    .pf.sector .val { font-size: 4.6vw; }
+    .pf .cap, .pf.tyre .cap { font-size: 2vw; }
+    .pf .sub { font-size: 1.7vw; } .pf.tyre .sub { font-size: 1.5vw; }
+    .pcap { font-size: 2vw; }
+    .plight { font-size: 2.4vw; } .plight .lsub { font-size: 1.8vw; }
   }
 </style>
 </head>
@@ -200,6 +293,14 @@
     <div id="board"></div>
   </div>
   <div id="table"></div>
+  <div id="practice">
+    <div class="band" id="p-faces"></div>
+    <div class="band" id="p-tyres"></div>
+    <div class="pcap" id="p-tyrecap"></div>
+    <div class="band" id="p-sectors"></div>
+    <div class="pcap" id="p-secnote"></div>
+    <div class="band" id="p-lights"></div>
+  </div>
   <div id="foot"></div>
 </div>
 <div id="buttons">
@@ -269,6 +370,60 @@
     return c;
   }
 
+  // **The practice face.** Everything here is already worded by
+  // `tablet.compose_practice`; this only chooses a size and an ink, which is
+  // the same division `strip.html` is built on. No temperature rule, no
+  // threshold and no delta is decided in this file.
+  function pf(cls, cap, val, sub) {
+    var e = el("div", "pf" + (cls ? " " + cls : ""));
+    e.appendChild(el("div", "cap", cap || ""));
+    e.appendChild(el("div", "val", val || ""));
+    e.appendChild(el("div", "sub", sub || ""));
+    return e;
+  }
+  function fill(id, nodes) {
+    var frag = document.createDocumentFragment();
+    nodes.forEach(function (n) { frag.appendChild(n); });
+    $(id).replaceChildren(frag);
+  }
+  function renderPractice(d) {
+    $("lap").textContent = d.lap || "";
+    $("pos").textContent = d.session || "";
+    // **No board age here, and that is not an omission.** There is no board
+    // read in practice - nothing on this face comes off GT7's timing screen
+    // - so a "board read N s ago" would age a reading that does not exist.
+    $("board").textContent = "";
+    $("board").classList.remove("stale");
+    // **And the race's walk is taken back off**, or a practice caption
+    // inherits however faded the last board read left it: a fresh reading
+    // drawn in the ink of a stale one is the trap the walk exists to avoid.
+    var root = $("app").style;
+    root.removeProperty("--aged-measured");
+    root.removeProperty("--aged-derived");
+    fill("p-faces", (d.faces || []).map(function (f) {
+      return pf("t-" + (f.tone || "plain") + " r-" + (f.register || "measured"),
+                f.caption, f.value, f.sub);
+    }));
+    fill("p-tyres", (d.tyres || []).map(function (t) {
+      return pf("tyre s-" + (t.state || "missing")
+                + " g-" + (t.gap_tone || "plain"), t.corner, t.value, t.gap);
+    }));
+    $("p-tyrecap").textContent = d.tyre_caption || "";
+    fill("p-sectors", (d.sectors || []).map(function (s, i) {
+      return pf("sector t-" + (s.tone || "plain"), "S" + (i + 1), s.value, s.sub);
+    }));
+    $("p-secnote").textContent = d.sector_note || "";
+    fill("p-lights", (d.lights || []).map(function (l) {
+      var e = el("div", "plight" + (l.unread ? " unread" : ""),
+                 l.word + (l.unread ? " ?" : ""));
+      if (l.ink) { e.style.background = l.ink; e.style.borderColor = l.ink;
+                   e.style.color = "var(--ground)"; }
+      e.appendChild(el("span", "lsub", l.sub || ""));
+      return e;
+    }));
+    $("foot").textContent = "";
+  }
+
   function render(d) {
     if (typeof d.stale_after_s === "number") staleAfter = d.stale_after_s;
     if (d.idle) { show("PIT CREW", "no race running", false); return; }
@@ -276,6 +431,14 @@
     if (d.age_s === null || d.age_s > staleAfter) {
       show("NO DATA", "Pit Crew has stopped updating", true); return;
     }
+    // **Which face, chosen once and both ways.** A payload switching kind
+    // mid-session - practice into a race, which is every race night - must
+    // turn the other face OFF, not merely draw over it: two faces in one
+    // grid cell is two sets of numbers about two sessions.
+    var practising = d.kind === "practice";
+    $("practice").classList.toggle("on", practising);
+    $("table").classList.toggle("off", practising);
+    if (practising) { renderPractice(d); cover.className = ""; return; }
     $("lap").textContent = d.lap || "";
     $("pos").textContent = d.position || "";
     $("board").textContent = d.board || "";
@@ -294,7 +457,9 @@
     (d.rows || []).forEach(function (r) {
       var row = el("div", "row" + (r.us ? " us" : ""));
       row.appendChild(cell("", r.place, "num"));
-      row.appendChild(cell("", r.name, "txt"));
+      // `=== false` and not `!r.named`: a page cached from before the field
+      // existed would otherwise draw every driver as unnamed.
+      row.appendChild(cell("", r.name, "txt" + (r.named === false ? " unnamed" : "")));
       row.appendChild(cell("right", r.gap, "num"));
       row.appendChild(cell("", r.lane ? el("span", "lane", "IN LANE") : r.stop, "num"));
       row.appendChild(cell("col-fuel", r.fuel, "num"));

@@ -99,7 +99,24 @@ CURRENT_COLUMN = object()
 # are `STINT_BURN_LAPS` of them.
 FUEL_BASIS_STINT = "this stint"
 FUEL_BASIS_RACE = "the race"
-FUEL_BASIS_HIGHER = "the higher of the race and this stint so far"
+# **The two outcomes of "the higher of the race and this stint so far", named
+# apart.** One string used to cover both, and it hid the thing that actually
+# moves. At Bathurst Rd 8 the installed burn walked 9 -> 2 -> 3 laps across
+# laps 13-15 with no stop between 12 and 22, and 19 -> 3 across laps 25-26,
+# while the figure itself moved 1.14% and 0.97% - about 0.4 sigma of one lap's
+# measured scatter (sd 0.214 L/lap over 22 green laps). The burn did not
+# change; the population behind it did, and the record could not say which
+# one had won or how many laps it had.
+#
+# The SELECTION is kept as it was, deliberately. Its reason is measured: at
+# Bathurst a previous stint's burn was 0.25 L/lap light, and a light burn is
+# the direction that says "fuel good" about a tank that is short. Taking the
+# higher can over-fill by a litre; taking the lower runs him dry, and on race
+# eve that is not a trade to reverse. What changes is that the answer now
+# names its own population, so the count travelling beside it belongs to the
+# figure (rules 4 and 12).
+FUEL_BASIS_HIGHER_RACE = "the race, higher than this stint so far"
+FUEL_BASIS_HIGHER_STINT = "this stint so far, higher than the race"
 # **The beep's two columns are two burns, not one population.** Sardegna,
 # session 183: 5.37 L/lap on the saving points and 7.04 at full revs on
 # consecutive laps - a 31% step, where the whole reason the burn is trusted
@@ -110,11 +127,17 @@ FUEL_BASIS_HIGHER = "the higher of the race and this stint so far"
 # quotes it says so.
 FUEL_BASIS_COLUMN = "this race's other beep column, at the plan's ratio"
 # And where this column HAS shown something, however little, the higher of the
-# two - the same reason `FUEL_BASIS_HIGHER` exists. A conversion that comes out
+# two - the same reason the pair above exists. A conversion that comes out
 # under what he is actually burning is the direction that says "fuel good"
 # about a tank that is short.
 FUEL_BASIS_COLUMN_HIGHER = ("the higher of this beep column's own laps and the "
                             "other column at the plan's ratio")
+# **Every basis that is a hedge rather than a reading**, for the callers that
+# have to speak or score at a lower confidence because of it. A tuple rather
+# than a list of names at each consumer: a basis added later hedges everywhere
+# by construction, instead of at whichever sites someone remembered.
+FUEL_BASES_HEDGED = (FUEL_BASIS_HIGHER_RACE, FUEL_BASIS_HIGHER_STINT,
+                     FUEL_BASIS_COLUMN, FUEL_BASIS_COLUMN_HIGHER)
 # The pair where practice set the figure and the race has laps but not yet
 # enough of them to take over. Named so the export can show which of the two
 # the plan was running on at any point.
@@ -338,6 +361,13 @@ class ExpectationTracker:
         # **The lap number rides along.** Without it there is no way to split
         # the burn at the lap an instruction was given, which is the only way
         # to answer "did the saving work" - see `saving_response`.
+        # **0.0 is this population's "no burn read" sentinel, not a burn.**
+        # Every figure taken off `_green` filters on `used > 0` - the race
+        # median, the stint median, the scatter, the lap counts - so a lap
+        # whose burn could not be read is excluded everywhere rather than
+        # entering a median as a zero. `_LapRow` now hands over `None` for
+        # exactly those laps instead of a clamped zero (rule 9); this is
+        # where the two meet.
         self._green.append((int(lap.lap_time_ms), float(lap.fuel_used or 0.0),
                             saving, int(lap.lap_num)))
         self._green_column.append(column)
@@ -764,13 +794,15 @@ class ExpectationTracker:
         * **The stint's own** once it has `STINT_BURN_LAPS` laps
           (`FUEL_BASIS_STINT`).
         * **Before that, after a stop, the HIGHER of the race's and the
-          stint's so far** (`FUEL_BASIS_HIGHER`). The previous stint's burn
-          may not stand in silently for this one: at Bathurst it was 0.25 L a
-          lap light, and a light burn is the direction that says "fuel good"
-          about a tank that is short. The higher of the two can over-fill by
-          a litre or so; the lower runs him dry. The laps are the ones behind
-          whichever figure won, and the source is named so the call can carry
-          the hedge.
+          stint's so far.** The previous stint's burn may not stand in
+          silently for this one: at Bathurst it was 0.25 L a lap light, and a
+          light burn is the direction that says "fuel good" about a tank that
+          is short. The higher of the two can over-fill by a litre or so; the
+          lower runs him dry. **Which of the two won is in the name** -
+          `FUEL_BASIS_HIGHER_RACE` or `FUEL_BASIS_HIGHER_STINT` - because the
+          laps returned beside the figure are that population's and the two
+          are an order of magnitude apart. One name for both outcomes made a
+          count of 9 and a count of 2 read as the same claim.
         * **The race's** in the first stint, or where the stint has nothing
           yet (`FUEL_BASIS_RACE`).
 
@@ -805,20 +837,24 @@ class ExpectationTracker:
             so_far = round(median(used for _, used, _, _
                                   in self._burn_this_stint()), 3)
             if race is None or so_far > race:
-                return so_far, stint_laps, FUEL_BASIS_HIGHER
-            return race, race_laps, FUEL_BASIS_HIGHER
+                return so_far, stint_laps, FUEL_BASIS_HIGHER_STINT
+            return race, race_laps, FUEL_BASIS_HIGHER_RACE
         return race, race_laps, FUEL_BASIS_RACE
 
     def current_fuel_reference_load_l(self) -> float | None:
-        burn, _laps, basis = self.current_fuel_basis()
+        _burn, _laps, basis = self.current_fuel_basis()
         if basis in (FUEL_BASIS_COLUMN, FUEL_BASIS_COLUMN_HIGHER):
             # Measured on laps this column did not drive, or on too few of
             # its own to anchor: no load here, and rule 3 says so as None.
             return None
         if basis == FUEL_BASIS_STINT:
             return self.stint_fuel_reference_load_l()
-        if basis == FUEL_BASIS_HIGHER and burn != self.race_fuel_per_lap_l():
+        if basis == FUEL_BASIS_HIGHER_STINT:
             # A burn from one or two laps has no load worth anchoring to.
+            # **Read off the basis, not off a value comparison.** This used
+            # to ask whether `burn != race_fuel_per_lap_l()`, which is the
+            # same question answered a second time and from a second place -
+            # the basis already knows which population won (rule 12).
             return None
         return self.race_fuel_reference_load_l()
 
@@ -955,7 +991,19 @@ class ExpectationTracker:
             if observed is not None:
                 drift = ((observed - planned.fuel_per_lap_l)
                          / planned.fuel_per_lap_l)
-                said += (f", ran {observed:.2f} over {len(clean)} green laps")
+                # **The count off the same expression as the median** (rule
+                # 12). `len(clean)` is every green lap; `race_burn_laps()` is
+                # the green laps that actually reported a burn, which is what
+                # `race_fuel_per_lap_l` takes its median over. The two differ
+                # by exactly the laps whose burn could not be read - three of
+                # them on Bathurst Rd 8 - so the audit was quoting a sample
+                # size larger than the sample.
+                counted = self.race_burn_laps()
+                said += f", ran {observed:.2f} over {counted} green laps"
+                unread = len(clean) - counted
+                if unread > 0:
+                    said += (f" ({unread} more took fuel or reported no tank "
+                             f"level and could not be differenced)")
                 if abs(drift) >= BURN_ON_PLAN:
                     said += (f" ({abs(drift):.0%} "
                              f"{'over' if drift > 0 else 'under'})")
@@ -1003,6 +1051,22 @@ class _LapRow:
     The audit line quotes the number of green laps behind it for exactly this
     reason. Carrying the flag through `LapInput` is the fix and it is not one
     this module can make on its own.
+
+    ### The burn, and why it is `None` rather than `0.0`
+
+    **`max(0.0, start - end)` was rule 9 in its plainest form** and it was
+    here until 20 Sep 2026. `LapInput` carries no `fuel_added_l`, so every lap
+    with a fill in it differences to a large negative number and clamped to
+    zero: at Bathurst Rd 8 that is laps 12 and 23 (the out laps carrying the
+    fill), plus lap 1 whose stored `fuel_used` is itself a clamped zero from
+    the grid fill. A lap that plainly burned eight litres came out of the
+    rebuild as a lap that burned none, indistinguishable from a measurement.
+
+    `None` says what is true: this lap's burn cannot be differenced from the
+    two tank readings alone. `note_lap` files it as the population's existing
+    "not evidence" sentinel and every burn figure already filters on
+    `used > 0`, so no median moves - what changes is that the audit can now
+    count the laps it actually used and say how many it could not read.
     """
 
     def __init__(self, lap) -> None:
@@ -1010,8 +1074,18 @@ class _LapRow:
         self.lap_time_ms = lap.lap_time_ms
         self.is_pit_lap = bool(getattr(lap, "is_pit_lap", False))
         self.is_out_lap = bool(getattr(lap, "is_out_lap", False))
-        self.fuel_used = max(0.0, (lap.fuel_start or 0.0)
-                             - (lap.fuel_end or 0.0))
+        start, end = getattr(lap, "fuel_start", None), getattr(lap, "fuel_end",
+                                                               None)
+        used = None if start is None or end is None else start - end
+        # Not clamped, and not "0 litres burned": a negative difference is a
+        # lap that took fuel, and the litres it took are not on this row.
+        self.fuel_used = used if used is not None and used > 0.0 else None
+        self.fuel_used_why = (
+            None if self.fuel_used is not None
+            else "no tank reading at one end of the lap"
+            if start is None or end is None
+            else "fuel was added during the lap and LapInput carries no "
+                 "fuel_added_l to difference against")
         self.short_shift_rpm = getattr(lap, "short_shift_rpm", None)
 
 

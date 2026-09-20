@@ -189,6 +189,29 @@ def _planned_distance_of(stints) -> int | None:
     laps = int(last.get("laps") or 0)
     return start + laps - 1 if laps > 0 else None
 
+
+def as_the_archive_names_them(samples, roster):
+    """Gap readings with their subject spelled the way the archive spells one.
+
+    **One column, one namespace.** A `GapSample.subject` is a roster CLUSTER
+    ID - an index into `Roster._groups`, live only inside this process - and
+    `gap_reads.subject` is read months later beside names and `Car #N`
+    handles. So the roster translates it here, at the one boundary where the
+    roster is still in hand.
+
+    **A cluster the roster cannot name is filed as NULL, not as its index.**
+    This used to be `name_of(s.subject) or s.subject`, and the `or` wrote the
+    bare index out: 211 rows of the 20 Sep race carry subjects like `277`,
+    `1742`, `1311`, in a column whose other rows hold people. Three
+    namespaces in one column is rule 13, and an identifier nothing outside
+    this process can resolve is rule 3 - a missing key is honest, a wrong key
+    is not, and only the wrong key survives into an audit looking like a
+    person. Nothing reads it back (`news.a_person` already discards a bare
+    number), so nothing the driver hears changes.
+    """
+    return [replace(s, subject=roster.name_of(s.subject)) for s in samples]
+
+
 def circuit_key_for(event) -> str | None:
     """Which circuit an event is at, in the store's own vocabulary.
 
@@ -4252,13 +4275,9 @@ class PitCrewController(QObject):
                         log("race").exception("the board positions could not "
                                               "be filed")
                 try:
-                    # Filed under the driver's NAME, not the roster's
-                    # cluster id, which is a number nothing outside this
-                    # process can turn back into a person.
-                    named = [replace(s, subject=(wall.roster.name_of(s.subject)
-                                                 or s.subject))
-                             for s in samples]
-                    self.store.record_gap_reads(self.session_id, named)
+                    self.store.record_gap_reads(
+                        self.session_id, as_the_archive_names_them(
+                            samples, wall.roster))
                 except Exception:
                     log("race").exception("the gap reads could not be filed")
                 ahead_subject = wall.ahead.subject
@@ -7596,16 +7615,24 @@ class PitCrewController(QObject):
             # up only while the TABLET is reading, which is the page that shows
             # them.
             board = self._driver_board_state()
-            tablet_live = self._publish_tablet(strip)
+            # **The tablet is built from the same object the other two are.**
+            # In a race it draws the field and ignores this; in practice it
+            # draws the board, and a second `_driver_board_state()` for it
+            # would be a second reading of one tank (rules 12 and 13).
+            tablet_live = self._publish_tablet(strip, board)
             # **The monitor turns to history only with both other screens up**
             # (17 Sep 2026): his car on the phone, the field on the tablet,
             # and this screen the one he looks at least. Either of them gone
             # and it is his live pit board again.
             state = replace(board, strip_live=tablet_live,
-                            # **And only with a race behind him.** Both pages
+                            # **And only with laps behind him.** Both pages
                             # poll in practice too, and an empty rack under
-                            # "THE RACE SO FAR · 0 laps" replaced the live
-                            # practice board.
+                            # "0 laps" replaced the live practice board -
+                            # which is why the guard is `board.history` and
+                            # not the session kind. Practice fills it now
+                            # (`_practice_history`, his ask of 20 Sep), and
+                            # this expression needed nothing done to it: no
+                            # laps, no rack, in either session.
                             show_history=(tablet_live and live
                                           and bool(board.history)))
             strip.publish(self._strip_composer.compose(state))
@@ -7757,13 +7784,21 @@ class PitCrewController(QObject):
             "racing": bool(race is not None and race.running),
         }
 
-    def _publish_tablet(self, strip) -> bool:
+    def _publish_tablet(self, strip, board=None) -> bool:
         """Hand the tablet the field; True while a tablet is reading it.
 
         **Guarded apart from the phone.** A fault building the field publishes
         nothing - the tablet goes stale and says NO DATA - and the phone, which
         is what he races with, is untouched. Outside a race the tablet is told
         there is none rather than shown the last race's field (rule 11).
+
+        **And in practice it gets the board** (his ask, 20 Sep 2026: *"in
+        practice board on monitor should move to tablet as it has nothing on
+        it"*). `board` is the state the phone and the monitor are already
+        being built from this tick, passed in rather than built a second time
+        - one object, so a figure cannot be worded two ways. Without one, or
+        in any session that is neither a race nor practice, the page is told
+        there is no session exactly as before.
         """
         from pitcrew.ui import tablet
         from pitcrew.ui.strip_server import TABLET
@@ -7784,7 +7819,14 @@ class PitCrewController(QObject):
         try:
             racing = race is not None and (race.running or bool(
                 getattr(race.state, "finished", False)))
-            body = tablet.compose(race.field_view() if racing else None)
+            if racing:
+                body = tablet.compose(race.field_view())
+            else:
+                # `compose_practice` is the one that decides: anything that
+                # is not a practice or qualifying state comes back idle, so
+                # "no session" stays a single answer rather than a condition
+                # written out here and again there.
+                body = tablet.compose_practice(board)
             body["controls"] = self._tablet_controls()
             strip.publish(body, TABLET)
             self._tablet_failures = 0
@@ -7878,6 +7920,33 @@ class PitCrewController(QObject):
             # partway through the race on an accumulated total.
             self._board_failures = 0
 
+    def _practice_history(self) -> tuple:
+        """The Practice tab's laps, for the monitor's rack. `()` if there are
+        none, or if the rack cannot be read.
+
+        **Guarded, and empty on a fault.** This is the only part of the
+        practice board that reaches outside `bridge` and `board_live` into
+        another screen's widget tree, and `_driver_board_state` runs inside
+        the board's own failure counter - twelve raises and the board is
+        taken off the monitor for the session. An empty rack costs him a page
+        he had yesterday; a raise costs him the live practice board, at the
+        one session that has to work (rule: the honest failure is the
+        cheaper one). Logged once and then every twentieth tick, like the
+        strip's own guard.
+        """
+        from pitcrew.ui.driver_view import practice_history
+
+        try:
+            return practice_history(self.practice.rows())
+        except Exception as exc:                            # noqa: BLE001
+            failures = self.__dict__.get("_practice_rack_failures", 0)
+            if failures % BOARD_TRACEBACK_EVERY == 0:
+                log("ui").warning(
+                    "the practice rack could not be read for the board: "
+                    "%s: %s", type(exc).__name__, exc)
+            self._practice_rack_failures = failures + 1
+            return ()
+
     def _driver_board_state(self):
         """Everything the board draws, in one object.
 
@@ -7904,6 +7973,13 @@ class PitCrewController(QObject):
                 compound=fields.get("reference_compound"),
                 split_rates=self._split_rates(),
                 last_call=self._board_call_now(),
+                # **The lap rack, on the monitor** (his ask, 20 Sep 2026).
+                # The Practice tab's rows in the board's own vocabulary; the
+                # tab keeps its rack, because a Qt widget has one parent and
+                # nothing here is re-parented. `_publish_strip` below decides
+                # whether it is SHOWN, and its guard is already the right
+                # one: an empty rack never replaces the live board.
+                history=self._practice_history(),
                 **fields)
         state = self.race.state
         has_plan = bool(getattr(self.race, "_stints", None))
@@ -7966,7 +8042,7 @@ class PitCrewController(QObject):
             # flag on is exactly what the debrief starts from.
             from pitcrew.race.calls import RACE_OVER
 
-            return DriverState(
+            done = DriverState(
                 temps_c=self._board_temps(), finished=True,
                 # **Every dash says why** - and "not measured", the view's
                 # fallback, is false about fuel measured all race.
@@ -7975,14 +8051,24 @@ class PitCrewController(QObject):
                 split_rates=self._split_rates(),
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
-                # **The race he has just finished, at the flag.** Without it
-                # the monitor turned to a rack of twelve empty rows and "0
-                # laps" at the one moment it is read - the history is the
-                # page's whole subject and it outlives the running race.
-                lap_number=state.lap_on_screen(),
                 history=tuple(getattr(state, "lap_history", ()) or ()),
                 last_call=self._board_call_now(), **self._board_live_fields(),
                 **board_target_fields(state))
+            # **The race he has just finished, at the flag.** Without it
+            # the monitor turned to a rack of twelve empty rows and "0
+            # laps" at the one moment it is read - the history is the
+            # page's whole subject and it outlives the running race.
+            #
+            # **Set here and not as a keyword**, because
+            # `_board_live_fields()` ALWAYS carries `lap_number`
+            # (`board_live.board_fields`), and a keyword beside that
+            # splat is `TypeError: got multiple values for keyword
+            # argument 'lap_number'` - raised on every tick from the
+            # chequer, which took the phone strip to NO DATA and the
+            # monitor board down for the rest of the session (20 Sep, log
+            # 11358-11383). The live branch below has always set it this
+            # way; the two branches now agree.
+            return replace(done, lap_number=state.lap_on_screen())
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
         # in the box there are no crossings - so the countdown and the figure
@@ -9443,9 +9529,15 @@ class PitCrewController(QObject):
         # The fifth is whose burn `fuel_per_lap_l` is - None while it is
         # still practice's - so the in-box sentence names the burn that
         # actually sized the fill.
+        # **The sixth is how many laps are behind that burn** (rule 4), and
+        # `RefuelAdviser.note_frame` has read a sixth element since the count
+        # was added to the spoken call. This tuple returned five, so the count
+        # never reached the driver and only the test's own hand-built lambda
+        # ever carried one: "7 laps after the box, at this race's burn" - at
+        # whose burn, over how many laps, unsaid.
         return (fuel_target_l(race.state), race.state.fuel_per_lap_l,
                 fuel_to_flag_l(race.state), fuel_target_basis(race.state),
-                race.state.fuel_burn_basis)
+                race.state.fuel_burn_basis, race.state.fuel_burn_laps)
 
     def _voice_refuel(self, call) -> None:
         """Say it, show it, and file it with the rest of the race's calls."""

@@ -37,6 +37,7 @@ from pitcrew.strategy.model import (
     SOURCE_MEASURED,
     CompoundProfile,
     RaceInputs,
+    burn_at_fuel_map,
     consecutive_sd,
     laps_from_minutes,
     timed_race_stop_s,
@@ -308,6 +309,32 @@ def _weather_value(weather: dict) -> str:
 def _event_float(event, key: str) -> float | None:
     value = event[key] if key in event.keys() else None
     return None if value is None else float(value)
+
+
+def _event_int(event, key: str) -> int | None:
+    value = event[key] if key in event.keys() else None
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        # A value that is not a number is not a declaration. Rule 3: nothing
+        # said, rather than a plausible 1.
+        return None
+
+
+def _evidence_fuel_map(laps) -> int | None:
+    """The fuel map the counted laps were run on, where they agree on one.
+
+    **Disagreement is not an average.** Two maps across the evidence is two
+    populations 15-50% apart in burn, and a single figure over both is a
+    number that belongs to neither - the same argument as the beep's two
+    columns (`expectations.FUEL_BASIS_COLUMN`). Where they disagree this
+    returns None, the burn is not re-costed, and the plan's evidence row says
+    the maps were mixed. Where nobody recorded one - which is every lap since
+    session 83 - it returns None too, and the row says that instead.
+    """
+    declared = {lap.fuel_map for lap in laps
+                if getattr(lap, "fuel_map", None) is not None}
+    return declared.pop() if len(declared) == 1 else None
 
 
 def _extra_time_s(event) -> float | None:
@@ -622,6 +649,32 @@ def build_inputs(store, event_id: int, *,
                      if lap.fuel_start > lap.fuel_end else None),
         current_sheet_id=current_sheet)
     fuel_per_lap = round(fuel_per_lap, 3) if fuel_per_lap is not None else None
+    # **And re-costed for the fuel map the race will actually be run on.**
+    # The map is declared on the event page and there is no other way it can
+    # reach the app - GT7 broadcasts no such channel. Until 20 Sep 2026
+    # nothing consumed the declaration at all: `FUEL_MAP_CONSUMPTION` was
+    # referenced by tests only, and a plan costed on map-1 practice laps for a
+    # race run on map 3 was 22% out on the one number that decides the stop
+    # count (Bathurst Rd 8 - 10.625 planned, 8.2-8.5 raced; at the table's
+    # x0.85 the answer would have been two stops rather than three).
+    #
+    # `burn_at_fuel_map` refuses far more often than it converts, and that is
+    # the point: `laps.fuel_map` has been NULL on every lap since session 83,
+    # so the usual answer is the burn unchanged with a sentence saying it
+    # could NOT be re-costed. An unrecorded practice map is not map 1 (rule 3).
+    raced_map = _event_int(event, "fuel_map")
+    evidence_map = _evidence_fuel_map(counted)
+    as_measured = fuel_per_lap
+    fuel_per_lap, fuel_map_note = burn_at_fuel_map(
+        fuel_per_lap, measured_on=evidence_map, racing_on=raced_map)
+    # **And the scatter moves with the rate, because it is the same laps.**
+    # `fuel_sd_l` sizes every fill margin (`fuel_margin_l` multiplies it by
+    # the rate), so a converted mean beside an unconverted spread is two
+    # quantities measured on two different maps. Scaling the mean without the
+    # spread under-states the margin on a richer map, which is the direction
+    # that runs him dry. Applied below, where the spread is computed.
+    map_ratio = (fuel_per_lap / as_measured
+                 if as_measured and fuel_per_lap else 1.0)
     # **The spread on that burn, and it is what decides how much fuel goes in
     # at the stop.** Unweighted and unrounded: the weighting exists to pick a
     # central value across sessions of different ages, and applying it to a
@@ -644,6 +697,8 @@ def build_inputs(store, event_id: int, *,
         loads.append((lap.fuel_start + lap.fuel_end) / 2.0)
         by_session.setdefault(getattr(lap, "session_id", None), []).append(used)
     fuel_sd = consecutive_sd(by_session.values())
+    if fuel_sd is not None and map_ratio != 1.0:
+        fuel_sd = fuel_sd * map_ratio
     # None rather than 0.0 where nothing was measured: zero is a real fuel
     # load and would tell the model the burn was taken on an empty tank.
     fuel_reference_load = (sum(loads) / len(loads)) if loads else None
@@ -791,6 +846,9 @@ def build_inputs(store, event_id: int, *,
         fuel_sd_l=fuel_sd,
         fuel_samples=len(burns),
         fuel_reference_load_l=fuel_reference_load,
+        fuel_map=raced_map,
+        evidence_fuel_map=evidence_map,
+        fuel_map_note=fuel_map_note,
         lap_time_sd_s=lap_time_sd,
         fuel_capacity_l=capacity,
         refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
@@ -826,7 +884,16 @@ def build_inputs(store, event_id: int, *,
                  if reference_ms else "run a practice lap"),
         Evidence("Fuel per lap",
                  f"{fuel_per_lap:.2f} L" if fuel_per_lap else "—",
-                 MEASURED if fuel_per_lap else MISSING,
+                 # **A re-costed burn is derived, not measured** (rule 5).
+                 # `burn_at_fuel_map` only converts where both the race's map
+                 # and the evidence laps' map are known and differ, and the
+                 # result rests on a published step table this app has never
+                 # measured - so it may not wear the same badge as a figure
+                 # taken straight off the stream.
+                 (ASSUMED if (fuel_per_lap and raced_map is not None
+                              and evidence_map is not None
+                              and raced_map != evidence_map)
+                  else MEASURED if fuel_per_lap else MISSING),
                  # Says it is weighted, because it is: an unqualified
                  # "median of 40 laps" would read as a plain median and the
                  # two are different numbers.
@@ -844,7 +911,21 @@ def build_inputs(store, event_id: int, *,
                      if fuel_reference_load is not None else
                      ", and no lap reported a tank level, so it cannot be "
                      "corrected for fuel load")
+                  # **And which fuel map, because a burn is per map.** The
+                  # note is present whenever a map was declared, including
+                  # when it could NOT be used - an absent sentence would read
+                  # as "the question does not arise", which is how a map-1
+                  # burn came to be spent on a map-3 race.
+                  + (f". Fuel map: {fuel_map_note}" if fuel_map_note else "")
                   if fuel_per_lap else "no fuel burn recorded")),
+        Evidence("Fuel map",
+                 str(raced_map) if raced_map is not None else "—",
+                 DECLARED if raced_map is not None else MISSING,
+                 (fuel_map_note or "")
+                 if raced_map is not None else
+                 "no channel carries it - declare it on the event page, or "
+                 "the plan is costed on whatever map practice happened to "
+                 "run"),
         Evidence("Fuel capacity",
                  f"{capacity:.0f} L" if capacity is not None else "—",
                  MEASURED if capacity is not None else MISSING,

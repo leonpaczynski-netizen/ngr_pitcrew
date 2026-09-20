@@ -149,6 +149,9 @@ class _Stub:
     _board_temps = PitCrewController._board_temps
     _split_rates = PitCrewController._split_rates
     _board_live_fields = PitCrewController._board_live_fields
+    # The practice branch fills the monitor's rack from the Practice tab
+    # (20 Sep 2026); `_Practice.rows` above is what it reads.
+    _practice_history = PitCrewController._practice_history
     _tag_practice_compound = PitCrewController._tag_practice_compound
     _fitted_compound = PitCrewController._fitted_compound
     _started_compound = None

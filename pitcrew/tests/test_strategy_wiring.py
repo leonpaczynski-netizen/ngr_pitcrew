@@ -426,3 +426,96 @@ def test_practice_is_checked_against_the_races_clock_and_not_its_own(
     assert "Practice was not run at the race's clock" in note
     assert "against the race's x6" in note
     controller.shutdown()
+
+
+# ------------------------------------------------------- the declared fuel map
+
+def test_a_declared_race_map_with_no_practice_map_refuses_to_re_cost(planned):
+    """Rule 3. `laps.fuel_map` has been NULL on every lap since session 83, so
+    a declared race map usually has nothing to convert FROM - and an
+    unrecorded practice map is not map 1. The burn stands, and the plan says
+    so rather than saying nothing."""
+    _controller, _, store, event_id = planned
+    # **Written straight to the store, because the controller drops it.**
+    # `EventScreen.values()` has emitted `fuel_map` since the combo was
+    # built (`ui/event_screen.py:1094`) and `_on_event_saved`'s optional-key
+    # list does not carry it, so the declaration never reaches the column -
+    # which is why `events.fuel_map` is NULL on all but four events on file.
+    # The same defect `series` had. One word in that tuple fixes it.
+    store.update_event(event_id, fuel_map=3)
+    inputs, evidence = build_inputs(store, event_id)
+
+    assert inputs.fuel_map == 3
+    assert inputs.evidence_fuel_map is None
+    assert inputs.fuel_per_lap_l == pytest.approx(3.4, abs=0.01)
+    assert "NOT" in inputs.fuel_map_note
+    row = next(e for e in evidence if e.label == "Fuel map")
+    assert row.value == "3" and row.source == DECLARED
+
+
+def test_an_undeclared_map_leaves_the_burn_and_says_it_is_missing(planned):
+    _, _, store, event_id = planned
+    inputs, evidence = build_inputs(store, event_id)
+    assert inputs.fuel_map is None and inputs.fuel_map_note is None
+    row = next(e for e in evidence if e.label == "Fuel map")
+    assert row.source == MISSING
+    assert "declare it on the event page" in row.note
+
+
+def test_practice_on_map_1_re_costs_the_burn_for_a_map_3_race(planned):
+    """The Bathurst Rd 8 case, end to end. A burn measured on map 1 spent on a
+    map-3 race was 22% out on the one number that decides the stop count."""
+    from pitcrew.strategy.evidence import ASSUMED
+
+    _controller, _, store, event_id = planned
+    for lap_id in _lap_ids(store, event_id):
+        store.set_lap_fuel_map(lap_id, 1)
+    store.update_event(event_id, fuel_map=3)
+    inputs, evidence = build_inputs(store, event_id)
+
+    assert inputs.evidence_fuel_map == 1 and inputs.fuel_map == 3
+    assert inputs.fuel_per_lap_l == pytest.approx(3.4 * 0.85, abs=0.01)
+    # Rule 5: a re-costed burn is derived and may not wear "measured".
+    fuel = next(e for e in evidence if e.label == "Fuel per lap")
+    assert fuel.source == ASSUMED
+    assert "[ASSUMED]" in fuel.note
+
+
+def test_the_event_screen_still_emits_the_fuel_map_it_is_given(qt_app):  # noqa: F811
+    """Half the declaration path, pinned - and the half that works.
+
+    `EventScreen.values()` has carried `fuel_map` since the combo was built
+    (`ui/event_screen.py:1094`). The other half is broken and is not fixed
+    here: `PitCrewController._on_event_saved` copies a fixed list of optional
+    keys into the write and that list does not include `fuel_map`, so the
+    only route the map has into `events.fuel_map` drops it silently. That is
+    the same defect `series` had - the box worked, the column was NULL on
+    every event on file - and the fix is one word in that tuple
+    (`controller.py`, the `for key in (...)` list in `_on_event_saved`).
+    Until it lands, a declared map reaches the plan only if something writes
+    the column directly.
+    """
+    screen = EventScreen()
+    screen.fuel_map.setCurrentText("3")
+    assert screen.values()["fuel_map"] == 3
+    screen.fuel_map.setCurrentText("—")
+    assert screen.values()["fuel_map"] is None
+
+
+def test_the_burns_scatter_moves_with_the_map_too(planned):
+    """`fuel_sd_l` sizes every fill margin. A converted mean beside an
+    unconverted spread is two quantities measured on two different maps, and
+    scaling only the mean under-states the margin on a richer map - the
+    direction that runs him dry."""
+    _controller, _, store, event_id = planned
+    before = build_inputs(store, event_id)[0]
+    for lap_id in _lap_ids(store, event_id):
+        store.set_lap_fuel_map(lap_id, 1)
+    store.update_event(event_id, fuel_map=3)
+    after = build_inputs(store, event_id)[0]
+
+    assert after.fuel_per_lap_l == pytest.approx(
+        before.fuel_per_lap_l * 0.85, abs=0.01)
+    if before.fuel_sd_l:
+        assert after.fuel_sd_l == pytest.approx(
+            before.fuel_sd_l * 0.85, rel=1e-6)

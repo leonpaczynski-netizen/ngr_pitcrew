@@ -40,6 +40,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pitcrew.race.expectations import FUEL_BASES_HEDGED
+
 # **A rise this big is a fill.** Sized against a channel that produced no
 # spurious rise at all across 5999 driving frames, so this is not a noise
 # gate - it is the smallest move that cannot be a single bad packet, and at
@@ -114,6 +116,7 @@ class RefuelWatch:
         self._filling = False
         self._target_l: float | None = None
         self._burn_basis = BURN_UNSTATED
+        self._burn_laps: int | None = None
         self._said_target = False
         self._said_release = False
         self._said_short = False
@@ -135,7 +138,8 @@ class RefuelWatch:
              fuel_per_lap_l: float | None = None,
              to_flag_l: float | None = None,
              basis: str | None = None,
-             burn_basis=BURN_UNSTATED) -> RefuelCall | None:
+             burn_basis=BURN_UNSTATED,
+             burn_laps: int | None = None) -> RefuelCall | None:
         """One frame. Returns what to say, or None - which is almost always.
 
         `target_l` is what the tank should read at pit exit, recomputed by the
@@ -148,6 +152,10 @@ class RefuelWatch:
         `expectations.FUEL_BASIS_*` where this race's burn is installed, None
         where the burn is still practice's. Captured with the target, because
         the words have to name the burn that sized the number (rules 5, 12).
+
+        `burn_laps` is `RaceState.fuel_burn_laps` beside both - how many green
+        laps stand behind that burn (rule 4). Captured with them for the same
+        reason: a count that arrived later would belong to a different figure.
         """
         if fuel_l is None:
             return None
@@ -179,6 +187,7 @@ class RefuelWatch:
             self.started_l = self._low_l
             self._target_l = target_l
             self._burn_basis = burn_basis
+            self._burn_laps = burn_laps
 
         target = self._target_l
         if target is None:
@@ -209,11 +218,15 @@ class RefuelWatch:
             # short-shift and no race burn was ever installed.
             burn = _burn_words(self._burn_basis)
             bound = (basis[0].upper() + basis[1:]) if basis else None
-            return RefuelCall(TARGET, f"Fuel to {_ceil_l(target)} litres.",
-                              (f"{bound}{f', at {burn}' if burn else ''}."
-                               if bound
-                               else _laps_reason(target, fuel_per_lap_l, burn))
-                              + _to_flag_clause(to_flag_l, target))
+            return RefuelCall(
+                TARGET, f"Fuel to {_ceil_l(target)} litres.",
+                (f"{bound}{f', at {burn}' if burn else ''}." if bound
+                 else _laps_reason(target, fuel_per_lap_l, burn))
+                # **Directly after the burn it qualifies**, and before the
+                # stay-out alternative, so the count cannot be heard as
+                # belonging to that other figure (rule 13).
+                + _burn_evidence(self._burn_basis, self._burn_laps)
+                + _to_flag_clause(to_flag_l, target))
 
         if not self._said_release and fuel_l >= target - RELEASE_EPSILON_L:
             self._said_release = True
@@ -261,9 +274,10 @@ class RefuelAdviser:
     hands it over, and the frame path calls one method and knows nothing else.
 
     `context` returns `(target_l, fuel_per_lap_l, to_flag_l, basis,
-    burn_basis)` for the race right now - `basis` being the bound that sized
-    the target, in words, and `burn_basis` whose burn did (see
-    `RefuelWatch.note`) - or None where nothing can size a stop. It is called **only when the car is
+    burn_basis, burn_laps)` for the race right now - `basis` being the bound
+    that sized the target, in words, `burn_basis` whose burn did and
+    `burn_laps` how many laps stand behind it (see `RefuelWatch.note`) - or
+    None where nothing can size a stop. It is called **only when the car is
     slow enough to be in a pit box**, because it re-derives the fill from the
     race's own burn and that is not free sixty times a second for an hour.
     """
@@ -279,23 +293,28 @@ class RefuelAdviser:
 
     def note_frame(self, fuel_l: float | None,
                    speed_kph: float | None) -> None:
-        target = fuel_per_lap = to_flag = basis = None
+        target = fuel_per_lap = to_flag = basis = burn_laps = None
         burn_basis = BURN_UNSTATED
         if speed_kph is not None and speed_kph <= FILL_MAX_KPH:
             found = self._context()
             if found is not None:
-                # Three values from an older context, five from the
+                # Three values from an older context, six from the
                 # controller's: the fourth is the bound behind the figure, the
-                # fifth whose burn. A context too old to carry the fifth has
-                # not said, and the watch then names no burn at all.
+                # fifth whose burn, the sixth how many laps stand behind it.
+                # A context too old to carry the fifth has not said, and the
+                # watch then names no burn at all; one too old to carry the
+                # sixth names the burn without its count, which is where this
+                # was before 20 Sep 2026 and is honest rather than invented.
                 target, fuel_per_lap, to_flag = found[:3]
                 basis = found[3] if len(found) > 3 else None
                 if len(found) > 4:
                     burn_basis = found[4]
+                if len(found) > 5:
+                    burn_laps = found[5]
         call = self.watch.note(fuel_l, speed_kph=speed_kph, target_l=target,
                                fuel_per_lap_l=fuel_per_lap,
                                to_flag_l=to_flag, basis=basis,
-                               burn_basis=burn_basis)
+                               burn_basis=burn_basis, burn_laps=burn_laps)
         if call is not None:
             self._speak(call)
 
@@ -341,12 +360,60 @@ def _burn_words(burn_basis) -> str | None:
     this race's laps; None is `build_inputs`' practice figure, which is what
     `RaceState.fuel_per_lap_l` holds until a race burn replaces it. Not told
     names nothing, never a guess.
+
+    **The five bases deliberately collapse to four words, and that is why
+    `_burn_evidence` exists.** "At this race's burn" meant nineteen laps of
+    evidence on lap 25 of Bathurst Rd 8 and three laps on lap 26, in an
+    identical sentence - rule 13, and rule 4's sample count never reaching
+    the ear at all. Naming the basis itself would not fix it: "the higher of
+    the race and this stint so far" is not a sentence to say to a man holding
+    the refuelling trigger. The count is the part he can act on.
     """
     if burn_basis is BURN_UNSTATED:
         return None
     if burn_basis is None:
         return "the practice burn"
     return "this race's burn"
+
+
+def _burn_evidence(burn_basis, burn_laps: int | None) -> str:
+    """" Measured over 19 laps.", " Unconfirmed.", or nothing where nobody said.
+
+    **Its own sentence, and it carries the only number in it.** The voice
+    pack's manifest can render a sentence with ONE number in it
+    (`phrase_manifest._pieces`), so folding this into "17 laps after the box,
+    at this race's burn over 19 laps" would put the whole line beyond the
+    pack and send every fill call of every race to live synthesis.
+
+    Only on this race's own burn. The practice figure's sample count is the
+    plan's and is not a count of laps run today; quoting it here would be two
+    different things behind one form of words, which is the defect above.
+
+    **And a derived basis is hedged, never counted** (rule 5). Every basis in
+    `expectations.FUEL_BASES_HEDGED` is a hedge rather than a reading - the
+    beep column's laps converted at the plan's ratio, or the higher of two
+    populations picked because the lower one is the direction that runs him
+    dry. "Measured over 19 laps" over a conversion off laps he did not drive
+    on this column states a claim the evidence does not support, and it
+    states it in the most confident form of words the call has. So the
+    hedged bases say the one word §5.5 says the driver can act on, and say
+    no number at all: a count is what makes a figure sound measured.
+
+    `FUEL_BASES_HEDGED` rather than a list of names here, deliberately - the
+    tuple exists so a basis split or added later hedges at every consumer by
+    construction, and this module was the one consumer not reading it.
+    """
+    if burn_basis is BURN_UNSTATED or burn_basis is None:
+        return ""
+    if burn_basis in FUEL_BASES_HEDGED:
+        # **Already in the pack.** `calls`' LOW-confidence mark is the same
+        # word in the same one-word sentence (`phrase_manifest`), so this
+        # costs no clip and it is a hedge he has heard before (rule 13).
+        return " Unconfirmed."
+    if not burn_laps or burn_laps <= 0:
+        return ""
+    laps = int(burn_laps)
+    return f" Measured over {laps} lap{'' if laps == 1 else 's'}."
 
 
 def _laps_reason(target: float, fuel_per_lap_l: float | None,

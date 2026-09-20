@@ -237,6 +237,116 @@ def test_two_handles_that_are_one_person_merge(store, races):
     assert store.unnamed_drivers() == []
 
 
+def test_renaming_carries_every_table_that_holds_the_name(store, races):
+    """**Seven tables hold a driver's name and the rename rewrote one.**
+
+    Measured on the live archive, 20 Sep 2026, against a `rename_driver` that
+    touched `rival_stops` alone: 0 orphans there, 234 in `board_positions`,
+    343 in `traffic`, 3,057 in `gap_reads`, and `series_teammates` 2 of 2 -
+    the whole teammate feature broken by referential drift. A half-renamed
+    driver is two drivers, which is the defect this operation repairs.
+    """
+    from pitcrew.race.gap_signal import GapSample
+
+    session = races[0]
+    store.save_driver("Car #1", np.ones((16, 64), dtype=bool))
+    rival_book.record(store, session, a_stop(driver="Car #1"), laps_total=20)
+    store.record_board_positions(session, 4, {"Car #1": 3, "PUNISHED": 2})
+    store.record_gap_reads(session, [
+        GapSample(at_s=1.0, gap_s=1.4, subject="Car #1", side="ahead"),
+        GapSample(at_s=2.0, gap_s=1.6, subject="277", side="ahead")])
+    store.record_traffic(session, [{"lap_num": 4, "video_s": 12.0,
+                                    "side": "ahead"}])
+    contact = store.list_traffic(session)[0]["id"]
+    store.name_traffic(contact, "Car #1")
+    store.record_board_sightings(session, [{"lap_num": 4, "video_s": 12.0,
+                                            "side": "ahead",
+                                            "driver": "Car #1"}])
+    store.set_teammate("NGR GR3 Season 1", "Car #1")
+
+    assert store.rename_driver("Car #1", "Rocky") == 1
+
+    assert len(store.rival_stops("Rocky")) == 1
+    assert store.board_positions(session)[0]["driver"] in ("Rocky", "PUNISHED")
+    assert {row["driver"] for row in store.board_positions(session)} == {
+        "Rocky", "PUNISHED"}
+    assert [r["subject"] for r in store.gap_reads(session)] == ["Rocky", "277"]
+    assert store.list_traffic(session)[0]["rival"] == "Rocky"
+    assert store.list_board_sightings(session)[0]["driver"] == "Rocky"
+    assert store.teammate_name("NGR GR3 Season 1") == "Rocky"
+
+
+def test_renaming_reaches_a_name_frozen_inside_the_briefing(store):
+    """`race_knowledge.rivals_json` holds names inside a blob, so no column
+    update can reach them - and a briefing that names a handle the archive no
+    longer knows is a briefing about nobody."""
+    from pitcrew.race.knowledge import Knowledge
+
+    event = store.create_event(name="Bathurst R8", track="Mount Panorama",
+                               car_name="Shelby")
+    store.save_race_knowledge(Knowledge(
+        circuit_key="mount-panorama", event_id=event,
+        rivals=({"rival": "Car #1", "tendency": "raced him for 9 laps"},
+                {"rival": "PUNISHED", "tendency": "raced him for 4 laps"})))
+    store.save_driver("Car #1", np.ones((16, 64), dtype=bool))
+
+    store.rename_driver("Car #1", "Rocky")
+
+    after = store.get_race_knowledge("mount-panorama", event)
+    assert [r["rival"] for r in after.rivals] == ["Rocky", "PUNISHED"]
+
+
+def test_a_briefing_this_rename_does_not_understand_is_left_alone(store):
+    """Never rewritten on a guess: a blob that is not the shape
+    `analysis/rivals.py` writes is evidence about something else."""
+    event = store.create_event(name="Odd", track="Spa", car_name="992")
+    with store._write() as conn:
+        conn.execute(
+            "INSERT INTO race_knowledge (circuit_key, event_id, rivals_json, "
+            "written_at) VALUES ('spa', ?, 'not json at all', '2026-09-20')",
+            (event,))
+
+    store.rename_driver("Car #1", "Rocky")
+
+    rows = store._query("SELECT rivals_json FROM race_knowledge")
+    assert rows[0]["rivals_json"] == "not json at all"
+
+
+def test_a_merge_keeps_the_exemplar_that_would_recognise_him_again(store):
+    """**The cleanup operation was the phantom generator.**
+
+    Merging deleted the provisional row, and with it the only artefact that
+    could recognise that car next race - so the same bitmap matched nothing
+    and minted a fresh handle, for ever. 180 of the 187 rows in `drivers` are
+    that wreckage.
+    """
+    bits = np.zeros((16, 64), dtype=bool)
+    bits[2:10, 4:30] = True
+    store.save_driver("Rocky")                    # named by hand, no bitmap
+    store.save_driver("Car #1", bits)
+    assert store.driver_exemplars().get("Rocky") is None
+
+    store.rename_driver("Car #1", "Rocky")
+
+    kept = store.driver_exemplars().get("Rocky")
+    assert kept is not None and (kept == bits).all()
+    assert store.unnamed_drivers() == []
+
+
+def test_a_merge_does_not_overwrite_an_exemplar_the_survivor_already_has(store):
+    """The survivor is the row a person named, and his own bitmap is the
+    better evidence of him. Carried only where there is nothing to carry it
+    over."""
+    his = np.zeros((16, 64), dtype=bool)
+    his[1:5, 1:20] = True
+    store.save_driver("Rocky", his)
+    store.save_driver("Car #1", np.ones((16, 64), dtype=bool))
+
+    store.rename_driver("Car #1", "Rocky")
+
+    assert (store.driver_exemplars()["Rocky"] == his).all()
+
+
 def test_renaming_to_the_same_name_or_to_nothing_does_nothing(store):
     store.save_driver("Rocky", np.ones((16, 64), dtype=bool))
     assert store.rename_driver("Rocky", "Rocky") == 0

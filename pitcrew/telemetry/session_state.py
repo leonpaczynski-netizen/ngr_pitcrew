@@ -114,6 +114,13 @@ TYRE_SWAP_MAX_SPEED_KPH = 10.0
 # stationary. See `_rebaseline_on_grid_fill`.
 GRID_FILL_STEP_L = 1.0
 
+# **How many grid-fill decisions get a line each, per session.** The decision
+# is made at 60 Hz and only a whole-litre single-frame step is ever spoken
+# about, so in a real session this is one or two lines; the cap is there so a
+# stream that steps repeatedly cannot bury the race log, and the last line it
+# writes says it is the last.
+GRID_FILL_LOG_MAX = 10
+
 # Race-start gates.  See the module docstring for why both exist.
 RACE_START_SPEED_KMH = 80.0
 GRID_LOW_SPEED_KMH = 30.0
@@ -289,6 +296,11 @@ class SessionState:
         self._lap_started_at = 0.0
 
         self._grid_low_speed_seen = False
+        # Grid-fill decisions said out loud, per session - see
+        # `_rebaseline_on_grid_fill` and `GRID_FILL_LOG_MAX`. One
+        # `SessionState` is one session, so these start at zero with it
+        # (rule 11).
+        self._grid_fill_said = {"accepted": 0, "declined": 0, "swallowed": 0}
         self._prev_laps_completed = 0
         # The lap time of the last lap actually FILED. See `_check_lap`: the
         # edge is latched against this and never against the previous frame,
@@ -402,6 +414,14 @@ class SessionState:
     def update(self, packet: GT7Packet) -> list[SessionEvent]:
         """Feed one packet.  Returns the events it produced, oldest first."""
         if packet.paused or packet.loading:
+            # **And a fill that lands on a paused frame is swallowed here,
+            # silently, by this very return.** `_prev` advances to the full
+            # tank while `_rebaseline_on_grid_fill` never runs, so the step
+            # the guard exists for has already been consumed by the time the
+            # stream resumes - and the recorder drops paused frames too, so
+            # no stored lap can show it afterwards. Said, not fixed: what to
+            # do about it is a behaviour change.
+            self._say_swallowed_fill(packet)
             # **The fuel window cannot survive the gap.**  A pause or a load
             # screen is a hole in the stream of unbounded length, and a reading
             # from before it compared against the first one after it is not a
@@ -455,14 +475,89 @@ class SessionState:
         for a step far larger than any refuel delivers in one frame - GT7 fills
         at about 1 L/s against a 60 Hz stream, so a real fill moves 0.0167 L
         between packets and this needs a whole litre.
+
+        **And it says so, either way** (CLAUDE.md rule 10 - log the accepts,
+        not only the refusals). Bathurst, 20 Sep 2026: lap 1 filed
+        `fuel_used 0.0` on a lap that burned about 8.67 L, and the frames show
+        a single-frame 49.977 -> 100.0 L step at 0 km/h, 23 s before the
+        green - every precondition stated above. **Nobody could say why this
+        did not fire, because it said nothing at all**, accept or decline, and
+        the clamp downstream turned the missing term into a confident zero.
+
+        A decline is only said where a step big enough to be the grid fill was
+        actually seen - a rise below the bar is the ordinary frame and there
+        are sixty of those a second. Both are capped per session, because a
+        log that floods is a log nobody reads; the cap says so when it bites.
         """
+        rise = (None if self._prev is None
+                else p.fuel_level - self._prev.fuel_level)
+        a_step = rise is not None and rise >= GRID_FILL_STEP_L
         if self._phase is not Phase.ON_TRACK or self._prev is None:
+            if a_step:
+                self._say_grid_fill(
+                    p, rise, "the session is %s, not on track before the "
+                    "green" % self._phase.value)
             return
         if p.speed_kmh > GRID_LOW_SPEED_KMH:
+            if a_step:
+                self._say_grid_fill(
+                    p, rise, "the car was doing %.1f km/h, over the %.0f that "
+                    "means standing" % (p.speed_kmh, GRID_LOW_SPEED_KMH))
             return
-        if p.fuel_level - self._prev.fuel_level < GRID_FILL_STEP_L:
+        if rise < GRID_FILL_STEP_L:
             return
+        self._say_grid_fill(p, rise, None)
         self._fuel_lap_start = p.fuel_level
+
+    def _say_swallowed_fill(self, p: GT7Packet) -> None:
+        """A whole-litre step that arrived on a paused or loading frame.
+
+        The guard above never sees it: `update` returns before it runs and
+        `_prev` moves on, so the next live frame's rise is nothing. Nothing
+        said so, and nothing on disk could - so this is the one line that
+        would tell the difference between "the guard refused it" and "the
+        guard was never asked".
+        """
+        if self._prev is None:
+            return
+        rise = p.fuel_level - self._prev.fuel_level
+        if rise < GRID_FILL_STEP_L:
+            return
+        counts = self._grid_fill_said
+        counts["swallowed"] += 1
+        if counts["swallowed"] > GRID_FILL_LOG_MAX:
+            return
+        log("session").info(
+            "a %.2f L fill (%.2f -> %.2f) arrived on a %s frame, so the "
+            "grid re-baseline never saw it - lap one's fuel reference stays "
+            "at %.2f L%s", rise, self._prev.fuel_level, p.fuel_level,
+            "paused" if p.paused else "loading", self._fuel_lap_start,
+            "" if counts["swallowed"] < GRID_FILL_LOG_MAX
+            else " (last of these)")
+
+    def _say_grid_fill(self, p: GT7Packet, rise: float,
+                       refused: str | None) -> None:
+        """One line per grid-fill decision, with the values that decided it."""
+        counts = self._grid_fill_said
+        key = "declined" if refused else "accepted"
+        counts[key] += 1
+        if counts[key] > GRID_FILL_LOG_MAX:
+            return
+        last = "" if counts[key] < GRID_FILL_LOG_MAX else " (last of these)"
+        if refused:
+            log("session").info(
+                "the grid fill did NOT re-baseline lap one: the tank stepped "
+                "%.2f -> %.2f L (+%.2f) but %s. Lap one's fuel reference "
+                "stays at %.2f L%s",
+                p.fuel_level - rise, p.fuel_level, rise, refused,
+                self._fuel_lap_start, last)
+            return
+        log("session").info(
+            "the grid fill re-baselined lap one: the tank stepped %.2f -> "
+            "%.2f L (+%.2f) at %.1f km/h before the green, so lap one's fuel "
+            "reference moves from %.2f L to %.2f L%s",
+            p.fuel_level - rise, p.fuel_level, rise, p.speed_kmh,
+            self._fuel_lap_start, p.fuel_level, last)
 
     def _update_phase(self, p: GT7Packet, now: float) -> list[SessionEvent]:
         if self._phase is Phase.IDLE:

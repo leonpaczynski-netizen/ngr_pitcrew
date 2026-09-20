@@ -88,9 +88,18 @@ def _state():
                     "K.Graebs": _rival("K.Graebs", 11, 30.0, bound=True),
                     "Ghost": _rival("Ghost", 9, 90.0)}
     ahead, behind = GapTrend(side="ahead"), GapTrend(side="behind")
-    ahead.note(18, 1.4, subject="PUNISHED")
-    behind.note(18, 0.8, subject="K.Graebs")
+    # **A subject is a roster CLUSTER ID, and nothing else.**
+    # `pit_wall._neighbour` returns whatever `Roster.see_frame` resolved the
+    # adjacent row to - an int or None, never a string. This fixture used to
+    # seed a NAME here, a shape production cannot produce, which is why the
+    # suite was green through a whole race in which the tablet drew no gap
+    # at all: the row names were compared against `str(cluster_id)`. The
+    # roster's translation of that same id travels beside the trend, as
+    # `gap_{side}_name`, and that is what the rows are keyed by.
+    ahead.note(18, 1.4, subject=277)
+    behind.note(18, 0.8, subject=533)
     state.gap_ahead, state.gap_behind = ahead, behind
+    state.gap_ahead_name, state.gap_behind_name = "PUNISHED", "K.Graebs"
     return state
 
 
@@ -514,6 +523,47 @@ def test_the_tablet_words_what_each_figure_is_worth():
     assert got["board"] == "board read 20 s ago" and got["board_stale"] is True
 
 
+def test_a_minted_handle_is_not_drawn_as_a_drivers_name():
+    """**He asked where "Car #164" came from, and it is nowhere on his
+    screen.**
+
+    `Store.provisional_driver_name` mints it off a global counter - not the
+    car's race number, not anything GT7 shows - and the tablet printed it in
+    the same ink, case and column as `PUNISHED`. 25 of 27 rows on the 20 Sep
+    race. `news.a_person` is the gate every other channel already uses, and
+    `news` states the doctrine: a handle "is said as *the car ahead* ... it
+    is not a person."
+
+    A bare cluster id is the same claim by a different spelling, so it is
+    worded the same way (rule 13) - and the ROW survives both, because his
+    place and his stop are facts about him whatever the app can call him.
+    """
+    from pitcrew.ui.tablet import UNNAMED, compose
+
+    state = _state()
+    state.rivals["Car #164"] = _rival("Car #164", 10, 90.0)
+    state.rivals["277"] = _rival("277", 12, 40.0)
+    board = BoardRead(packet=1,
+                      places={"PUNISHED": 3, "Car #164": 5, "277": 6},
+                      visible=frozenset({3, 5, 6}), windowed=False)
+    got = compose(field_view(state, board, packet=1))
+    by_place = {row["place"]: row for row in got["rows"]}
+
+    assert (by_place["P3"]["name"], by_place["P3"]["named"]) == ("PUNISHED",
+                                                                 True)
+    assert (by_place["P5"]["name"], by_place["P5"]["named"]) == (UNNAMED,
+                                                                 False)
+    assert (by_place["P6"]["name"], by_place["P6"]["named"]) == (UNNAMED,
+                                                                 False)
+    assert by_place["P4"]["name"] == "YOU" and by_place["P4"]["named"] is True
+    # **Nothing was dropped and nothing else moved.** The unnamed rows keep
+    # their place, their stop and their fuel - the naming failure costs the
+    # name and only the name.
+    assert len(got["rows"]) == 6, [row["name"] for row in got["rows"]]
+    assert by_place["P5"]["stop"] == "L11" and by_place["P5"]["fuel"]
+    assert UNNAMED not in {"", "-"}, "the word must not read as a value"
+
+
 def test_a_long_field_keeps_the_rows_nearest_him_and_says_how_many_it_left():
     from pitcrew.ui.tablet import MAX_ROWS, compose
 
@@ -604,9 +654,10 @@ def test_a_gap_goes_to_the_car_it_was_read_against_not_to_a_place():
     so a pass into the last corner gave the passed car's row the gap to the
     car now being chased."""
     state = _state()
-    # The board still has the old order; the trends know who they watched.
-    state.gap_ahead.subject = "K.Graebs"
-    state.gap_behind.subject = "PUNISHED"
+    # The board still has the old order; the trends know who they watched -
+    # by cluster id, and the roster's name for that id comes with them.
+    state.gap_ahead.subject, state.gap_ahead_name = 533, "K.Graebs"
+    state.gap_behind.subject, state.gap_behind_name = 277, "PUNISHED"
     board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
                       visible=frozenset({3, 5}), windowed=False)
     rows = {row.name: row for row in field_view(state, board, packet=1).rows}
@@ -615,11 +666,47 @@ def test_a_gap_goes_to_the_car_it_was_read_against_not_to_a_place():
     assert rows["PUNISHED"].place == 3        # the board's place is untouched
 
 
+def test_a_gap_is_drawn_although_its_subject_is_an_int_the_rows_never_hold():
+    """**The defect that cost a whole race, stated as a type.**
+
+    20 Sep, Bathurst Rd8: the tablet was the only surface carrying gaps and
+    it drew none, for 62 minutes, silently - because it keyed the gap by
+    `GapTrend.subject`, an int roster cluster id, against rows keyed by
+    name. Nothing could match and nothing said so, because `subject` is
+    never `None`, so the "no subject" log line never fired either.
+
+    Seeded exactly as production does: an int on the trend, the roster's
+    name beside it.
+    """
+    state = _state()
+    assert isinstance(state.gap_ahead.subject, int), "production seeds an int"
+    board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
+                      visible=frozenset({3, 5}), windowed=False)
+    rows = {row.name: row for row in field_view(state, board, packet=1).rows}
+    assert rows["PUNISHED"].gap_s == 1.4
+    assert rows["K.Graebs"].gap_s == 0.8
+
+
+def test_a_gap_whose_cluster_the_roster_never_named_is_not_drawn():
+    """**A third of the readings, and that is correct** (rule 3). An
+    unlabelled cluster has no name, the rows are names, so the figure is
+    real but unattributable - and an unattributed number on a row is the
+    shape of the mistake, not its size. It is not drawn, and the reason is
+    logged."""
+    state = _state()
+    state.gap_ahead_name = state.gap_behind_name = None
+    assert state.gap_ahead.subject is not None, "the trend still has a subject"
+    board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
+                      visible=frozenset({3, 5}), windowed=False)
+    rows = field_view(state, board, packet=1).rows
+    assert all(row.gap_s is None for row in rows)
+
+
 def test_a_gap_with_no_subject_is_not_drawn_against_anyone():
     state = _state()
     state.gap_ahead.subject = None
     state.gap_behind.subject = None
-    state.gap_ahead_name = state.gap_behind_name = None
+    state.gap_ahead_name = state.gap_behind_name = None   # the roster's answer
     board = BoardRead(packet=1, places={"PUNISHED": 3, "K.Graebs": 5},
                       visible=frozenset({3, 5}), windowed=False)
     rows = field_view(state, board, packet=1).rows
@@ -630,8 +717,7 @@ def test_a_gap_from_laps_ago_is_not_still_on_the_screen():
     """`latest()` is keyed by lap and never expires, so a reader that stopped
     left a bare "1.4" up for the rest of the race. `news` bounds a spoken gap
     at `GAP_FRESH_S`; the screen bounded nothing."""
-    state = _state()
-    state.gap_ahead.subject = "PUNISHED"
+    state = _state()                    # ahead is PUNISHED, cluster 277
     board = BoardRead(packet=1, places={"PUNISHED": 3}, visible=frozenset({3}),
                       windowed=False)
     fresh = {r.name: r for r in field_view(state, board, packet=1).rows}

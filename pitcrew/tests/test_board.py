@@ -13,9 +13,12 @@ from PIL import Image
 
 from pitcrew.telemetry.board import (
     ASPECT,
+    CLIPPED_PLATE,
+    PLATE_GUARD_COUNTS,
     PLATE_MIN,
     Board,
     _ladder,
+    _own_from_ladder,
     _own_row_by_plate,
     find,
     flag_ladder,
@@ -424,3 +427,138 @@ def test_the_gap_box_has_blank_plate_inside_its_own_edges(name, _own_y):
         ink = frame[y0:y1 + 1, x0:x1 + 1].min(axis=2) > PLATE_MIN
         assert not ink[:, 0].any(), "ink on the left edge - a cut box"
         assert not ink[:, -1].any(), "ink on the right edge - a cut box"
+
+
+# --- the clipped plate -----------------------------------------------------
+#
+# **Measured on the Bathurst race of 20 Sep 2026 (s204, 292 frames) against
+# Sardegna (s188, 182), `scratchpad/findings/G-bench.md`.** The driver's own
+# white plate registers as flag colour over its whole height, so `flag_ladder`
+# takes two rungs out of its top and bottom EDGES and never one at its centre.
+# `min` over the rung gaps then measures the plate rather than the row pitch,
+# and the box comes back 15 px of a 35 px plate - which `roster._half` sizes
+# every name crop on the frame from, so the own row's bitmap comes back None
+# and the identity matcher is never asked at all.
+#
+# The rungs below are the ones traced on `f00120.00` of that recording:
+# min gap 31 where the row pitch is 40, and two rungs, 365 and 396, inside one
+# plate that spans 363-397.
+
+OWN_TOP, OWN_BOTTOM = 363, 397
+OWN_CENTRE = (OWN_TOP + OWN_BOTTOM) // 2
+SPLIT_RUNGS = [192, 232, 272, 312, 365, 396, 448, 488]
+WHOLE_RUNGS = [192, 232, 272, 312, OWN_CENTRE, 448, 488]
+ROW_PITCH = 40
+BOARD_FLAG_X0, BOARD_FLAG_X1 = 256, 281
+BOARD_PLATE_X0, BOARD_PLATE_X1 = 40, 243
+
+
+def a_board_with_one_bright_plate(*, rungs, own=(OWN_TOP, OWN_BOTTOM)):
+    """Dark rows with one white plate on them, and a ladder to read it with.
+
+    The plate is drawn at its real extent and the ladder is handed in, because
+    what is on trial here is what `_own_from_ladder` does with rungs that are
+    NOT at the centre of the plate - which is what a real board hands it.
+    """
+    frame = np.zeros((H, W, 3), dtype=int)
+    frame[:] = DARK
+    top, bottom = own
+    for y in rungs:
+        if top <= y <= bottom:
+            continue
+        frame[y - 16:y + 17, BOARD_PLATE_X0:BOARD_PLATE_X1 + 1] = PLATE
+    frame[top:bottom + 1, BOARD_PLATE_X0:BOARD_PLATE_X1 + 1] = WHITE
+    # His name, dark on the white plate - the thing ROW_MERGE exists for.
+    frame[top + 12:top + 22, 90:200] = DARK
+    for y in rungs:
+        frame[y - 9:y + 9, BOARD_FLAG_X0:BOARD_FLAG_X1 + 1] = FLAG_BLUE
+    return frame, (BOARD_FLAG_X0, BOARD_FLAG_X1, rungs)
+
+
+def test_a_plate_split_into_two_rungs_is_re_derived_whole():
+    """The measured fault: two rungs inside one plate, min gap 31 not 40.
+
+    Production cut a strip of +-int(31 * 0.45) = 13 px about a rung that is
+    not the plate's centre, and returned the 15 px of plate that fell inside
+    it. The repair takes the lit run CONTAINING the rung over +-0.75 of the
+    MEDIAN rung gap, which is the plate.
+    """
+    frame, ladder = a_board_with_one_bright_plate(rungs=SPLIT_RUNGS)
+    assert min(b - a for a, b in zip(ladder[2], ladder[2][1:])) == 31
+    box = own_row(frame, ladder)
+    assert box is not None
+    assert (box[3] - box[1]) >= CLIPPED_PLATE * ROW_PITCH, (
+        "a box a fraction of a row high is a clipped plate")
+    assert box[1] <= OWN_CENTRE <= box[3], (
+        "the repaired box holds the plate's own centre")
+    assert abs(box[1] - OWN_TOP) <= 4 and abs(box[3] - OWN_BOTTOM) <= 4
+
+
+def test_the_guard_does_not_fire_on_a_board_that_reads_correctly():
+    """It is a no-op where the plate is already whole - which is 93% of
+    Sardegna's frames and why there is no regression there."""
+    frame, ladder = a_board_with_one_bright_plate(rungs=WHOLE_RUNGS)
+    before = dict(PLATE_GUARD_COUNTS)
+    box = own_row(frame, ladder)
+    assert PLATE_GUARD_COUNTS["fired"] == before["fired"], "fired on a whole plate"
+    assert PLATE_GUARD_COUNTS["unresolved"] == before["unresolved"]
+    assert PLATE_GUARD_COUNTS["declined"] == before["declined"] + 1, (
+        "and it said so - rule 10 wants the accepts counted too")
+    assert box is not None
+    assert abs(box[1] - OWN_TOP) <= 2 and abs(box[3] - OWN_BOTTOM) <= 2
+    assert abs(box[0] - BOARD_PLATE_X0) <= 2 and abs(box[2] - BOARD_PLATE_X1) <= 2
+
+
+def test_a_plate_the_rung_falls_outside_is_refused_rather_than_guessed():
+    """CLAUDE.md rule 3. Two bright bands with the winning rung in the dark
+    between them is not a plate of some other size - it is no reading.
+
+    The alternative, and the one the bench's scratch version took, is to fall
+    back to the longest lit run in the strip: a well-formed box, in the wrong
+    place, that nothing downstream could tell from a real one.
+    """
+    frame, ladder = a_board_with_one_bright_plate(
+        rungs=[192, 232, 272, 312, 365, 448, 488], own=(340, 390))
+    # Bright above the rung and bright below it, dark where the rung is: two
+    # runs, and the rung inside neither.
+    frame[357:374, BOARD_PLATE_X0:BOARD_PLATE_X1 + 1] = DARK
+    before = dict(PLATE_GUARD_COUNTS)
+    assert _own_from_ladder(frame, ladder) is None
+    assert PLATE_GUARD_COUNTS["unresolved"] == before["unresolved"] + 1, (
+        "and the refusal is counted and said")
+
+
+def test_both_plate_guard_decisions_are_said_out_loud(monkeypatch):
+    """**Rule 10: log the accepts, not only the refusals.**
+
+    This fault hid for months because nothing counted it - a clipped box
+    framed the gap readouts in the wrong place, so those frames produced no
+    gap reading at all, left no row in `gap_reads`, and were invisible to
+    every statistic computed from it. A guard that only speaks when it fires
+    cannot be told from one that never runs; one that only speaks when it
+    declines cannot be told from one that fires on everything. Both lines
+    carry the numbers that decided: the box's height, the median row, and
+    what it re-derived to.
+    """
+    import pitcrew.telemetry.board as board_module
+
+    lines = []
+    monkeypatch.setattr(board_module._log, "info",
+                        lambda msg, *a, **k: lines.append(msg % a if a
+                                                          else msg))
+    monkeypatch.setattr(board_module, "PLATE_GUARD_COUNTS",
+                        {"fired": 0, "declined": 0, "unresolved": 0})
+
+    whole, whole_ladder = a_board_with_one_bright_plate(rungs=WHOLE_RUNGS)
+    own_row(whole, whole_ladder)
+    split, split_ladder = a_board_with_one_bright_plate(rungs=SPLIT_RUNGS)
+    own_row(split, split_ladder)
+
+    assert len(lines) == 2, lines
+    stood, redone = lines
+    assert "the plate stands" in stood and "median row" in stood
+    assert "re-derived" in redone
+    for line in lines:
+        assert "floor" in line, "the number setting the bar is in the line"
+    assert board_module.PLATE_GUARD_COUNTS == {"fired": 1, "declined": 1,
+                                               "unresolved": 0}

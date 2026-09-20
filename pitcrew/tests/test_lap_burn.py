@@ -104,6 +104,105 @@ def test_a_small_rise_does_not_re_baseline():
     assert state._fuel_lap_start == pytest.approx(50.0)
 
 
+# ----------------------------------------- the decision, said out loud
+
+class _Kept:
+    """Stands in for `log("session")` and keeps what it was told."""
+
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg, *args, **_):
+        self.lines.append(msg % args if args else msg)
+
+    debug = warning = error = exception = info
+
+
+def _kept_session_log(monkeypatch) -> _Kept:
+    import pitcrew.telemetry.session_state as session_state
+
+    kept = _Kept()
+    monkeypatch.setattr(session_state, "log", lambda *_a, **_k: kept)
+    return kept
+
+
+def test_the_grid_re_baseline_says_that_it_fired(monkeypatch):
+    """**Rule 10: log the accepts, not only the refusals.**
+
+    Bathurst, 20 Sep 2026: lap 1 filed `fuel_used 0.0` on a lap that burned
+    about 8.67 L. The frames carry a single-frame 49.977 -> 100.0 L step at
+    0 km/h, 23 s before the green - every stated precondition of this guard -
+    and nobody could say why it had not fired, because it said nothing either
+    way.
+    """
+    kept = _kept_session_log(monkeypatch)
+    state = SessionState()
+    state.update(make_packet(speed_ms=0.0, fuel_level=49.977, laps_in_race=20))
+    state.update(make_packet(speed_ms=0.0, fuel_level=49.977, laps_in_race=20))
+    state.update(make_packet(speed_ms=0.0, fuel_level=100.0, laps_in_race=20))
+
+    said = [line for line in kept.lines if "grid fill" in line]
+    assert len(said) == 1, said
+    assert "re-baselined lap one" in said[0]
+    for figure in ("49.98", "100.00", "50.02"):
+        assert figure in said[0], said[0]
+
+
+def test_the_grid_re_baseline_says_why_it_declined(monkeypatch):
+    """The decline is the line that was missing on the night, and it has to
+    carry the value that decided it - not merely the fact of a refusal."""
+    kept = _kept_session_log(monkeypatch)
+    state = SessionState()
+    state.update(make_packet(speed_ms=0.0, fuel_level=50.0, laps_in_race=20))
+    state.update(make_packet(speed_ms=50.0, fuel_level=50.0, laps_in_race=20))
+    state.update(make_packet(speed_ms=50.0, fuel_level=100.0, laps_in_race=20))
+
+    said = [line for line in kept.lines if "grid fill" in line]
+    assert len(said) == 1, said
+    assert "did NOT re-baseline" in said[0]
+    assert "180.0 km/h" in said[0] and "50.00" in said[0]
+    # ...and saying so changed nothing about what it does.
+    assert state._fuel_lap_start == pytest.approx(50.0)
+
+
+def test_a_fill_that_arrives_on_a_paused_frame_is_said_to_have_been_missed(
+        monkeypatch):
+    """**The guard can be refused, or it can never be asked, and those look
+    identical on disk.**
+
+    `update` returns on a paused or loading packet and advances `_prev` as it
+    goes, so a fill landing on one of those frames is consumed before
+    `_rebaseline_on_grid_fill` runs - and the recorder drops those frames too,
+    so no stored lap can show it afterwards. On the Bathurst race of 20 Sep
+    2026 the stored frames carry the 49.977 -> 100.0 L step at 0 km/h with
+    every precondition met, and replaying them re-baselines correctly; the
+    live run did not. This line is what separates the two explanations.
+    """
+    kept = _kept_session_log(monkeypatch)
+    state = SessionState()
+    state.update(make_packet(speed_ms=0.0, fuel_level=49.977, laps_in_race=20))
+    state.update(make_packet(speed_ms=0.0, fuel_level=100.0, laps_in_race=20,
+                             flags_raw=0x0001 | 0x0002))    # paused
+
+    said = [line for line in kept.lines if "never saw it" in line]
+    assert len(said) == 1, kept.lines
+    assert "50.02 L fill" in said[0] and "paused" in said[0]
+    assert state._fuel_lap_start == pytest.approx(49.977), (
+        "saying so must not change what it does")
+
+
+def test_an_ordinary_frame_says_nothing_about_the_grid_fill(monkeypatch):
+    """This runs on every packet at 60 Hz. Only a step big enough to BE the
+    grid fill is ever spoken about; a log that floods is a log nobody reads."""
+    kept = _kept_session_log(monkeypatch)
+    state = SessionState()
+    for litres in (50.0, 49.98, 49.96, 49.94):
+        state.update(make_packet(speed_ms=0.0, fuel_level=litres,
+                                 laps_in_race=20))
+
+    assert [line for line in kept.lines if "grid fill" in line] == []
+
+
 # ------------------------------------------------------- the crash itself
 
 def test_the_consumers_that_abort_a_qt_slot_are_never_handed_a_none():

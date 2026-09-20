@@ -27,7 +27,7 @@ def test_before_three_stint_laps_the_higher_of_race_and_stint_stands():
     stint's lighter burn may not stand in silently for this one. Until the
     stint has three laps the higher of the two sizes the laps ahead, and the
     basis says which it is."""
-    from pitcrew.race.expectations import FUEL_BASIS_HIGHER
+    from pitcrew.race.expectations import FUEL_BASIS_HIGHER_STINT
 
     t = _tracker()
     for n in range(2, 8):
@@ -39,7 +39,7 @@ def test_before_three_stint_laps_the_higher_of_race_and_stint_stands():
     assert t.stint_green_laps() == 2
     assert t.stint_fuel_per_lap_l() is None
     assert t.race_fuel_per_lap_l() == 7.32
-    assert t.current_fuel_basis() == (7.795, 2, FUEL_BASIS_HIGHER)
+    assert t.current_fuel_basis() == (7.795, 2, FUEL_BASIS_HIGHER_STINT)
 
 
 def test_from_three_stint_laps_the_stint_figure_takes_over():

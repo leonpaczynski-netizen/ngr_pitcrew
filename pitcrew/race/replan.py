@@ -72,6 +72,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
+from pitcrew.diagnostics import log
 from pitcrew.race.calls import saving_covers
 from pitcrew.strategy.model import (
     RaceInputs,
@@ -709,19 +710,51 @@ def drift(observed: float | None, planned: float | None) -> float | None:
     return (observed - planned) / planned
 
 
-def assess(*, laps_done: int, laps_total: int | None,
-           fuel_l: float | None,
-           planned_fuel_per_lap: float | None,
-           observed_fuel_per_lap_l: float | None,
-           lap_time_ms: int | None,
-           planned_lap_time_ms: int | None,
-           current_stops: int,
-           inputs: RaceInputs | None = None,
-           fuel_capacity_l: float | None = None,
-           observed_fuel_sd_l: float | None = None,
-           achieved_lap_ms: int | None = None,
-           lap_sigma_s: float | None = None,
-           max_stops: int = REPLAN_MAX_STOPS) -> Replan:
+def assess(**kwargs) -> Replan:
+    """`_assess`, and a line in the log saying what it answered.
+
+    Keyword-only, like the function it wraps: every caller already names its
+    arguments, and a positional one here would be a silent mis-binding of a
+    signature with thirteen terms in it.
+
+    **This module logged nothing at all** - `grep -c replan logs/pitcrew.log`
+    returned 0 for the whole of Bathurst Rd 8, a race whose strategy shape was
+    decided here on every one of 28 laps and spoken twice. The burn's install
+    and its refusal are logged beautifully one layer down; the thing that
+    decides the shape of the race was completely dark, and the only way to
+    tell what it had done was to infer it from a frozen stop count.
+
+    CLAUDE.md rule 10's second half asks for the accepts and not only the
+    refusals, and this is a solve rather than a filter - so every call gets a
+    line, whether or not anything is said. Speaking is `PlanRegister`'s
+    decision and it logs its own; this is the thinking.
+
+    One line per crossing, which is dozens a race rather than thousands.
+    """
+    verdict = _assess(**kwargs)
+    log("race").info(
+        "re-plan on lap %s: %s%s%s, confidence %s - %s",
+        kwargs.get("laps_done", "?"), verdict.verdict,
+        "" if verdict.stops is None else f", {verdict.stops} stops from here",
+        "" if verdict.laps_to_next_stop is None
+        else f", next stop in {verdict.laps_to_next_stop} laps",
+        verdict.confidence, verdict.reason or "nothing to report")
+    return verdict
+
+
+def _assess(*, laps_done: int, laps_total: int | None,
+            fuel_l: float | None,
+            planned_fuel_per_lap: float | None,
+            observed_fuel_per_lap_l: float | None,
+            lap_time_ms: int | None,
+            planned_lap_time_ms: int | None,
+            current_stops: int,
+            inputs: RaceInputs | None = None,
+            fuel_capacity_l: float | None = None,
+            observed_fuel_sd_l: float | None = None,
+            achieved_lap_ms: int | None = None,
+            lap_sigma_s: float | None = None,
+            max_stops: int = REPLAN_MAX_STOPS) -> Replan:
     """Rebuild the rest of the race and solve it. Called every lap.
 
     This used to decide whether to think: a drift threshold gated the call to
@@ -849,11 +882,50 @@ def assess(*, laps_done: int, laps_total: int | None,
     if not runnable:
         # Every shape the model can build needs more fuel in the car than
         # there is. That is the urgent branch above arriving by another road.
+        #
+        # **The stop count it reports comes from the fuel, not from the plan
+        # it has just rejected** (rule 12). This line read
+        # `stops=max(1, current_stops)` until 20 Sep 2026, and `current_stops`
+        # is `RaceCoordinator.stops_planned()` - the stops still in the FROZEN
+        # plan. So the branch that had just found no plan fits answered "does
+        # any plan fit?" by echoing that plan's own residue. At Bathurst Rd 8
+        # it produced both of the race's two strategy sentences: "Recommend 3
+        # stops from here" on lap 3, which was the approved plan read back
+        # dressed as a recommendation, and "Recommend 2 stops from here" on
+        # lap 22 with six laps left, when two stops was flatly impossible.
+        #
+        # And because it returned `laps_to_next_stop=None` with a sticky
+        # URGENT, all three exits from `materially_different` were held shut
+        # for eighteen laps: the stop count could not move, the stop-lap test
+        # cannot fire on a None, and neither escalation nor de-escalation can
+        # fire from URGENT to URGENT. The stop count and the laps to it are
+        # both taken from the same arithmetic below, so the doors work again.
+        stops, to_next, why = _stops_on_the_fuel(
+            laps_left=laps_left, fuel_l=fuel_l, burn=burn,
+            capacity_l=fuel_capacity_l)
+        if stops == 0:
+            # **The fuel is not what bound this**, so it may not be given as
+            # the reason (rule 12). The tank covers the rest of the race and
+            # every shape still failed - `_worth_stopping` on a short
+            # remainder, or the promotion guard. Say that it needs a look
+            # rather than naming a constraint that is not binding.
+            #
+            # **And no stop lap either, because no stop is being proposed.**
+            # The two fields have to agree: `materially_different` compares
+            # the absolute lap and the laps-from-now against each other, and
+            # a pair that describes different stops is worse than a pair that
+            # describes none.
+            return Replan(URGENT,
+                          f"no stop shape fits the race that is left, and "
+                          f"{why} - the plan needs a look",
+                          stops=None, confidence="low")
         return Replan(
             URGENT,
-            "no plan reaches the next stop on the fuel aboard",
-            stops=max(1, current_stops), confidence="medium",
-            next_stop_lap=laps_done + 1)
+            f"no plan reaches the next stop on the fuel aboard; {why}",
+            stops=stops, confidence="medium" if stops is not None else "low",
+            next_stop_lap=(laps_done + to_next if to_next is not None
+                           else laps_done + 1),
+            laps_to_next_stop=to_next)
 
     best = runnable[0]
     current = next((p for p in runnable if p.stops == current_stops), None)
@@ -923,6 +995,44 @@ def assess(*, laps_done: int, laps_total: int | None,
         next_stop_lap=next_stop,
         laps_to_next_stop=to_next_stop,
     )
+
+
+def _stops_on_the_fuel(*, laps_left: int, fuel_l: float | None,
+                       burn: float | None, capacity_l: float | None
+                       ) -> tuple[int | None, int | None, str]:
+    """`(stops from here, laps to the first one, the arithmetic in words)`.
+
+    **The expression that refuses every plan, made to answer for itself.**
+    When nothing in `recommend`'s answer fits the tank, what bound the race is
+    the fuel: the laps aboard, the laps a full tank buys, and the laps left.
+    Those three produce the stop count, so the count George speaks is the one
+    the decision was made on rather than a figure from the same family
+    (CLAUDE.md rule 12).
+
+    `None` for the count where a term is missing - a burn nobody has measured
+    or a capacity nobody reported cannot be turned into a stop count, and
+    `Replan.call` already has words for that ("The plan needs a look."). Never
+    a guessed number and never a clamped one (rules 3 and 9).
+
+    The laps to the first stop are the laps the fuel aboard actually covers,
+    rounded down and never below one - he cannot box in the past. That is a
+    bound on WHEN, not a measurement, so flooring it is not rule 9's clamp.
+    """
+    if not burn or burn <= 0 or fuel_l is None:
+        return None, None, "no measured burn to size the fuel aboard against"
+    aboard = fuel_l / burn
+    to_next = max(1, int(aboard))
+    said = f"{fuel_l:.0f} L aboard is {aboard:.1f} laps of {laps_left}"
+    if not capacity_l or capacity_l <= 0:
+        return None, to_next, f"{said}, and no tank size to plan a fill with"
+    tank = capacity_l / burn
+    short = laps_left - aboard
+    if short <= 0:
+        return 0, to_next, f"{said}, which reaches the flag"
+    stops = int(math.ceil(short / tank - 1e-9))
+    return stops, to_next, (f"{said}, and a full tank is {tank:.1f} - "
+                            f"{stops} stop{'' if stops == 1 else 's'} from "
+                            f"here at this burn")
 
 
 def _first_stint_fits(plan, fuel_l: float | None,

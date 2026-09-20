@@ -173,6 +173,33 @@ class BoardRow:
         return abs(self.y - y) <= ROW_MATCH_TOL
 
 
+def is_own_row(board, y: int) -> bool:
+    """Whether the ladder rung at `y` is the driver's own row.
+
+    **Inside the plate, not within `ROW_MATCH_TOL` of its midpoint.** The
+    plate is a row high, the rung is somewhere in it, and the midpoint is not
+    where the ladder puts the rung: the driver's own white plate registers as
+    flag colour over its whole height, so `board.flag_ladder` takes rungs out
+    of its top and bottom EDGES - 365 and 396 on the frame traced in
+    `board.CLIPPED_PLATE`, never one at its centre, 381. Asking whether a rung
+    is within 8 px of the midpoint therefore answers **no** on a plate that
+    was located perfectly.
+
+    Measured 20 Sep 2026 over 292 frames of Bathurst (s204) and 182 of
+    Sardegna (s188): this is the half of the clipped-plate fix that stops a
+    regression. Repairing the box while this still asked about the midpoint
+    took the own row from 82.9% to 58.9%, because a box grown to the plate's
+    true extent moves its own midpoint AWAY from the rung the plate was found
+    on. Together they give 60.3% -> 82.9% at Bathurst and 93.4% -> 98.9% at
+    Sardegna, and two rows claiming to be ours on 0 frames of 474.
+
+    **One function because the question is asked in two places** (rule 13):
+    here and in `PitWall._own_driver`, which decides the same thing about the
+    same board and must not decide it differently.
+    """
+    return board[1] <= y <= board[3]
+
+
 def _half(board) -> int:
     return max(6, (board[3] - board[1]) // 3)
 
@@ -303,7 +330,8 @@ def read(frame, board, ladder=None) -> list[BoardRow]:
         return []
     out = []
     for y in ys:
-        is_own = abs(y - own_y) <= ROW_MATCH_TOL
+        # Inside the plate, not near its midpoint - see `is_own_row`.
+        is_own = is_own_row(board, y)
         out.append(BoardRow(
             y=y, is_own=is_own,
             name=name_bitmap(frame, board, y, name_x, is_own, right)))
@@ -342,8 +370,18 @@ class Roster:
         self._together: dict[int, set[int]] = {}
         # Rule 10: the accepts are counted as well as the refusals. `matched`
         # rows joined a cluster, `founded` started one, `contested` wanted a
-        # cluster another row of the same frame was closer to.
-        self.counts = {"matched": 0, "founded": 0, "contested": 0}
+        # cluster another row of the same frame was closer to, and `merged`
+        # is one cluster folded into another by `_merge_converged`.
+        #
+        # **`merged` was the one number nobody had.** Bathurst, 20 Sep 2026:
+        # seven cars became twenty-seven identities and 1,683 clusters were
+        # founded, and the question "did the merge path run at all?" was
+        # unanswerable from the artefacts - a merge was neither counted nor
+        # logged, while the refusals were printed every two minutes. Rule 10
+        # asks for the accepts, and this is the accept on the only path that
+        # can undo a split.
+        self.counts = {"matched": 0, "founded": 0, "contested": 0,
+                       "merged": 0}
         for label, bits in (seed or {}).items():
             array = np.asarray(bits, dtype=bool)
             self._groups.append({"bits": array, "sum": array.astype(float),
@@ -391,13 +429,18 @@ class Roster:
                 continue
             if theirs["bits"].shape != mine["bits"].shape:
                 continue
-            if _distance(theirs["bits"], mine["bits"]) >= SAME_NAME_MAX_DIFF:
+            apart_by = _distance(theirs["bits"], mine["bits"])
+            if apart_by >= SAME_NAME_MAX_DIFF:
                 continue
             if mine["seen"] >= theirs["seen"]:
                 keep, drop = index, other
             else:
                 keep, drop = other, index
             winner, loser = self._groups[keep], self._groups[drop]
+            # Read before the fold, for the line below: afterwards the
+            # winner's own count is gone into the total.
+            kept_seen, lost_seen = winner["seen"], loser["seen"]
+            kept_label, lost_label = winner["label"], loser["label"]
             winner["seen"] += loser["seen"]
             winner["spaced"] = winner.get("spaced", 0) + loser.get("spaced", 0)
             winner["sum"] = winner["sum"] + loser["sum"]
@@ -412,6 +455,21 @@ class Roster:
                 partners = self._together.setdefault(other_id, set())
                 partners.discard(drop)
                 partners.add(keep)
+            self.counts["merged"] += 1
+            # Rule 10, the accept said out loud: which cluster went into
+            # which, how far apart the two exemplars had drifted, and what
+            # each was carrying. A merge is the one event that can undo a
+            # split, and it was invisible - so a race could not say whether
+            # the path had run once or never.
+            _log.info("roster: cluster %d (%s, %d sighting%s) folded into "
+                      "cluster %d (%s, %d) - %.3f apart; now %s with %d, "
+                      "%d merge%s this session",
+                      drop, lost_label or "unnamed", lost_seen,
+                      "" if lost_seen == 1 else "s",
+                      keep, kept_label or "unnamed", kept_seen, apart_by,
+                      winner["label"] or "unnamed", winner["seen"],
+                      self.counts["merged"],
+                      "" if self.counts["merged"] == 1 else "s")
             return keep
         return index
 

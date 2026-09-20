@@ -603,6 +603,146 @@ def test_our_own_stop_open_at_the_flag_is_not_filed_either():
     assert wall.close_all() == []
 
 
+# --- his own fill, kept (Bathurst, 20 Sep 2026) ----------------------------
+
+def _own_stop(wall, clock, litres=(19, 40, 83), lap=11):
+    for reading in litres:
+        wall.see(a_frame(in_lane=(OWN,), fuel={OWN: reading}), lap=lap,
+                 now=clock.tick())
+
+
+def test_his_own_fill_is_kept_although_it_is_not_filed_as_a_rivals():
+    """**Refusing to file it as a rival's left nothing filing it as his.**
+
+    Bathurst, 20 Sep 2026: the fill was on screen for both of his stops,
+    read 477 times a race for everybody else and zero times for him, because
+    both own-car branches of `_close` returned `None` and dropped
+    `Visit.readings` on the floor. The refusal stays - his own stop in
+    `rival_stops` is his habits fed back to him as an opponent's - and the
+    readings now go down a path of their own.
+    """
+    clock = Clock()
+    fills = []
+    wall = a_wall(on_own_fill=fills.append)
+    warm(wall, clock)
+    _own_stop(wall, clock)
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        assert wall.see(a_frame(), now=clock.tick()) == []
+    assert wall.stops() == [], "his own stop is still not a rival's"
+    assert len(wall.own_fills()) == 1 and len(fills) == 1
+    fill = wall.own_fills()[0]
+    assert (fill.lap, fill.fuel_in_l, fill.fuel_out_l) == (11, 19.0, 83.0)
+    assert fill.litres == 64.0 and fill.reads == 3 and not fill.standing
+    assert fill.watched_s >= MIN_WATCHED_S
+
+
+def test_the_fill_can_be_read_while_he_is_still_standing_in_the_box():
+    """The litres going in are worth having during the stop, not after it -
+    that is the one number he asked for. `standing` says which it is."""
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    assert wall.own_fill() is None
+    _own_stop(wall, clock, litres=(19, 40))
+    assert wall.own_fill() is None, "two readings in 10 s is not yet a stop"
+    _own_stop(wall, clock, litres=(60,))
+    live = wall.own_fill()
+    assert live is not None and live.standing
+    assert (live.fuel_in_l, live.fuel_out_l, live.litres) == (19.0, 60.0, 41.0)
+    assert live.reads == 3
+
+
+def test_a_glimpse_on_our_own_row_is_not_kept_as_a_fill(monkeypatch):
+    """The glimpse branch is the one that fired on his lap 11 - `0 fuel reads
+    over 17 s`. Below the bar a rival's fragment is dropped, and ours is
+    dropped the same way: a fill with nothing read on it is not a fill."""
+    _kept_log(monkeypatch)
+    clock = Clock()
+    fills = []
+    wall = a_wall(on_own_fill=fills.append)
+    warm(wall, clock)
+    wall.see(a_frame(in_lane=(OWN,), smudged=(OWN,)), lap=11, now=clock.tick())
+    assert wall.own_fill() is None
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        wall.see(a_frame(), lap=11, now=clock.tick())
+    assert wall.own_fills() == [] and fills == []
+
+
+def test_a_new_session_forgets_the_last_races_fill():
+    """CLAUDE.md rule 11. A fill kept across the boundary is read as this
+    race's, and "you took 64 litres" is a sentence about the wrong race."""
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    _own_stop(wall, clock)
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        wall.see(a_frame(), now=clock.tick())
+    assert wall.own_fills()
+    wall.new_session()
+    assert wall.own_fills() == [] and wall.own_fill() is None
+
+
+def test_the_own_rows_columns_and_figures_are_counted_separately():
+    """A column found on our own row is not a figure read off it.
+
+    His lap 11 took 0 fuel readings over 17 s while rivals in the same window
+    took 20 to 60 each, and nothing in the log could say whether the own row
+    is genuinely harder to read or a gate is wrong. Two counters, so the next
+    race can answer it.
+    """
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    _own_stop(wall, clock)
+    assert ("our own row: pit columns on 3 frames -> fuel read 3"
+            in wall.health())
+    # And a glimpse counts its columns and no figure.
+    other_clock = Clock()
+    other = a_wall()
+    warm(other, other_clock)
+    other.see(a_frame(in_lane=(OWN,), smudged=(OWN,)),
+              now=other_clock.tick())
+    assert ("our own row: pit columns on 1 frames -> fuel read 0"
+            in other.health())
+
+
+def test_the_seed_is_reported_against_the_size_of_the_field(monkeypatch):
+    """**160 known drivers for a seven-car race**, and nothing put the two
+    numbers together (`logs/pitcrew.log:3233`, Bathurst 20 Sep 2026). The
+    field size was known all evening - George said "P3 of 7" off it.
+
+    Counted and reported only: capping the roster is a behaviour change and
+    is deliberately not this.
+    """
+    caplog = _kept_log(monkeypatch)
+    seed = {"Rocky": np.zeros(NAME_SHAPE[::-1], dtype=bool),
+            "PUNISHED": np.ones(NAME_SHAPE[::-1], dtype=bool)}
+    wall = PitWall(Roster(seed=seed))
+    assert "seeded 2 for a field of unknown" in wall.health()
+
+    wall.note_field_size(0)              # 0 is "no reading", never a field
+    assert "field of unknown" in wall.health()
+
+    wall.note_field_size(7)
+    assert "seeded 2 for a field of 7, holding 2" in wall.health()
+    said = [line for line in caplog.lines if "for a field of" in line]
+    assert len(said) == 1 and "seeded with 2 known drivers" in said[0]
+
+    wall.note_field_size(7)              # ...and said once, not every lap
+    assert len([line for line in caplog.lines if "for a field of" in line]) == 1
+
+
+def test_the_health_line_reports_the_rosters_merges():
+    """Rule 10, and B#7: a merge was neither counted nor logged, so the one
+    path that can undo a split never appeared on the line that reports the
+    roster's accepts and refusals."""
+    roster = Roster()
+    wall = PitWall(roster)
+    assert "merged 0" in wall.health()
+    roster.counts["merged"] += 2
+    assert "merged 2" in wall.health()
+
+
 def test_health_has_a_caller_in_the_app():
     """`health()` is reported by the controller, not only by tests.
 

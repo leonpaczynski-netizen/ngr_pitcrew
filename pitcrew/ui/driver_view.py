@@ -528,10 +528,23 @@ class DriverState:
     # heartbeat speaks (`race/targets.py`). None is a dash with a reason.
     target_lap_ms: int | None = None
     target_burn_l: float | None = None
+    # **Which burn `target_burn_l` IS, and how many laps stand behind it.**
+    # `strategy.targets.BURN_BASIS_PLAN` / `BURN_BASIS_RACE`. The figure steps
+    # from the plan's to this race's the moment one is installed - 10.625 to
+    # 8.47 around lap 7 at Bathurst Rd 8 - and a tile that changes what it
+    # means with nothing on it is rule 13. The count is rule 4 beside it: the
+    # plan has none and a measurement does.
+    target_burn_source: str | None = None
+    target_burn_laps: int | None = None
     target_why: str | None = None           # why the lap has no target time
     target_saving: bool | None = None       # priced on the fuel-saving beep
     last_vs_target_s: float | None = None
     last_burn_vs_target_l: float | None = None
+    # What the LAST lap's delta was judged against, which on the lap the
+    # reference changes is not what `target_burn_source` above says - the
+    # verdict is the lap finished, the target is the lap being driven. Kept
+    # apart so that lap can be marked rather than worded as either of them.
+    last_burn_source: str | None = None
     # This stint's mean burn against target, over the laps on the column the
     # last one was driven on, and how many laps that is (`targets.stint_burn`).
     stint_burn_vs_target_l: float | None = None
@@ -1466,18 +1479,71 @@ def target_pace_block(state: "DriverState") -> Block:
                  target_note(state), tone)
 
 
+def burn_reference_note(state: "DriverState") -> str:
+    """"vs race, 7 laps" / "vs plan" / "now vs race, 7 laps", or nothing.
+
+    **What the burn target on this screen IS.** Until 21 Sep 2026 the tile
+    drew `10.62` for six laps and `8.47` for the rest of the race with the
+    same caption over both: the plan's figure, then this race's own, a step
+    of 2.2 L that looks exactly like a driving change and was a change of
+    reference. George names it in the verdict he speaks and the race log
+    names it in every line; the screens named it nowhere, which is CLAUDE.md
+    rule 13 on the only surface he can consult without asking.
+
+    **One word, placed against the number it qualifies**, not a sentence and
+    not a second tile: he is driving. The word is
+    `race.targets.burn_source_word`'s, so the phone, the board and the rack
+    shorten the spoken reference one way rather than three.
+
+    **The count is rule 4 and it is also the mark.** The plan's burn has no
+    lap count and this race's has one, so "vs plan" and "vs race, 7 laps"
+    differ in shape as well as in a word - the count appearing is the figure
+    turning from something asked for into something measured.
+
+    **"now" is the transition, and it is the whole of the transition.** A
+    standing label is a thing he stops seeing; the moment worth marking is
+    the lap the reference changes, and on that lap - and only that lap - the
+    delta above this line was judged against the OLD reference while the
+    target beside it is the new one. "now" says both: the reference has just
+    moved, and the figure over it belongs to the one before. It needs no
+    animation and nothing to attend to at speed - it is one word that is
+    there for a lap and gone.
+
+    Nothing at all where no source was given: no source is no reference, and
+    a bare "vs target" would be the caption that caused this (rule 3).
+    """
+    from pitcrew.race.targets import burn_source_word
+
+    word = burn_source_word(state.target_burn_source)
+    if word is None:
+        return ""
+    # Only where the last lap WAS judged - a lap with no verdict carries the
+    # previous one's reference and is not evidence that anything changed.
+    changed = (state.last_burn_source is not None
+               and state.last_burn_source != state.target_burn_source)
+    laps = state.target_burn_laps
+    count = f", {laps} lap{'' if laps == 1 else 's'}" if laps else ""
+    return f"{'now ' if changed else ''}vs {word}{count}"
+
+
 def target_burn_block(state: "DriverState") -> Block:
-    """BURN VS TARGET: the last lap's litres against the plan's per-lap burn."""
+    """BURN VS TARGET: the last lap's litres against the plan's per-lap burn.
+
+    The sub is the target it was against **and what that target is** - see
+    `burn_reference_note`.
+    """
     from pitcrew.race.targets import ON_TARGET_L
 
+    against = ("" if state.target_burn_l is None
+               else f"target {state.target_burn_l:.2f} L")
+    reference = burn_reference_note(state)
+    if against and reference:
+        against = f"{against} · {reference}"
     delta = state.last_burn_vs_target_l
     if delta is None:
-        return Block("--", (f"target {state.target_burn_l:.2f} L"
-                            if state.target_burn_l is not None else "no target"))
+        return Block("--", against or "no target")
     tone = TONE_URGENT if delta >= ON_TARGET_L else TONE_GOOD
-    return Block(f"{delta:+.2f}", (f"target {state.target_burn_l:.2f} L"
-                                   if state.target_burn_l is not None else ""),
-                 tone)
+    return Block(f"{delta:+.2f}", against, tone)
 
 
 def target_strip_block(state: "DriverState") -> Block:
@@ -1592,6 +1658,34 @@ def face_delta_block(state: "DriverState") -> tuple[str, Block]:
     return "VS BEST", Block(format_delta(delta), "", tone, register=MEASURED)
 
 
+def face_burn_caption(state: "DriverState") -> str:
+    """"BURN VS RACE" / "BURN VS PLAN" - or "BURN VS TARGET" where nothing said.
+
+    **The phone names the reference in the caption, not under the figure.**
+    The sub is already the stint's mean and its lap count
+    (`face_burn_block`), and that count is a count of laps in this stint
+    while the burn's is a count of laps behind the burn - two numbers, two
+    meanings, one line, which is the rule this whole change is about. The
+    caption is the one piece of the slot that is free.
+
+    **And it marks the change for nothing.** `strip.html`'s `fig` keys a
+    figure's identity on its subject or, failing that, its caption: a figure
+    whose caption changed is a new thing and is drawn rather than rolled. So
+    on the lap the reference moves the phone's burn wipes in instead of
+    counting over, which is the page's own existing idiom for "this is not
+    the same number as before" - no animation written, none to attend to.
+
+    The words are `race.targets.burn_source_word`'s, so the phone and the
+    board shorten one spoken reference one way (rule 13). "VS TARGET" stays
+    for the case where nothing said which target: it is what the slot has
+    always read, and it claims nothing.
+    """
+    from pitcrew.race.targets import burn_source_word
+
+    word = burn_source_word(state.target_burn_source)
+    return f"BURN VS {word.upper()}" if word else "BURN VS TARGET"
+
+
 def face_burn_block(state: "DriverState") -> Block | None:
     """BURN VS PLAN: the last lap's litres over the plan's, and the stint's.
 
@@ -1639,16 +1733,44 @@ class HistoryRow:
     burn_tone: str = TONE_PLAIN
 
 
-def history_rows(history, rows: int = HISTORY_ROWS) -> tuple[HistoryRow, ...]:
+def history_rows(history, rows: int = HISTORY_ROWS,
+                 kind: str = "race") -> tuple[HistoryRow, ...]:
     """The last laps, newest last, as the rack draws them.
 
     **A lap with no verdict keeps its row and says why** - a pit lap, an out
     lap, an incident lap. Dropping them would leave a rack whose lap numbers
     skip, and the gaps are where most of a race's time goes.
-    """
-    from pitcrew.race.targets import ON_TARGET_L, ON_TARGET_S
 
+    **`kind` is what the delta is against, and it decides the ink** (rule
+    13). In a race the delta is the lap against the plan's target for it, so
+    late is bad news and early is good and the two colours say which. In
+    practice there is no plan: the delta is the lap against the best lap of
+    the session, which cannot be negative - so every row but one would paint
+    urgent, and a rack of eleven red laps says the session went wrong when
+    all it says is that one lap was the quickest. Plain, and the figure
+    carries itself.
+
+    **The burn column is one column against two references, and it says
+    where it changed.** A race installs its own burn around lap 7 and the
+    target steps with it, so the deltas read `-2.32 -2.48 -2.18 -2.13 -2.12
+    +0.16 0.00 -0.24` down one column in one ink - a driver who changed
+    nothing and a number that changed what it was measured against. Each
+    row's reference comes off the row itself (`burn_source`, filed with the
+    verdict that produced the delta), never off the state, so a row drawn
+    now says what it was judged against then.
+
+    **Marked, not labelled on every row.** Twelve rows repeating the same
+    word is a column he reads once and then stops seeing; the marks are the
+    first judged row in the window - so the window is never entirely
+    unlabelled once it has scrolled past the change - and every row whose
+    reference differs from the judged row above it. In a race that is one
+    word, or two on the lap it moves.
+    """
+    from pitcrew.race.targets import ON_TARGET_L, ON_TARGET_S, burn_source_word
+
+    racing = kind == "race"
     drawn = []
+    marked = None
     for lap in list(history or ())[-rows:]:
         delta, burn_delta = lap.get("lap_delta_s"), lap.get("burn_delta_l")
         saving = lap.get("saving")
@@ -1658,6 +1780,17 @@ def history_rows(history, rows: int = HISTORY_ROWS) -> tuple[HistoryRow, ...]:
             note = "pit lap"
         elif lap.get("out"):
             note = "out lap"
+        # **Beside the burn figure, in the column that already says what
+        # this row IS** - "full · vs race". A row's beep column and a row's
+        # burn reference are both qualifiers of the litres one column left,
+        # and the note column is where the rack puts those. Nothing at all
+        # where the lap carries no source: an old history row, a lap with no
+        # verdict, a practice rack (rule 3).
+        word = burn_source_word(lap.get("burn_source"))
+        if word is not None and burn_delta is not None:
+            if word != marked:
+                note = f"{note} · vs {word}" if note else f"vs {word}"
+            marked = word
         used = lap.get("burn_l")
         # **The litres AND what they were against.** Coloured alone, a 7.04
         # in green beside a 5.37 in amber reads as a judgement on the figure
@@ -1670,7 +1803,7 @@ def history_rows(history, rows: int = HISTORY_ROWS) -> tuple[HistoryRow, ...]:
             delta="" if delta is None else format_delta(delta),
             burn=burn,
             note=note,
-            delta_tone=(TONE_PLAIN if delta is None else
+            delta_tone=(TONE_PLAIN if delta is None or not racing else
                         TONE_URGENT if delta >= ON_TARGET_S else TONE_GOOD),
             burn_tone=(TONE_PLAIN if burn_delta is None else
                        TONE_URGENT if burn_delta >= ON_TARGET_L else TONE_GOOD),
@@ -1678,12 +1811,20 @@ def history_rows(history, rows: int = HISTORY_ROWS) -> tuple[HistoryRow, ...]:
     return tuple(drawn)
 
 
-def history_summary(history) -> str:
+def history_summary(history, kind: str = "race") -> str:
     """One line under the rack: the laps that counted, the best, the burns.
 
     **Per beep column, and each with its lap count** (rule 4): the two columns
     are two burns 30% apart, and one average over both is the figure that put
     six litres in the car at Sardegna.
+
+    **Practice has one burn column, not two**, because there is no plan and so
+    no beep column to be on either side of - and that one figure is the whole
+    reason the practice rack is worth a screen the night before a race: it is
+    the reference burn the next day's fuel plan rests on. It is taken over the
+    COUNTED laps only, the same set the best came from, because an out-lap's
+    litres are not a reference burn; and it carries its lap count, because a
+    burn over two laps and one over eleven are not the same claim (rule 4).
     """
     laps = [lap for lap in list(history or ()) if lap.get("lap_ms")]
     # Every lap of the race, not a window: `RaceCoordinator` keeps them all,
@@ -1693,6 +1834,13 @@ def history_summary(history) -> str:
     if counted:
         best = min(lap["lap_ms"] for lap in counted)
         parts.append(f"best {format_lap_ms(best)}")
+    if kind != "race":
+        burns = [lap["burn_l"] for lap in counted
+                 if lap.get("burn_l") is not None]
+        if burns:
+            parts.append(f"burn {sum(burns) / len(burns):.2f} L/lap "
+                         f"over {len(burns)}")
+        return "  ·  ".join(parts)
     for saving, word in ((True, "save"), (False, "full")):
         burns = [lap["burn_l"] for lap in laps
                  if lap.get("saving") is saving
@@ -1701,6 +1849,68 @@ def history_summary(history) -> str:
             parts.append(f"{word} {sum(burns) / len(burns):.2f} L/lap "
                          f"over {len(burns)}")
     return "  ·  ".join(parts)
+
+
+def practice_history(rows) -> tuple[dict, ...]:
+    """The Practice tab's laps in the rack's own vocabulary.
+
+    His ask, 20 Sep 2026: *"the lap rack on the practice page can be visible
+    on the monitor"*. Nothing is re-parented to do it - a Qt widget has one
+    parent, so moving `RackRow` would take the rack OFF the Practice tab -
+    and `_HistoryPanel` is already this rack. All that was missing was
+    something to fill `DriverState.history` with outside a race.
+
+    **What practice has and a race has not, and the reverse.** There is no
+    plan, so there is no target lap and no target burn: `lap_delta_s` here is
+    the lap against the best lap ON THIS RACK - which is not the best lap on
+    file, and the head says so in those words - `burn_delta_l` is None and
+    stays None, and `saving` is None because there is no beep column. What
+    the head over each column says is settled in `_HistoryPanel`, so the
+    words and the quantity cannot drift apart (rule 13).
+
+    **Only the laps that count carry a delta**, the same set
+    `PracticeScreen._best_ms` takes the best from - an out-lap is short by
+    twelve seconds at Daytona and would otherwise be the best on the rack.
+    Struck and structural laps keep their row and say why, exactly as a race's
+    pit lap does.
+
+    **A burn of zero is refused, not drawn** (rule 3, and rule 9). `LapRow`
+    carries `fuel_used` as a plain float; a lap whose fuel was never read
+    arrives as 0.0, and `0.00` in the burn column is a measurement nobody
+    made - on the one figure the next day's fuel plan is built from.
+
+    **Every lap, not the drawn dozen.** `history_rows` takes the last twelve
+    and `history_summary` reads the lot, exactly as the race's own
+    `lap_history` is handed over whole - and it has to be the lot here, or
+    "N laps" and "best" describe the tail of a session while the delta beside
+    them is measured against the whole of it. A best older than twelve laps
+    would then be named nowhere and referenced everywhere (rules 4 and 13).
+    """
+    laps = list(rows or ())
+
+    def counts(row) -> bool:
+        return bool(getattr(row, "counted", False)) and (row.lap_time_ms or 0) > 0
+
+    times = [row.lap_time_ms for row in laps if counts(row)]
+    best = min(times) if times else None
+    filed = []
+    for row in laps:
+        used = getattr(row, "fuel_used", None)
+        filed.append({
+            "lap": row.lap_num,
+            # Never a zero: `format_lap_ms` refuses None and says so.
+            "lap_ms": row.lap_time_ms or None,
+            "lap_delta_s": (None if best is None or not counts(row)
+                            else (row.lap_time_ms - best) / 1000.0),
+            "burn_l": used if used is not None and used > 0 else None,
+            "burn_delta_l": None,
+            "saving": None,
+            "why": ((row.exclusion_reason or "excluded") if row.excluded
+                    else "incident" if row.incident else None),
+            "pit": bool(row.is_pit_lap),
+            "out": bool(row.is_out_lap),
+        })
+    return tuple(filed)
 
 
 def target_note(state: "DriverState") -> str:
@@ -1768,6 +1978,50 @@ def fuel_flag_block(state: "DriverState") -> Block:
                  _tone(state.fuel_to_flag < 0))
 
 
+def fuel_in_hand_parts(state: "DriverState") -> tuple[tuple[str, str], ...]:
+    """Fuel in hand as one line, `(words, ink)` a part - for the history page.
+
+    **It was on no screen at all for a whole race.** `DriverState` carries
+    `fuel_l`, `laps_of_fuel` and `burn_l` on every 250 ms tick, but with the
+    phone and the tablet both polling the monitor swaps to `_HistoryPanel`
+    (`_show_session_kind`), `_show_fuel` then writes into hidden widgets, the
+    tablet's own row is blank and the strip draws litres only inside the box.
+    So from lap 1 to the flag on 20 Sep, "how much fuel am I holding" was
+    captured four times a second and rendered nowhere.
+
+    **Both distances are named on the same line, which is the point** (rule
+    13). "Laps in hand" was spoken twice in two minutes meaning laps-to-the-
+    stop and laps-to-the-flag - figures ten laps apart, neither naming its
+    reference. Here they sit beside each other and each carries its own.
+
+    **The same two expressions the running board uses**, so one tank cannot
+    be two claims on two pages: `fuel_stop_block` and `fuel_flag_block`,
+    unchanged, including their dashes - and a dash brings its reason with it,
+    which is this board's rule everywhere else.
+
+    **No live litres**, for `_show_fuel`'s stated reason: `state.fuel_l` is
+    the packet in hand while both figures are computed from the tank as it
+    read at the last crossing, and three readings of one tank on one screen
+    reconcile with nothing. The laps aboard are the stop block's own sub-line
+    and come from the same crossing as the figures beside them.
+    """
+    parts: list[tuple[str, str]] = [("LAPS IN HAND", INK_DIM)]
+    for block, where in ((fuel_stop_block(state), "TO THE STOP"),
+                         (fuel_flag_block(state), "TO THE FLAG")):
+        if block.value in REFUSALS:
+            # A refusal is not a figure, so it does not get a figure's ink -
+            # and it says why, the way every other dash on this board does.
+            words = f"-- {where}"
+            parts.append((f"{words} - {block.sub}" if block.sub else words,
+                          INK_DIM))
+            continue
+        parts.append((f"{block.value} {where}",
+                      NEAR if block.urgent else INK))
+    if state.laps_of_fuel is not None:
+        parts.append((f"{state.laps_of_fuel:.1f} ABOARD", INK))
+    return tuple(parts)
+
+
 def position_block(state: "DriverState") -> Block:
     """POSITION: `P6` over `of 12`, or a dash - P0 is not a place anyone
     finished in. `RaceState.position` is None until the first packet is
@@ -1787,6 +2041,25 @@ def format_sector_ms(ms: int | None) -> str:
     if ms >= 60_000:
         return format_lap_ms(ms)
     return f"{ms / 1000:.3f}"
+
+
+def tyre_caption_words(state: "DriverState") -> str:
+    """The line under the four corners, and what it refuses.
+
+    **It says when there is no threshold at all.** With no compound
+    `classify` returns "cool" and the four numbers paint in the same white a
+    measured-below-onset reading gets - so 96 °C on an unknown set draws
+    exactly like 60, and white on this board claims "not yet wearing faster
+    for heat". It cannot claim that with nothing to compare against.
+
+    **One expression, because three surfaces draw it now**: the running
+    board, the history rack, and the tablet in practice. It was already
+    written twice when the rack got the corners; a third copy is how one
+    screen comes to claim a wear line another has refused (rules 12 and 13).
+    """
+    if state.compound:
+        return f"TYRE SURFACE °C · {state.compound.upper()}"
+    return "TYRE SURFACE °C · COMPOUND UNKNOWN, NO WEAR LINE"
 
 
 def sector_blocks(state: "DriverState") -> tuple[tuple, str]:
@@ -1965,9 +2238,15 @@ class _LapTimePanel(QWidget):
             pace, burn = target_pace_block(state), target_burn_block(state)
             self.vs_target.set_value(pace.value, inks[pace.tone])
             # The burn against its own target, with the target beside it -
-            # the one place the figure he is being judged on is drawn.
+            # the one place the figure he is being judged on is drawn - and
+            # WHICH burn that target is (`burn_reference_note`). The line
+            # read "burn +0.16 of 8.47" on the lap the same figure had been
+            # 10.62, and the step was the app's, not his.
             against = ("" if state.target_burn_l is None
                        else f" of {state.target_burn_l:.2f}")
+            reference = burn_reference_note(state)
+            if reference:
+                against = f"{against}  {reference}"
             self.burn.setText(f"burn {burn.value}{against}")
             self.burn.setStyleSheet(
                 f"font-family:{NUMBER_FACE};font-size:{self._sub_px}px;"
@@ -2632,6 +2911,13 @@ class _HistoryPanel(QWidget):
     does not show him - went with it. They are the running board's own
     `_Tyre` widgets fed from the same expressions, not a second rendering:
     two instances of one widget fed one state, as the lap panel already is.
+
+    **And it is the practice rack too** (his ask, 20 Sep 2026: *"the lap rack
+    on the practice page can be visible on the monitor"*). The same twelve
+    rows, fed from `practice_history` instead of `RaceState.lap_history` - but
+    the two judged columns are not the same claim in the two sessions, so the
+    heads and the caption are worded from `session_kind` rather than fixed.
+    See `_word_heads`.
     """
 
     COLUMNS = ("LAP", "TIME", "VS TARGET", "BURN  VS TARGET", "")
@@ -2657,6 +2943,37 @@ class _HistoryPanel(QWidget):
     # The split head, as two marks in one label. `measured  declared`.
     SPLIT_HEAD = {3: (("BURN", INK_DIM), ("VS TARGET", CRAYON_DIM))}
 
+    # **Practice re-words the two judged columns, because there is no plan for
+    # them to be judged against.** Keeping the race's words over a different
+    # quantity is rule 13 on the screen he reads between runs: "VS TARGET"
+    # over a lap-against-his-own-best would be the same three words meaning
+    # two things on two nights. So the delta column says what it is against,
+    # and the burn column drops the half it has not got rather than dashing
+    # it. Both marks are `INK_DIM`, not the crayon: nothing here was declared
+    # or approved - the delta is one measured lap subtracted from another.
+    #
+    # **"ON RACK", and the two words are load-bearing.** The phone already
+    # says "VS BEST" in practice (`face_delta_block`) and it means the best
+    # lap EVER recorded on this car, circuit, version and tyre -
+    # `best_lap_on_file`. This column is against the best of the laps drawn
+    # directly under it, which the summary line names. Two surfaces saying
+    # "vs best" about two references, at the same moment, is rule 13 exactly
+    # - and under a helmet he cannot ask which one he is reading.
+    PRACTICE_HEADS = {2: (("VS BEST ON RACK", INK_DIM),),
+                      3: (("BURN", INK_DIM),)}
+
+    # What the page is a history OF. "THE RACE SO FAR" over a practice rack
+    # is the same mis-naming one line up.
+    CAPTIONS = {"race": "THE RACE SO FAR",
+                "qualifying": "QUALIFYING SO FAR",
+                "practice": "THE SESSION SO FAR"}
+
+    @staticmethod
+    def _head_html(parts) -> str:
+        """A head's words, each in its own register's ink, in one label."""
+        return "&nbsp;&nbsp;".join(f'<span style="color:{ink}">{word}</span>'
+                                   for word, ink in parts)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         column = QVBoxLayout(self)
@@ -2666,28 +2983,48 @@ class _HistoryPanel(QWidget):
         self.caption.setStyleSheet(
             f"font-family:{LABEL_FACE};font-size:26px;font-weight:600;"
             f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
-        column.addWidget(self.caption)
+        # **The fuel shares the caption's row rather than taking one of its
+        # own.** This page is the tallest thing the board can show apart from
+        # the running board itself - 860 px against 943 on the rig's faces -
+        # and a rack row is 34 px of that headroom for one figure. Beside the
+        # caption it costs the difference between two single lines, which is
+        # nothing, and it puts the number at the top of the page where the
+        # eye lands rather than under twelve rows of lap times.
+        #
+        # **Built once and re-texted, never shown and hidden.** A sibling
+        # made visible before the other hid grew this window to 2,730 px and
+        # Qt never shrank it back - and the board's geometry is SAVED. This
+        # label is always in the layout; what changes is its text.
+        self.fuel = QLabel("")
+        self.fuel.setAlignment(Qt.AlignmentFlag.AlignRight
+                               | Qt.AlignmentFlag.AlignVCenter)
+        self.fuel.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:26px;font-weight:600;"
+            f"letter-spacing:3px;background:transparent;")
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(self.caption)
+        head.addStretch(1)
+        head.addWidget(self.fuel)
+        column.addLayout(head)
         grid = QGridLayout()
         grid.setHorizontalSpacing(46)
         grid.setVerticalSpacing(4)
-        for index, head in enumerate(self.COLUMNS):
+        # **Built once and re-texted, like every other label on this page.**
+        # The heads change wording with the session kind, and a head shown or
+        # hidden to do it is the 2,730 px defect again.
+        self.heads = []
+        for index in range(len(self.COLUMNS)):
             label = QLabel()
-            parts = self.SPLIT_HEAD.get(index)
-            if parts is None:
-                label.setText(head)
-            else:
-                # Rich text only where a head carries two registers. A label
-                # that needs no split stays plain text, because HTML in a
-                # label is a thing to debug and this needs it twice.
-                label.setText("&nbsp;&nbsp;".join(
-                    f'<span style="color:{ink}">{word}</span>'
-                    for word, ink in parts))
             ink = self.HEAD_INKS[index] or INK_DIM
             label.setStyleSheet(
                 f"font-family:{LABEL_FACE};font-size:22px;font-weight:600;"
                 f"letter-spacing:5px;color:{ink};"
                 f"background:transparent;")
             grid.addWidget(label, 0, index)
+            self.heads.append(label)
+        self._headed_as = None
+        self._word_heads("race")
         self.cells = []
         for row in range(HISTORY_ROWS):
             line = []
@@ -2725,8 +3062,39 @@ class _HistoryPanel(QWidget):
         return (f"font-family:{NUMBER_FACE};font-size:{size}px;"
                 f"color:{ink};background:transparent;")
 
+    def _word_heads(self, kind: str) -> None:
+        """Word the column heads for the session this rack is describing.
+
+        **Only when the kind changes.** Re-texting five rich-text labels four
+        times a second to write the same words back is work for nothing, and
+        a label re-texted is a label re-measured.
+        """
+        if kind == self._headed_as:
+            return
+        self._headed_as = kind
+        overrides = {} if kind == "race" else self.PRACTICE_HEADS
+        for index, label in enumerate(self.heads):
+            parts = overrides.get(index, self.SPLIT_HEAD.get(index))
+            if parts is None:
+                # Rich text only where a head carries two registers. A label
+                # that needs no split stays plain text, because HTML in a
+                # label is a thing to debug and this needs it twice.
+                label.setText(self.COLUMNS[index])
+            else:
+                label.setText(self._head_html(parts))
+
     def show_state(self, state: "DriverState") -> None:
-        rows = history_rows(state.history)
+        # **The rack is worded from the session, not fixed to a race.** The
+        # same twelve rows carry practice laps (`practice_history`), where
+        # the delta is against his own best and there is no burn target at
+        # all - so the heads, the caption and the tones all come off this.
+        # `session`, not `kind`: the tyre loop below binds `kind` to what
+        # `classify` returns, and one of the two would have won silently.
+        session = state.session_kind or "race"
+        self._word_heads(session)
+        self.caption.setText(
+            self.CAPTIONS.get(session, self.CAPTIONS["race"]))
+        rows = history_rows(state.history, kind=session)
         for index, line in enumerate(self.cells):
             row = rows[index] if index < len(rows) else None
             values = (("", "", "", "", "") if row is None else
@@ -2745,7 +3113,24 @@ class _HistoryPanel(QWidget):
                 # was drawn at the note's size and the row wobbled.
                 last = index == len(values) - 1
                 label.setStyleSheet(self._css(ink, 26 if last else 34))
-        self.summary.setText(history_summary(state.history))
+        self.summary.setText(history_summary(state.history, kind=session))
+        # **Fuel in hand, on the page he is actually looking at.** Rich text
+        # for the same reason the split head above is: the two figures are
+        # two claims and one of them can be below zero while the other is
+        # not, so a single ink for the line would have to lie about one of
+        # them. `_HistoryPanel` already does this once, for the same reason.
+        #
+        # **And nothing at all outside a race.** Both figures are laps in
+        # hand to a stop and to a flag, and practice has neither - so both
+        # would be permanent refusals, each dragging its reason along: two
+        # things to read that can never change, which is exactly why
+        # `_show_session_kind` hides the race-only rows in practice rather
+        # than dashing them. The label stays in the layout and is re-texted,
+        # never hidden - a sibling that appears is the 2,730 px defect.
+        self.fuel.setText("" if session != "race" else
+                          f'<span style="color:{INK_DIM}"> · </span>'.join(
+                              f'<span style="color:{ink}">{words}</span>'
+                              for words, ink in fuel_in_hand_parts(state)))
         # **The same two expressions the running board uses** - `classify`
         # for the ink and `pair_gap` for the figure under it - so one set of
         # temperatures cannot be two claims on two pages (rules 12 and 13).
@@ -2755,9 +3140,7 @@ class _HistoryPanel(QWidget):
             widget.show_value(temps.get(corner), kind, lopsided,
                               pair_gap(corner, temps),
                               (state.split_rates or {}).get(corner))
-        self.tyre_caption.setText(
-            f"TYRE SURFACE °C · {state.compound.upper()}" if state.compound
-            else "TYRE SURFACE °C · COMPOUND UNKNOWN, NO WEAR LINE")
+        self.tyre_caption.setText(tyre_caption_words(state))
 
 
 class DriverView(QWidget):
@@ -3067,9 +3450,7 @@ class DriverView(QWidget):
         # `_apply_stint(over_a_stop=True)` clears `tyre_compound` whenever
         # the stint the stop starts names none, so it is reachable, and a
         # plan naming no compounds leaves it None all race.
-        self.tyre_caption.setText(
-            f"TYRE SURFACE °C · {state.compound.upper()}" if state.compound
-            else "TYRE SURFACE °C · COMPOUND UNKNOWN, NO WEAR LINE")
+        self.tyre_caption.setText(tyre_caption_words(state))
         self._show_session_kind(state)
         self.lap_panel_top.show_state(state)
         self.lap_panel_lead.show_state(state)

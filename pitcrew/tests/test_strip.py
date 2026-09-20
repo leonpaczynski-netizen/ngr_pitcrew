@@ -115,6 +115,40 @@ def test_the_burn_is_this_lap_against_the_plan_with_the_stint_on_its_column():
     assert burn["sub"] == "stint +0.05 · 6 laps · save"
 
 
+def test_the_burn_caption_names_which_burn_the_target_is():
+    """Rule 13 on the screen right of his wheel. At Bathurst Rd 8 the figure
+    under this caption stepped 10.625 -> 8.47 around lap 7 - the plan's burn
+    replaced by this race's own - and the slot read "BURN VS TARGET" over
+    both halves, so a change of reference was drawn as a change of driving.
+
+    The caption rather than the sub, because the sub is already the stint's
+    mean and ITS lap count, and two counts on one line is the same defect."""
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
+
+    plan = StripComposer().compose(
+        racing(target_burn_l=10.625, target_burn_source=BURN_BASIS_PLAN,
+               last_burn_source=BURN_BASIS_PLAN))["burn"]
+    assert plan["caption"] == "BURN VS PLAN"
+
+    race = StripComposer().compose(
+        racing(target_burn_l=8.47, target_burn_source=BURN_BASIS_RACE,
+               target_burn_laps=7, last_burn_source=BURN_BASIS_RACE))["burn"]
+    assert race["caption"] == "BURN VS RACE"
+    # The sub is untouched: the stint's own mean, on its own column.
+    assert race["sub"] == "stint +0.05 · 6 laps · save"
+    # **And the page marks the change for nothing.** `strip.html`'s `fig`
+    # keys a figure's identity on its subject or, failing that, its caption,
+    # so a caption that changed makes the burn a new thing and it is drawn
+    # rather than rolled - the page's own idiom, no animation written.
+    assert plan["subject"] == race["subject"] == ""
+    assert plan["caption"] != race["caption"]
+
+
+def test_a_burn_target_that_named_no_reference_keeps_the_old_caption():
+    """Rule 3: nothing said which burn it is, so nothing is claimed."""
+    assert StripComposer().compose(racing())["burn"]["caption"] ==         "BURN VS TARGET"
+
+
 def test_an_instruction_takes_the_band_in_a_fixed_order():
     composer = StripComposer()
     state = racing(laps_to_box=0.0, laps_past_box=0, fuel_to_stop=-0.2)

@@ -23,7 +23,8 @@ from pathlib import Path
 import pytest
 
 from pitcrew.race import calls as C
-from pitcrew.race.expectations import (FUEL_BASIS_HIGHER, FUEL_BASIS_STINT,
+from pitcrew.race.expectations import (FUEL_BASIS_HIGHER_STINT,
+                                       FUEL_BASIS_STINT,
                                        ExpectationTracker)
 from pitcrew.telemetry.session_state import Lap
 
@@ -60,7 +61,7 @@ def test_before_three_stint_laps_the_last_stints_burn_does_not_stand_in():
     t.note_lap(_lap(9, 7.8, out=True))
     t.note_lap(_lap(10, 8.45))
     burn, laps, basis = t.current_fuel_basis()
-    assert (burn, laps, basis) == (8.45, 1, FUEL_BASIS_HIGHER)
+    assert (burn, laps, basis) == (8.45, 1, FUEL_BASIS_HIGHER_STINT)
     # And where the stint is running lighter, the race's figure holds.
     t2 = ExpectationTracker()
     for n in range(2, 8):

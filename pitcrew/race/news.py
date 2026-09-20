@@ -33,6 +33,22 @@ the roster minted for a car nobody has named - "Car #76" - is said as "the car
 ahead" or "the car behind": it is not a person, and read aloud it came out as
 "Car hash 76".
 
+**A SLOT is not a CAR, and this file says which it means.** The slot is the
+interval box next to ours - it always exists and is always read. The car is
+who is in it. The roster's HANDLE is neither: it is a cluster id, and on
+session 204 it founded 1,683 of them for seven cars, so one driver held two
+handles and the slot appeared to change 71 times against 10 real place
+changes. The words follow that:
+
+* "the ahead slot reads it under another handle" is bookkeeping and is
+  never news;
+* "a new car is ahead" is a claim about the race, and it is made only where
+  the FIGURE broke from the car in the slot (`_challenger`);
+* what he hears - "PUNISHED ahead, 2.1." / "The car ahead, 2.1." - is the
+  box's own number about the car in the slot, and it means the same thing
+  every time it is said. The car keeps one name while it is there, whichever
+  of its handles was read (`_name_slot`).
+
 ### What each rests on, and what it may not claim
 
 **Gaps** are GT7's own interval boxes as the pit wall reads them. Measured off
@@ -215,9 +231,29 @@ SUBJECT_HOLD_READS = 3
 # wrong.** This many readings running that fit neither the car nor each other
 # retire the car: nothing is said about that side until three readings agree.
 RETIRE_AFTER_REFUSALS = 6
+# **Readings of its own gap that give a refused handle its credit back** -
+# the retirement neither refusal had (rule 10; see `_clean_read`). Twice
+# `RETIRE_AFTER_REFUSALS`, which is this file's own figure for "a sustained
+# run", because the evidence here is weaker per reading than a refusal is:
+# a handle that has genuinely taken over a slot still reads continuously
+# with the car in it most of the time, and only a place change or a stop
+# tells them apart. At session 204's 1.2 s median cadence twelve readings is
+# 15 s, and at its mean 41 s - comfortably inside the 26 minutes PUNISHED
+# spent unnamed.
+#
+# **One bar, for both refusals** (rule 13). `_merged` says the handle names
+# a slot and `_unreliable` says its reader jumps, but the evidence that
+# retires either is the same evidence - one reading the car in the slot
+# accepted as its own, under the same `continuous` test that would have
+# refused it - so it is counted the same way and against the same number.
+# Two counts here would be two ideas for one thing.
+CLEAR_AFTER_CLEAN_READS = 12
 # **Jumps nothing on the circuit explains before a handle is not believed.**
 # A jump across a place change, a stop or an off is a different car in the
 # slot; one without any of them is the reader, and twice in a race is a habit.
+# Retired by `CLEAR_AFTER_CLEAN_READS`, and then it has to be earned again
+# from nothing: a reader that really jumps re-earns it in seconds, which is
+# the point of retiring it rather than deleting the hedge.
 UNRELIABLE_AFTER_JUMPS = 2
 # **Seconds the interval box can trail the event that changed its car.**
 # Session 176, lap 8: the place was lost at 20:35:25 and the box still showed
@@ -664,6 +700,16 @@ class RaceNews:
             self._neighbour: dict[str, str | None] = {s: None for s in SIDES}
             self._neighbour_name: dict[str, str | None] = {
                 s: None for s in SIDES}
+            # **The handles the slot has decided are the car in it** - see
+            # `_challenger`. `_neighbour` names that car; these are every
+            # handle whose readings have joined its series, so a reading
+            # under any of them is the car's own.
+            self._bound: dict[str, set] = {s: set() for s in SIDES}
+            # Rule 10, the counters that make this visible in the log:
+            # handle changes offered, taken as a new car, bound as the same.
+            self._slot_seen: dict[str, int] = {s: 0 for s in SIDES}
+            self._slot_new: dict[str, int] = {s: 0 for s in SIDES}
+            self._slot_bound: dict[str, int] = {s: 0 for s in SIDES}
             self._band: dict[str, int | None] = {s: None for s in SIDES}
             self._band_pending: dict[str, tuple | None] = {
                 s: None for s in SIDES}
@@ -678,12 +724,15 @@ class RaceNews:
             self._run: dict[str, list] = {s: [] for s in SIDES}
             self._refused: dict[str, int] = {s: 0 for s in SIDES}
             self._segment: dict[tuple, int] = {}
-            self._key_ref: dict[tuple, _Read] = {}
             # Handles that are not one car this race, and why; unexplained
             # jumps per handle; the lap keys a handle changed car on.
             self._merged: dict[str, str] = {}
             self._unreliable: dict[str, str] = {}
             self._jumps: dict[str, int] = {}
+            # Readings running that a refused handle's car accepted as its
+            # own - what retires either refusal (`_clean_read`). One count
+            # for both, because one kind of evidence retires both.
+            self._clean_run: dict[str, int] = {}
             self._broke_on: dict[str, set] = {}
             # (frame, moment) of recent readings, both sides - `moment_before`.
             self._moments: deque = deque(maxlen=64)
@@ -720,6 +769,12 @@ class RaceNews:
         follow and agree among themselves; `SUBJECT_HOLD_READS` of them are a
         new car under the same handle, and nothing is said of that side
         meanwhile (`gaps_call` speaks only the car's own latest reading).
+
+        **A handle the slot has already bound to this car is that car**
+        (`_bound`): its readings are the car's own series and go straight to
+        `_follow`. A handle the slot has never bound is a challenger, and it
+        takes the slot only through `_challenger` - see there for what the
+        app will call a new car.
         """
         if side not in SIDES or gap_s is None:
             return
@@ -740,29 +795,134 @@ class RaceNews:
             reads.append(read)
             if lap_key is not None:
                 self._trends[side].note(lap_key, gap_s, subject=key)
-            if self._neighbour[side] != key:
+            if key not in self._bound[side]:
                 recent = list(reads)[-NEIGHBOUR_HOLD_READS:]
                 if (len(recent) == NEIGHBOUR_HOLD_READS
                         and all(r.key == key for r in recent)
                         and _agree(recent)):
-                    log("race").info(
-                        "news: the car %s is now %s at %.2f s (%d readings "
-                        "that agree)", side, name or key, gap_s,
-                        NEIGHBOUR_HOLD_READS)
-                    self._neighbour[side] = key
-                    self._neighbour_name[side] = name
-                    # **A handle back in the box after another's readings is
-                    # the car it was** where its gap is still his - a name
-                    # flicker is not a new car to announce.
-                    prior = self._key_ref.get((side, key))
-                    same = prior is not None and (
-                        continuous(prior.gap_s, prior.packet, gap_s,
-                                   read.packet)
-                        or _ours_between(prior.moment_before, read.moment))
-                    self._new_car(side, read, another=not same)
+                    self._challenger(side, key, name, recent)
                 return
-            self._neighbour_name[side] = name
+            self._name_slot(side, key, name)
             self._follow(side, read)
+
+    def _challenger(self, side: str, key: str, name: str | None,
+                    run: list) -> None:
+        """A handle this slot has never bound, holding it for
+        `NEIGHBOUR_HOLD_READS` readings that agree. Locked.
+
+        **"A new car is ahead" is a claim about the RACE, not about the
+        app's bookkeeping.** Measured on session 204 (Bathurst, 20 Sep 2026)
+        by replaying its 2,057 named readings and counted again off the log
+        it wrote: the slot changed handle 71 times for a 7-car field, 43 of
+        them (61%) an immediate A -> B -> A return of one driver between two
+        roster clusters, against 10 place changes all race
+        (`laps.position`). Two pairs account for 33 of the 71 - `Magical
+        daddy` with `Car #167` and `PUNISHED` with `277`. The roster founded
+        1,683 clusters for those 7 cars, so the handle is the least
+        trustworthy thing in the reading and it was the whole trigger: 22 of
+        the 31 gap calls spoken that night had no trigger but a handle
+        change, and were announcements of a car that had been there for laps.
+
+        **So the handle does not decide; the figure does.** The run that
+        takes the slot is a chain of readings each continuous with the last
+        (`_agree`), so it is one car's series. Whether it is the car already
+        in the slot is one question and the file already has one expression
+        for it: is its FIRST reading continuous with the slot's last
+        (`continuous`, `jump_allowed_s`)? If it is, the two handles are one
+        series and one car - the handle is bound to the car in the slot and
+        nothing is announced. If it is not, the gap itself moved further
+        than a car's gap can, and that is a new car.
+
+        **The first reading of the run, not the third.** The run's own
+        readings agree among themselves, so the only join that decides
+        anything is the one at the break, and the first reading is where the
+        break is. Comparing the third would also be the laxer test, because
+        the envelope widens with the time since the reference: at session
+        204's cadence a three-reading run spans 2-14 s, which buys the jump
+        up to another 0.7 s of allowance (`jump_allowed_s(5)` is 1.75 s,
+        `jump_allowed_s(19)` 2.45 s). A new car would get in by taking its
+        time.
+
+        **Our own off or stop is the other way one car's gap moves**
+        (`_ours_between`) and it is not a new car either.
+
+        Nothing here is `max(x, 0)`'s cousin: a challenger the app cannot
+        place is called a new car, which is the honest reading of a figure
+        that fits nothing in the slot.
+        """
+        first, last = run[0], run[-1]
+        ref = self._ref[side]
+        self._slot_seen[side] += 1
+        if ref is None:
+            why, another = "the slot was empty", True
+        elif continuous(ref.gap_s, ref.packet, first.gap_s, first.packet):
+            why, another = (
+                f"{ref.gap_s:.2f} -> {first.gap_s:.2f} s in "
+                f"{(first.packet - ref.packet) / SAMPLE_HZ:.1f} s, inside "
+                f"{jump_allowed_s((first.packet - ref.packet) / SAMPLE_HZ):.2f}"
+                " s", False)
+        elif _ours_between(ref.moment_before, first.moment):
+            why, another = "our own off or stop moved the gap", False
+        else:
+            why, another = (
+                f"{ref.gap_s:.2f} -> {first.gap_s:.2f} s in "
+                f"{(first.packet - ref.packet) / SAMPLE_HZ:.1f} s, beyond "
+                f"{jump_allowed_s((first.packet - ref.packet) / SAMPLE_HZ):.2f}"
+                " s - no car's gap moves that far", True)
+        # **Rule 10: log the accepts, not only the refusals.** The handle
+        # flicker ran a whole race unseen because nothing counted it, and
+        # the number setting the bar was never in the log.
+        if another:
+            self._slot_new[side] += 1
+            log("race").info(
+                "news: a new car is %s - %s takes the slot at %.2f s (%s; "
+                "%d readings agree). %d of %d handle changes this side were "
+                "a new car.", side, name or key, last.gap_s, why,
+                NEIGHBOUR_HOLD_READS, self._slot_new[side],
+                self._slot_seen[side])
+            self._new_car(side, last, another=True)
+            return
+        self._slot_bound[side] += 1
+        self._bound[side].add(key)
+        self._name_slot(side, key, name)
+        log("race").info(
+            "news: %s is the car already %s, not a new one - the %s slot "
+            "reads it under %d handle(s) now and is called %s (%s). %d of %d "
+            "handle changes this side were the same car.", name or key, side,
+            side, len(self._bound[side]),
+            a_person(self._neighbour_name[side]) or "the car " + side, why,
+            self._slot_bound[side], self._slot_seen[side])
+        for read in run:
+            self._follow(side, read)
+
+    def _name_slot(self, side: str, key: str, name: str | None) -> None:
+        """The car in the slot keeps the best name its handles gave it.
+        Locked.
+
+        Rule 13: the slot's occupant is one car, so it has one name. Two
+        clusters of one driver - one named, one not - handed the ear
+        "PUNISHED ahead, 2.1." and "The car ahead, 2.1." about the same car
+        seconds apart; 20 of 36 clauses on session 204 said "the car ahead"
+        while a name for it was on file. A minted handle or a bare cluster
+        id never displaces a person's name.
+
+        **The name is only as good as the handle that gave it.** A handle
+        already refused - it named a slot rather than a car (`_merged`), or
+        its readings jump with nothing to explain it (`_unreliable`) - does
+        not get to name the car in the slot through the back door of being
+        bound to it: `gaps_call` checks the slot's own handle, and would not
+        see this one.
+
+        **A car leaving the slot takes its name with it** - `_new_car` sets
+        the name from the handle that took the slot, so a name never
+        outlives the car it belonged to.
+        """
+        if key in self._merged or key in self._unreliable:
+            return
+        if a_person(name) is not None:
+            self._neighbour_name[side] = name
+        elif a_person(self._neighbour_name[side]) is None:
+            self._neighbour_name[side] = name
 
     def one_car(self, key: str) -> bool:
         """Whether a handle is still taken to be one car this race."""
@@ -774,11 +934,22 @@ class RaceNews:
 
         `another` False is the same car re-referenced - after our own off or
         stop moved its gap, or its handle back in the box: not news of a new
-        car, only a new baseline."""
+        car, only a new baseline.
+
+        **A new car empties the slot's handles, and its name.** The binding
+        in `_bound` says "these handles are one car"; it is only ever
+        evidence about the car that was there, so the car leaving retires it
+        (rule 10). The slot is then named by the handle that took it, and by
+        nothing else - a name carried over from the car that left is rule 13
+        at its worst, a person's name said about somebody else.
+        """
         if another:
             slot = (side, read.key)
             self._segment[slot] = self._segment.get(slot, 0) + 1
-        self._key_ref[(side, read.key)] = read
+            self._neighbour[side] = read.key
+            self._neighbour_name[side] = read.name
+            self._bound[side] = {read.key}
+            self._clean_run.pop(read.key, None)
         self._ref[side] = read
         self._run[side] = []
         self._refused[side] = 0
@@ -806,7 +977,7 @@ class RaceNews:
             self._run[side] = []
             self._refused[side] = 0
             self._ref[side] = read
-            self._key_ref[(side, read.key)] = read
+            self._clean_read(read.key)
             self._move_band(side, read.gap_s)
             return
         if not run:
@@ -828,6 +999,77 @@ class RaceNews:
             self._ref[side] = None
             self._run[side] = []
             self._refused[side] = 0
+            # The bindings and the name are evidence about the car that has
+            # just been retired, so they go with it - or no handle would ever
+            # be a challenger again and the slot could never refill, and
+            # `neighbour()` would hand the tyre call a name for a car the
+            # app has just said it cannot find.
+            self._bound[side] = set()
+            self._neighbour_name[side] = None
+
+    def _clean_read(self, key: str) -> None:
+        """One reading this handle's car accepted as its own. Locked.
+
+        **Rule 10, the retirement neither refusal had.** This file refuses a
+        handle in two ways and, until 21 Sep 2026, neither could be taken
+        back:
+
+        * `_merged` - "this handle names a slot, not a car": no name off it
+          and no pace off it. On session 204 it was written at 20:51:32 on
+          ONE event - `PUNISHED` held the behind slot across a place change,
+          21.7 -> 18.8 s - and nothing could reinstate him. He was one of
+          only two real names in a 7-car field and went unnamed for the last
+          26 minutes while still racing us.
+        * `_unreliable` - "this handle's readings jump with nothing to
+          explain it": every gap line about it is said "Unconfirmed." and no
+          pace is said at all. `Car #9` earned it at 21:11:27 on the second
+          jump and every later line about the car ahead carried the word to
+          the flag.
+
+        The second is the quieter failure and it is the same shape as the
+        first, and as rule 10's own worked example: the tyre gauge refused
+        432 consecutive honest readings against one bad frame. A hedge that
+        holds for 26 minutes on the strength of one jump is that, at a lower
+        volume. **The hedge is not the defect - §5.5 gives him "unconfirmed"
+        to act on - the latch is.**
+
+        Both clear the same way: `CLEAR_AFTER_CLEAN_READS` readings running
+        accepted as one car's own gap, under the same `continuous` test that
+        would have refused them. Any fresh refusal restarts the count - a
+        jump does so whether or not it reaches `UNRELIABLE_AFTER_JUMPS` - so
+        a handle that really is a slot, or a reader that really jumps, keeps
+        earning it and never clears; one refused on a single event does.
+
+        **A clear also drops the handle's jump count**, so the hedge has to
+        be earned again from nothing. That is what makes retiring it safe
+        where deleting the word would not be: a reader that is genuinely
+        jumping re-earns it within seconds, and the word then means what it
+        says. Replayed over session 204, `PUNISHED` and `Car #9` each earned
+        the hedge, held it 71 s and 74 s instead of to the flag, jumped once
+        more afterwards and never reached the bar again - so one of the 29
+        gap calls carried "Unconfirmed." where five had, and the one that
+        kept it is the one spoken inside the window.
+
+        And the accepts are logged with the count that set the bar, not only
+        the refusals: the ratchet was invisible for a whole race precisely
+        because nothing ever said the number.
+        """
+        if key not in self._merged and key not in self._unreliable:
+            return
+        self._clean_run[key] = self._clean_run.get(key, 0) + 1
+        clean = self._clean_run[key]
+        if clean < CLEAR_AFTER_CLEAN_READS:
+            return
+        why = "; ".join(book.pop(key) for book in
+                        (self._merged, self._unreliable) if key in book)
+        jumps = self._jumps.pop(key, 0)
+        self._clean_run.pop(key, None)
+        log("race").warning(
+            "news: %s is one car again - %d readings running were its own "
+            "gap, so the refusal (%s) is the thing that was wrong; its name "
+            "and its pace are back%s", key, clean, why,
+            f", and its {jumps} jump(s) are forgotten - {UNRELIABLE_AFTER_JUMPS}"
+            " more would say it unconfirmed again" if jumps else "")
 
     def _another_car(self, side: str, ref: _Read, run: list) -> None:
         """Readings that broke from the car and agree: another car under the
@@ -851,21 +1093,42 @@ class RaceNews:
             # still the box's, right about whoever is there now.
             why = (f"held the {side} slot across a place change or a stop "
                    f"({ref.gap_s:.1f} -> {run[0].gap_s:.1f} s)")
+            # Written again on every fresh hold, and the run of clean
+            # readings that could retire it restarts here - see
+            # `_clean_read`. A handle that really names a slot keeps
+            # earning the refusal and never clears.
+            self._clean_run[key] = 0
             if key not in self._merged:
                 self._merged[key] = why
                 log("race").warning(
                     "news: %s names a slot, not a car, this race - no name "
-                    "and no pace off it: %s", key, why)
+                    "and no pace off it (one hold writes it; clears after %d "
+                    "readings of its own gap): %s", key,
+                    CLEAR_AFTER_CLEAN_READS, why)
         else:
             self._jumps[key] = self._jumps.get(key, 0) + 1
             why = (f"{self._jumps[key]} jump(s) nothing on the circuit "
                    f"explains, latest {ref.gap_s:.1f} -> {run[0].gap_s:.1f} s")
-            if (key not in self._unreliable
-                    and self._jumps[key] >= UNRELIABLE_AFTER_JUMPS):
-                self._unreliable[key] = why
-                log("race").warning(
-                    "news: %s's readings jump with nothing to explain it - "
-                    "its gaps are said unconfirmed this race: %s", key, why)
+            # A jump is a fresh refusal whether or not it reaches the bar,
+            # so the run that could retire the hedge restarts on every one.
+            self._clean_run[key] = 0
+            if key not in self._unreliable:
+                if self._jumps[key] >= UNRELIABLE_AFTER_JUMPS:
+                    self._unreliable[key] = why
+                    log("race").warning(
+                        "news: %s's readings jump with nothing to explain it "
+                        "- jump %d of the %d that say so, so its gaps are "
+                        "said unconfirmed (clears after %d readings of its "
+                        "own gap): %s", key, self._jumps[key],
+                        UNRELIABLE_AFTER_JUMPS, CLEAR_AFTER_CLEAN_READS, why)
+                else:
+                    # Rule 10: the number setting the bar goes in the log
+                    # before the bar is reached, not only after it.
+                    log("race").info(
+                        "news: %s jumped with nothing on the circuit to "
+                        "explain it - jump %d of the %d that would have its "
+                        "gaps said unconfirmed: %s", key, self._jumps[key],
+                        UNRELIABLE_AFTER_JUMPS, why)
         log("race").info("news: the car %s %s under %s at %.2f s "
                          "(%d readings agree; %s)", side,
                          "is the same car" if ours else "is another car",
@@ -1002,7 +1265,8 @@ class RaceNews:
         if event:
             said = [e for e in entries if e in event or e in near]
             why = "; ".join(
-                f"the car {e[0]} is {'new' if e[5] else 'across a band'}"
+                (f"a new car is {e[0]}" if e[5]
+                 else f"the car {e[0]} is across a band")
                 for e in event)
         elif near and refresher_due:
             said = near

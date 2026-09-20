@@ -547,3 +547,89 @@ def qt_app():
     from PyQt6.QtWidgets import QApplication
 
     return QApplication.instance() or QApplication([])
+
+
+# ------------------------ rules 4 and 13: the reference reaches the screens
+
+def test_the_board_fields_name_which_burn_the_target_is_and_how_many_laps():
+    """Bathurst Rd 8: the tile drew 10.625 for six laps and 8.47 for the rest
+    of the race under one caption, a step of 2.2 L that reads as a driving
+    change and was a change of reference. The voice named it and the log
+    named it; `board_target_fields` handed the screens the figure alone."""
+    from types import SimpleNamespace
+
+    from pitcrew.race.targets import burn_source_word
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
+
+    plan_target = LapTarget(lap_ms=90_000, burn_l=10.625, compound="RM",
+                            saving=False, lap_on_set=3,
+                            burn_source=BURN_BASIS_PLAN, burn_laps=None,
+                            planned_burn_l=10.625)
+    state = SimpleNamespace(lap_target=plan_target, target_verdict=None,
+                            stint_burns=[])
+    fields = board_target_fields(state)
+    assert fields["target_burn_l"] == 10.625
+    assert fields["target_burn_source"] == BURN_BASIS_PLAN
+    assert fields["target_burn_laps"] is None
+
+    race_target = LapTarget(lap_ms=90_000, burn_l=8.47, compound="RM",
+                            saving=False, lap_on_set=3,
+                            burn_source=BURN_BASIS_RACE, burn_laps=7,
+                            planned_burn_l=10.625)
+    state.lap_target = race_target
+    fields = board_target_fields(state)
+    assert fields["target_burn_l"] == 8.47
+    assert fields["target_burn_source"] == BURN_BASIS_RACE
+    assert fields["target_burn_laps"] == 7
+
+    # And the two references shorten to two words a tile has room for,
+    # each the head noun of the sentence George says (rule 13).
+    assert burn_source_word(BURN_BASIS_PLAN) == "plan"
+    assert burn_source_word(BURN_BASIS_RACE) == "race"
+    assert burn_source_word(None) is None
+    # A basis nobody taught this module draws no word at all rather than
+    # inheriting whichever was nearest (rule 3).
+    assert burn_source_word("the higher of the race and this stint") is None
+
+
+def test_the_last_laps_reference_is_carried_apart_from_the_targets():
+    """They are two laps. On the lap the burn is installed the verdict was
+    judged against the plan while the target beside it is the race's, and a
+    field that pooled them would word one of the two wrongly (rule 12)."""
+    from types import SimpleNamespace
+
+    from pitcrew.race.targets import TargetVerdict
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
+
+    verdict = TargetVerdict(lap=7, lap_ms=90_000, target_ms=90_000,
+                            lap_delta_s=0.0, burn_l=10.79,
+                            target_burn_l=10.625, burn_delta_l=0.16,
+                            burn_source=BURN_BASIS_PLAN)
+    state = SimpleNamespace(
+        lap_target=LapTarget(lap_ms=90_000, burn_l=8.47, compound="RM",
+                             saving=False, lap_on_set=3,
+                             burn_source=BURN_BASIS_RACE, burn_laps=7),
+        target_verdict=verdict, stint_burns=[])
+    fields = board_target_fields(state)
+    assert fields["last_burn_source"] == BURN_BASIS_PLAN
+    assert fields["target_burn_source"] == BURN_BASIS_RACE
+
+
+def test_a_race_that_installs_its_burn_hands_the_screens_the_change():
+    """End to end through the coordinator, not a hand-built target: the
+    fields step from the plan's reference to the race's."""
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
+
+    race = _race(_one_stint_plan())
+    _drive(race, [(1, 93_000, 4.6), (2, 90_300, 4.8)])
+    before = board_target_fields(race.state)
+    assert before["target_burn_source"] == BURN_BASIS_PLAN
+    assert before["target_burn_laps"] is None
+
+    race.targets.install_measured_burn(4.1, laps=7)
+    race.state.lap_target = race.targets.for_lap(
+        compound="RM", saving=False, lap_on_set=3, fuel_at_start_l=None)
+    after = board_target_fields(race.state)
+    assert after["target_burn_source"] == BURN_BASIS_RACE
+    assert after["target_burn_laps"] == 7
+    assert after["target_burn_l"] == pytest.approx(4.1)

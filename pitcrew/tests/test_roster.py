@@ -107,6 +107,33 @@ def test_a_cluster_that_converges_onto_another_is_folded_into_it():
     assert roster.sightings(two) == roster.sightings(one) == 2
 
 
+def test_a_merge_is_counted_and_said_out_loud(monkeypatch):
+    """**Rule 10: log the accepts, not only the refusals.**
+
+    `counts` carried `matched / founded / contested` and nothing for a merge,
+    and no merge was ever logged - so the Bathurst race of 20 Sep 2026, which
+    filed twenty-seven identities for seven cars, could not say whether the
+    one path that undoes a split had run once or never. The refusals were
+    printed every two minutes throughout.
+    """
+    import pitcrew.telemetry.roster as roster_module
+
+    lines = []
+    monkeypatch.setattr(roster_module._log, "info",
+                        lambda msg, *a, **k: lines.append(msg % a if a
+                                                          else msg))
+    roster = Roster()
+    one, two = roster.see(A), roster.see(C)
+    roster.label(one, "Rocky")
+    assert roster.counts["merged"] == 0
+    roster._groups[two]["bits"] = NEAR_A
+    roster._groups[two]["sum"] = NEAR_A.astype(float)
+    roster._merge_converged(two)
+    assert roster.counts["merged"] == 1
+    folded = [line for line in lines if "folded into" in line]
+    assert len(folded) == 1 and "Rocky" in folded[0]
+
+
 def test_two_clusters_a_person_has_named_differently_never_merge():
     """A human saying they are two drivers outranks a bitmap saying they look
     alike."""
@@ -191,3 +218,75 @@ def test_a_sighting_counts_once_per_spacing_so_the_floor_survives_a_faster_grab(
     for _ in range(3):
         plain.see(A)
     assert plain.spaced_sightings(0) == 3
+
+
+# --- which row is ours -----------------------------------------------------
+#
+# **The rung is somewhere in the plate, and the midpoint is not where the
+# ladder put it.** The driver's own white plate registers as flag colour over
+# its whole height, so `board.flag_ladder` takes rungs out of its top and
+# bottom EDGES - 365 and 396 on the frame traced in `board.CLIPPED_PLATE`,
+# never one at its centre, 381. Asking whether a rung is within 8 px of the
+# plate's midpoint then answers no on a correctly located plate.
+#
+# Measured 20 Sep 2026 over 292 frames of Bathurst and 182 of Sardegna: this
+# is the half of the fix that stops a regression - repairing the box while
+# this still asked about the midpoint took the own row from 82.9% to 58.9%,
+# because a box grown to the plate's true extent moves its midpoint away from
+# the rung the plate was found on.
+
+W, H = 1920, 1080
+DARK_ROW = (24, 30, 38)
+PLATE_ROW = (36, 46, 60)
+WHITE_PLATE = (232, 236, 238)
+NAME_BRIGHT = (228, 230, 232)
+FLAG = (30, 60, 190)
+FLAG_X0, FLAG_X1 = 256, 281
+PLATE_X0, PLATE_X1 = 40, 243
+OWN_TOP, OWN_BOTTOM = 363, 397
+# The rung the plate was found on: inside the plate, and 15 px from its
+# midpoint - which `ROW_MATCH_TOL` (8) rejects.
+OWN_RUNG = 365
+OTHER_RUNGS = [192, 232, 272, 312, 448, 488]
+
+
+def a_board_frame():
+    """A leaderboard with a position digit and a name on every row."""
+    frame = np.zeros((H, W, 3), dtype=int)
+    frame[:] = DARK_ROW
+    for y in OTHER_RUNGS:
+        frame[y - 16:y + 17, PLATE_X0:PLATE_X1 + 1] = PLATE_ROW
+        frame[y - 5:y + 6, 50:61] = NAME_BRIGHT          # his position digit
+        frame[y - 5:y + 6, 90:201] = NAME_BRIGHT         # ...and his name
+    frame[OWN_TOP:OWN_BOTTOM + 1, PLATE_X0:PLATE_X1 + 1] = WHITE_PLATE
+    centre = (OWN_TOP + OWN_BOTTOM) // 2
+    frame[centre - 5:centre + 6, 50:61] = DARK_ROW       # dark on his plate
+    frame[centre - 5:centre + 6, 90:201] = DARK_ROW
+    for y in OTHER_RUNGS + [OWN_RUNG]:
+        frame[y - 9:y + 9, FLAG_X0:FLAG_X1 + 1] = FLAG
+    box = (PLATE_X0, OWN_TOP, PLATE_X1, OWN_BOTTOM)
+    return frame, box, (FLAG_X0, FLAG_X1, sorted(OTHER_RUNGS + [OWN_RUNG]))
+
+
+def test_a_rung_inside_the_plate_is_ours_however_far_from_its_midpoint():
+    from pitcrew.telemetry.roster import ROW_MATCH_TOL, read
+
+    frame, box, ladder = a_board_frame()
+    midpoint = (box[1] + box[3]) // 2
+    assert abs(OWN_RUNG - midpoint) > ROW_MATCH_TOL, (
+        "the rung this fixture is built around is one the old test rejected")
+
+    rows = read(frame, box, ladder)
+    ours = [row for row in rows if row.is_own]
+    assert [row.y for row in ours] == [OWN_RUNG]
+    assert ours[0].name is not None, (
+        "and it is read as dark ink on a white plate, not bright on a dark one")
+
+
+def test_only_one_row_of_a_frame_is_ever_ours():
+    """Two rows marked ours at once is what a box grown past its own row
+    would cause. Measured over 474 frames of two races: 0."""
+    from pitcrew.telemetry.roster import read
+
+    frame, box, ladder = a_board_frame()
+    assert sum(row.is_own for row in read(frame, box, ladder)) == 1

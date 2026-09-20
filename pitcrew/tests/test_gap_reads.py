@@ -48,6 +48,40 @@ def test_the_store_files_them_and_reads_them_back(tmp_path):
         store.close()
 
 
+def test_a_cluster_the_roster_cannot_name_is_filed_as_null_not_as_its_index():
+    """**Three namespaces in one column** (rule 13), and the third is not an
+    identifier at all.
+
+    `controller` filed `roster.name_of(s.subject) or s.subject`, so a cluster
+    with no label wrote the bare `Roster._groups` INDEX into a column whose
+    other rows hold people: 211 rows of the 20 Sep Bathurst race carry
+    subjects like `277`, `1742`, `1311`, sitting beside `PUNISHED` and
+    `Car #164`. The index is live only inside the running process, so months
+    later it resolves to nobody while reading exactly like a key that does -
+    which is rule 3's wrong-value-in-place-of-absence, with an audit as the
+    consumer.
+    """
+    from pitcrew.controller import as_the_archive_names_them
+    from pitcrew.telemetry.roster import Roster
+
+    roster = Roster()
+    named, unnamed = 4, 277
+
+    class _AsTheRosterFoundThem:
+        def name_of(self, cluster):
+            return "PUNISHED" if cluster == named else None
+
+    filed = as_the_archive_names_them(
+        [_sample(subject=named), _sample(subject=unnamed, side="behind"),
+         _sample(subject=None)], _AsTheRosterFoundThem())
+    assert [s.subject for s in filed] == ["PUNISHED", None, None]
+    # And nothing else on the reading moved: only the spelling of who.
+    assert [s.gap_s for s in filed] == [1.2, 1.2, 1.2]
+    # The real roster answers the same way for a cluster it has never seen,
+    # which is the shape the stub above stands for.
+    assert roster.name_of(unnamed) is None
+
+
 def test_a_session_with_no_id_files_nothing(tmp_path):
     from pitcrew.store.db import Store
 

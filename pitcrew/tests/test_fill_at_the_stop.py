@@ -21,7 +21,10 @@ import pytest
 
 from pitcrew.race.calls import (RaceState, _fuel_instruction, fuel_target_basis,
                                 fuel_target_l)
-from pitcrew.race.expectations import (FUEL_BASIS_HIGHER, FUEL_BASIS_RACE,
+from pitcrew.race.expectations import (FUEL_BASES_HEDGED,
+                                       FUEL_BASIS_HIGHER_RACE,
+                                       FUEL_BASIS_HIGHER_STINT,
+                                       FUEL_BASIS_RACE,
                                        FUEL_BASIS_STINT)
 from pitcrew.race.refuel import RefuelAdviser, RefuelWatch, TARGET
 
@@ -113,13 +116,14 @@ def test_the_box_call_names_the_bound_behind_the_litres():
 
 # --------------------------------------------------------- with the hose in
 
-def _fill(watch: RefuelWatch, *, target, basis, burn_basis=FUEL_BASIS_STINT):
+def _fill(watch: RefuelWatch, *, target, basis, burn_basis=FUEL_BASIS_STINT,
+          burn_laps=None):
     """Three rising frames past the arming threshold, then the target call."""
     said = []
     for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
         call = watch.note(fuel, speed_kph=0.0, target_l=target,
                           fuel_per_lap_l=7.35, basis=basis,
-                          burn_basis=burn_basis)
+                          burn_basis=burn_basis, burn_laps=burn_laps)
         if call is not None:
             said.append(call)
     return said
@@ -140,7 +144,8 @@ def test_without_a_basis_the_old_lap_count_is_still_said():
 
 
 @pytest.mark.parametrize("burn_basis", [FUEL_BASIS_STINT, FUEL_BASIS_RACE,
-                                        FUEL_BASIS_HIGHER])
+                                        FUEL_BASIS_HIGHER_RACE,
+                                        FUEL_BASIS_HIGHER_STINT])
 def test_every_installed_race_burn_is_this_races(burn_basis):
     said = _fill(RefuelWatch(), target=63.0, basis="7 laps to the flag",
                  burn_basis=burn_basis)
@@ -232,3 +237,137 @@ def test_the_figure_follows_the_clock_and_never_the_stale_stint(
         laps_after_stops, expect_low, expect_high):
     litres = fuel_target_l(deep_forest(laps_after_stops=laps_after_stops))
     assert expect_low <= litres < expect_high
+
+
+# ------------------------------------- rule 4: how many laps is this burn?
+
+def test_the_fill_call_says_how_many_laps_stand_behind_the_burn():
+    """Bathurst Rd 8, 20 Sep 2026: "at this race's burn" meant nineteen laps
+    of evidence on lap 25 and three laps on lap 26, in an identical sentence.
+    All five bases collapse to four words (`refuel._burn_words`), so rule 4's
+    sample count never reached the ear at all and rule 13 was broken between
+    two calls a lap apart.
+
+    Its own sentence, because `phrase_manifest._pieces` can only render a
+    sentence with one number in it - folded into the burn clause the whole
+    line would fall to live synthesis."""
+    said = _fill(RefuelWatch(), target=63.0, basis="7 laps to the flag",
+                 burn_laps=19)
+    assert said[0].reason.startswith(
+        "7 laps to the flag, at this race's burn. Measured over 19 laps.")
+
+    thin = _fill(RefuelWatch(), target=63.0, basis="7 laps to the flag",
+                 burn_laps=3)
+    assert "Measured over 3 laps." in thin[0].reason
+
+
+def test_one_lap_of_evidence_is_said_in_the_singular():
+    said = _fill(RefuelWatch(), target=63.0, basis=None, burn_laps=1)
+    assert "Measured over 1 lap." in said[0].reason
+
+
+def test_the_practice_burn_gets_no_lap_count():
+    """The plan's sample count is not a count of laps run today, and one form
+    of words may not cover two quantities (rule 13)."""
+    said = _fill(RefuelWatch(), target=63.0, basis=None, burn_basis=None,
+                 burn_laps=30)
+    assert "Measured over" not in said[0].reason
+    assert said[0].reason.startswith("9 laps at the practice burn.")
+
+
+def test_a_race_burn_with_no_count_says_nothing_extra():
+    """Rule 3: missing is silence, never a zero and never a guess."""
+    said = _fill(RefuelWatch(), target=63.0, basis=None, burn_laps=None)
+    assert "Measured over" not in said[0].reason
+    said_zero = _fill(RefuelWatch(), target=63.0, basis=None, burn_laps=0)
+    assert "Measured over" not in said_zero[0].reason
+
+
+def test_the_count_travels_through_the_adviser_context():
+    """The sixth element of the controller's context tuple. A context too old
+    to carry it names the burn without its count rather than inventing one."""
+    spoken = []
+    adviser = RefuelAdviser(
+        context=lambda: (63.0, 7.35, None, "7 laps to the flag",
+                         FUEL_BASIS_STINT, 19),
+        speak=spoken.append)
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        adviser.note_frame(fuel, 0.0)
+    assert "Measured over 19 laps." in spoken[0].reason
+
+    older = []
+    adviser = RefuelAdviser(
+        context=lambda: (63.0, 7.35, None, "7 laps to the flag",
+                         FUEL_BASIS_STINT),
+        speak=older.append)
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        adviser.note_frame(fuel, 0.0)
+    assert "Measured over" not in older[0].reason
+
+
+# ------------------------------- rule 5: a derived basis is hedged, not counted
+
+@pytest.mark.parametrize("hedged", list(FUEL_BASES_HEDGED))
+def test_a_hedged_basis_is_hedged_and_never_given_a_sample_count(hedged):
+    """A column burn is this race's OTHER beep column converted at the plan's
+    ratio - a derived conversion, not a measured population - and "Measured
+    over 19 laps." over it states a claim the evidence does not support, in
+    the most confident form of words the call has (rule 5). The same goes for
+    the two `HIGHER_*` bases: `calls` already speaks them at MEDIUM off
+    `FUEL_BASES_HEDGED`, and this module was the one consumer not reading the
+    tuple at all."""
+    said = _fill(RefuelWatch(), target=63.0, basis="7 laps to the flag",
+                 burn_basis=hedged, burn_laps=19)
+
+    assert "Measured over" not in said[0].reason
+    assert "19" not in said[0].reason
+    # "Unconfirmed." is the word CLAUDE.md §5.5 says he can act on, and it is
+    # `calls`' own LOW-confidence mark - already in the voice pack, so the
+    # hedge costs no clip and is not a second vocabulary (rule 13).
+    assert said[0].reason.endswith("Unconfirmed.")
+    assert said[0].reason.startswith("7 laps to the flag, at this race's burn.")
+
+
+def test_a_measured_basis_still_carries_its_count():
+    """The hedge is for the derived bases only. A burn measured on the laps
+    it describes keeps rule 4's sample count."""
+    for basis in (FUEL_BASIS_STINT, FUEL_BASIS_RACE):
+        said = _fill(RefuelWatch(), target=63.0, basis=None,
+                     burn_basis=basis, burn_laps=19)
+        assert "Measured over 19 laps." in said[0].reason
+        assert "Unconfirmed" not in said[0].reason
+
+
+def test_the_hedge_travels_through_the_controllers_own_context():
+    """Not a hand-built lambda: the six-element tuple `_refuel_context`
+    actually returns. The count reaching the adviser is what makes the hedge
+    matter - before 21 Sep 2026 the producer returned five elements and no
+    count arrived at all, so nothing here could have been wrong out loud."""
+    from types import SimpleNamespace
+
+    from pitcrew.race.expectations import FUEL_BASIS_COLUMN
+    from pitcrew.controller import PitCrewController
+
+    state = deep_forest(fuel_burn_basis=FUEL_BASIS_COLUMN,
+                        fuel_burn_laps=19)
+    stub = SimpleNamespace(race=SimpleNamespace(running=True, state=state))
+    context = PitCrewController._refuel_context(stub)
+    assert len(context) == 6 and context[4] == FUEL_BASIS_COLUMN
+    assert context[5] == 19
+
+    spoken = []
+    adviser = RefuelAdviser(context=lambda: context, speak=spoken.append)
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        adviser.note_frame(fuel, 0.0)
+    assert spoken[0].reason.endswith("Unconfirmed.")
+    assert "Measured over" not in spoken[0].reason
+
+    # And the same state on a measured basis counts its laps.
+    state.fuel_burn_basis = FUEL_BASIS_RACE
+    spoken.clear()
+    adviser = RefuelAdviser(
+        context=lambda: PitCrewController._refuel_context(stub),
+        speak=spoken.append)
+    for fuel in (5.0, 5.0, 5.4, 5.8, 6.3, 6.9):
+        adviser.note_frame(fuel, 0.0)
+    assert "Measured over 19 laps." in spoken[0].reason

@@ -865,11 +865,40 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
         # tallest page and as wide as its widest, and this guard has missed
         # three times by not setting the state that opens one - the box page
         # once, the phone page once, and the sectors once.
-        states.append(replace(states[0], show_history=True, history=tuple(
+        # **With its fuel line at full stretch** (20 Sep 2026). The page
+        # carries laps in hand to the stop AND to the flag - it was added
+        # because both were on no screen at all for a whole race - and the
+        # longest of them is a pair of dashes each dragging its reason
+        # along. states[0] already sets the two `_why` strings; the laps
+        # aboard and the figures themselves are what this adds.
+        states.append(replace(states[0], show_history=True, laps_of_fuel=99.9,
+                              fuel_to_stop=-99.9, fuel_to_flag=-99.9,
+                              history=tuple(
             {"lap": 100 + n, "lap_ms": 599_999, "target_ms": 599_999,
              "lap_delta_s": -99.999, "burn_l": 12.34, "burn_delta_l": 9.99,
              "saving": bool(n % 2), "why": "the beep changed column",
              "pit": False, "out": False, "compound": "RS"}
+            for n in range(40))))
+        states.append(replace(states[0], show_history=True, laps_of_fuel=99.9,
+                              history=tuple(
+            {"lap": 100 + n, "lap_ms": 599_999, "target_ms": 599_999,
+             "lap_delta_s": -99.999, "burn_l": 12.34, "burn_delta_l": 9.99,
+             "saving": bool(n % 2), "why": "the beep changed column",
+             "pit": False, "out": False, "compound": "RS"}
+            for n in range(40))))
+        # **And the SAME page worded for practice** (20 Sep 2026, his ask
+        # that the rack be visible on the monitor). It is a different width:
+        # the delta head grows from "VS TARGET" to "VS BEST ON RACK",
+        # because the phone already says "vs best" about a different lap and
+        # two surfaces may not word one phrase two ways. A stack is as wide
+        # as its widest page, and this guard has missed three times by not
+        # setting the state that opens one.
+        states.append(replace(states[-1], session_kind="practice",
+                              history=tuple(
+            {"lap": 100 + n, "lap_ms": 599_999, "lap_delta_s": 99.999,
+             "burn_l": 12.34, "burn_delta_l": None, "saving": None,
+             "why": "an implausible fuel reading struck it",
+             "pit": False, "out": False}
             for n in range(40))))
         for state in states:
             view.update_state(state)
@@ -998,3 +1027,92 @@ def test_the_box_tyre_block_names_the_set_going_on_not_the_one_coming_off(
                                   tyres_at_stop=True, compound="RM",
                                   next_compound="RS"))
     assert view.box.tyre_stat.value.text() == "RS"
+
+
+# ---- rule 13: the burn target on the board says WHICH burn it is ----------
+
+def _burn_state(**over):
+    from pitcrew.ui.driver_view import DriverState
+
+    base = dict(session_kind="race", target_burn_l=10.625,
+                last_burn_vs_target_l=-2.32)
+    base.update(over)
+    return DriverState(**base)
+
+
+def test_the_burn_tile_names_the_reference_its_target_is():
+    """Bathurst Rd 8, laps 1-28: the sub read `target 10.62 L` for six laps
+    and `target 8.47 L` for the rest, and nothing on the board said the app
+    had changed what it was asking for. George says it every lap
+    (`targets.burn_sentence`) and the race log says it every lap; the tile
+    said nothing (CLAUDE.md rule 13)."""
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
+    from pitcrew.ui.driver_view import target_burn_block
+
+    plan = target_burn_block(_burn_state(target_burn_source=BURN_BASIS_PLAN,
+                                         last_burn_source=BURN_BASIS_PLAN))
+    assert plan.sub == "target 10.62 L · vs plan"
+
+    race = target_burn_block(_burn_state(
+        target_burn_l=8.47, last_burn_vs_target_l=-0.24,
+        target_burn_source=BURN_BASIS_RACE, target_burn_laps=7,
+        last_burn_source=BURN_BASIS_RACE))
+    # **And its lap count beside it** (rule 4). The plan's figure has none
+    # and a measured one does, so the count appearing is the figure turning
+    # from something asked for into something measured.
+    assert race.sub == "target 8.47 L · vs race, 7 laps"
+
+
+def test_the_lap_the_reference_moves_is_the_lap_that_is_marked():
+    """The one moment worth marking: on that lap the delta above the line
+    was judged against the plan while the target beside it is the race's."""
+    from pitcrew.strategy.targets import BURN_BASIS_PLAN, BURN_BASIS_RACE
+    from pitcrew.ui.driver_view import burn_reference_note, target_burn_block
+
+    changing = _burn_state(target_burn_l=8.47, last_burn_vs_target_l=0.16,
+                           target_burn_source=BURN_BASIS_RACE,
+                           target_burn_laps=7,
+                           last_burn_source=BURN_BASIS_PLAN)
+    assert burn_reference_note(changing) == "now vs race, 7 laps"
+    assert target_burn_block(changing).sub == \
+        "target 8.47 L · now vs race, 7 laps"
+
+    # And the lap after, when both halves are the race's, it is gone: a mark
+    # that stayed would be a standing label he stops seeing.
+    settled = _burn_state(target_burn_l=8.47, last_burn_vs_target_l=-0.24,
+                          target_burn_source=BURN_BASIS_RACE,
+                          target_burn_laps=8,
+                          last_burn_source=BURN_BASIS_RACE)
+    assert burn_reference_note(settled) == "vs race, 8 laps"
+
+
+def test_a_burn_target_with_no_reference_draws_no_reference():
+    """Rule 3: where nothing said which burn it is, nothing is drawn - a
+    guessed qualifier is the caption that caused this."""
+    from pitcrew.ui.driver_view import burn_reference_note, target_burn_block
+
+    assert burn_reference_note(_burn_state()) == ""
+    assert target_burn_block(_burn_state()).sub == "target 10.62 L"
+    # No target at all is still the old refusal, with its reason.
+    assert target_burn_block(_burn_state(
+        target_burn_l=None, last_burn_vs_target_l=None)).sub == "no target"
+
+
+def test_the_lap_panel_draws_the_reference_beside_the_burn_it_qualifies(
+        qt_app):
+    """The board's own burn line, not just the block: `_LapTimePanel` builds
+    `burn +0.16 of 8.47` itself and read the same on the lap that figure had
+    been 10.62."""
+    from pitcrew.strategy.targets import BURN_BASIS_RACE
+    from pitcrew.ui.driver_view import _LapTimePanel
+
+    panel = _LapTimePanel(value_px=96)
+    panel.show_state(_burn_state(
+        lap_time_ms=90_000, target_burn_l=8.47, last_burn_vs_target_l=-0.24,
+        target_burn_source=BURN_BASIS_RACE, target_burn_laps=7,
+        last_burn_source=BURN_BASIS_RACE))
+    assert "vs race, 7 laps" in panel.burn.text()
+    assert panel.burn.text().startswith("burn -0.24 of 8.47")
+
+    panel.show_state(_burn_state(lap_time_ms=90_000))
+    assert "vs" not in panel.burn.text()

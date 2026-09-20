@@ -362,16 +362,30 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
             seconds = trend.latest() if trend is not None else None
             if seconds is None:
                 continue
-            who = getattr(trend, "subject", None)
-            if who is None:
-                who = getattr(state, f"gap_{side}_name", None)
+            # **The roster's NAME for the trend's subject, because the rows
+            # are named.** `GapTrend.subject` is a roster CLUSTER ID - an
+            # int, straight out of `Roster.see_frame` via `pit_wall._neighbour`
+            # - and it was compared against `row.name`, so `str(277).lower()`
+            # matched no row, ever, and the tablet drew no gap for a whole
+            # race (20 Sep, Bathurst Rd8). `gap_{side}_name` is
+            # `roster.name_of(trend.subject)`, set in the same call as the
+            # trend itself (`controller.note_gaps`), so this is the SAME
+            # subject spelled the way the rows are - not "whoever the board
+            # put at ours ± 1", which is the defect the comment above
+            # describes. `controller._gap_view` asks the question this way
+            # too, and rule 13 says the two surfaces may not have two
+            # expressions for "whose gap is this".
+            who = getattr(state, f"gap_{side}_name", None)
             # **No name, no gap.** The figure is real but the app cannot say
             # whose it is, and a number against the wrong row is worse than
-            # no number - it is the shape of the mistake, not its size.
+            # no number - it is the shape of the mistake, not its size. An
+            # unlabelled cluster has no name, so a gap read against one is
+            # not drawn: on the Bathurst race that is about a third of the
+            # readings, and drawing them would mean inventing a row for them.
             if who is None:
                 log("race").info(
-                    "the tablet has a gap %s with no subject - not drawn "
-                    "against a row", side)
+                    "the tablet has a gap %s the roster has not named - not "
+                    "drawn against a row", side)
                 continue
             # **And it goes stale like every other reading.** `latest()` is
             # keyed by lap and never expires, so a board reader that stops

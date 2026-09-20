@@ -527,10 +527,34 @@ def test_print_what_the_voice_plays():
 def test_with_no_straight_gate_nothing_volunteered_goes_stale():
     """Before the driver's decision: 24 of 52 played, 28 stale. Now every
     line volunteered mid-lap is said, and none waits long enough behind other
-    speech to be dropped."""
+    speech to be dropped.
+
+    **52 became 51 on 21 Sep 2026, and the line that went was a phantom.**
+    It was `20:57:07 "ZenPhilosopher ahead, 15 seconds."`, announced as a NEW
+    car ahead - the only trigger it had, since 7 s and 15 s are the same gap
+    band and the refresher needs a car inside 5 s. He had been told
+    "ZenPhilosopher ahead, 7 seconds." 131 seconds earlier, and in between
+    the ahead box read one unbroken series in board row 7: 5.49, 6.26, 6.92,
+    7.04, 7.07, ... 12.78, 13.38, 14.61, 14.88 s, never moving more than
+    0.4 s between readings. One car, pulling away, all the way through.
+
+    What changed was the roster's handle: `ZenPhilosopher` -> `Car #4` (three
+    readings, 20:56:21-33) -> `ZenPhilosopher`, an A -> B -> A return of the
+    kind that happened 43 times in 71 on session 204. The app took the return
+    for an arrival. The unnamed half of the flicker was already suppressed by
+    `gaps_call`'s "a new unnamed car far away teaches him nothing"; the named
+    half was not, and this is it.
+
+    So the count moved because a claim about the race was withdrawn that the
+    race did not support. The rest of the record is unchanged: every mid-lap
+    line still plays, and none goes stale.
+    """
     mid = [t for t in voiced() if t.heard.how == "mid-lap"]
-    assert len(mid) == 52
+    assert len(mid) == 51
     assert [t.heard.text for t in mid if t.outcome != "played"] == []
+    # The car ahead is announced once, at 7 s, and not again at 15 s.
+    zen = [t.heard.clock for t in mid if "ZenPhilosopher" in t.heard.text]
+    assert zen == ["20:54:56"], zen
     for t in voiced():
         if t.wait_s is not None:
             assert t.wait_s <= voice_module.stale_after_s(t.heard.kind)

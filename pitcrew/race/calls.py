@@ -25,11 +25,7 @@ from pitcrew.strategy.model import fuel_margin_l
 # What George says at the green when nobody wrote a briefing. Imported rather
 # than restated: `race/knowledge.py` owns the sentence, and two copies of one
 # line is how the app comes to say it two ways.
-from pitcrew.race.expectations import (
-    FUEL_BASIS_COLUMN,
-    FUEL_BASIS_COLUMN_HIGHER,
-    FUEL_BASIS_HIGHER,
-)
+from pitcrew.race.expectations import FUEL_BASES_HEDGED
 from pitcrew.race.knowledge import NO_NOTES
 from pitcrew.strategy.fuel_model import fill_for_l, stint_burn_l
 
@@ -3249,10 +3245,13 @@ def _fuel(state: RaceState) -> Call | None:
     # the same confidence as five of this race's own laps. `FUEL_BASIS_COLUMN`
     # is this race's laps but on the other beep column, converted by the
     # plan's ratio: derived, so it hedges too (rule 5).
+    # **Every hedged basis, from one list** (`expectations.FUEL_BASES_HEDGED`).
+    # Naming them here meant a basis split in two - "the higher of the race
+    # and this stint" became two names on 20 Sep 2026 - could quietly stop
+    # hedging at this consumer while still hedging at the next.
     confidence = (MEDIUM if state.lap < 3
-                  or state.fuel_burn_basis in (None, FUEL_BASIS_HIGHER,
-                                               FUEL_BASIS_COLUMN,
-                                               FUEL_BASIS_COLUMN_HIGHER)
+                  or state.fuel_burn_basis is None
+                  or state.fuel_burn_basis in FUEL_BASES_HEDGED
                   else HIGH)
     if (state.fuel_save_said and gap >= 0
             and fuel_reference(state) == TO_THE_FLAG):

@@ -53,7 +53,7 @@ from pitcrew.telemetry.board import flag_ladder, own_row
 from pitcrew.telemetry.compound import read as read_compound
 from pitcrew.telemetry.hud_digits import read_fuel
 from pitcrew.telemetry.pit_columns import read_rows
-from pitcrew.telemetry.roster import ROW_MATCH_TOL, Roster
+from pitcrew.telemetry.roster import ROW_MATCH_TOL, Roster, is_own_row
 from pitcrew.telemetry.roster import read as read_rows_of_board
 
 _log = log(__name__)
@@ -314,6 +314,60 @@ class Entered:
 
 
 @dataclass(frozen=True)
+class OwnFill:
+    """OUR stop, off the pit columns, on a path of its own.
+
+    **Refusing to file his stop as a rival's left nothing filing it as his.**
+    `_close` has two own-car branches and both returned `None`, so every
+    reading taken off his own row was dropped on the floor: Bathurst, 20 Sep
+    2026, the fill was on screen for both of his stops and read for everybody
+    but him (`logs/pitcrew.log:6632`, `:9918`). The refusal is right - a stop
+    filed into `rival_stops` under his own name feeds his habits back to him
+    as an opponent's - and it is a refusal to file it *there*, not a reason to
+    lose it.
+
+    So this is deliberately NOT a `Seen`, and it never reaches `on_stop`:
+    nothing that files rivals can be handed one by mistake. It carries the
+    same evidence a rival's stop does (rule 4), and every figure on it may be
+    `None`, which means the screen could not be read and never that the tank
+    was empty (rule 3).
+
+    `standing` is True while the columns are still on our row - the live view,
+    where `fuel_out_l` is the latest reading rather than the last one, and
+    `litres` is what has gone in so far.
+    """
+    driver_id: int
+    stop: Stop
+    reads: int
+    compound_reads: int
+    watched_s: float
+    partial: bool
+    # He is still in the box, as far as the wall can see. The figures are a
+    # fill in progress, not a finished one.
+    standing: bool = False
+    # As on `Seen`: closed by the clock rather than by seeing him leave, so
+    # `fuel_out_l` is a lower bound on the fill and not the fill.
+    exit_is_a_bound: bool = False
+
+    @property
+    def lap(self) -> int | None:
+        return self.stop.lap
+
+    @property
+    def fuel_in_l(self) -> float | None:
+        return self.stop.fuel_in_l
+
+    @property
+    def fuel_out_l(self) -> float | None:
+        return self.stop.fuel_out_l
+
+    @property
+    def litres(self) -> float | None:
+        """Fuel taken. `None` rather than a clamp - see `Stop.litres`."""
+        return self.stop.litres
+
+
+@dataclass(frozen=True)
 class Seen:
     """A finished stop, with the evidence behind it. CLAUDE.md rule 4."""
     driver: str | None
@@ -349,9 +403,24 @@ class PitWall:
     def __init__(self, roster: Roster | None = None, *, on_stop=None,
                  on_enter=None, min_sightings: int = MIN_SIGHTINGS,
                  name_for=None, where_on_lap=None, on_gap=None,
-                 on_board=None) -> None:
+                 on_board=None, on_own_fill=None) -> None:
         self._roster = roster if roster is not None else Roster()
+        # **How many identities it opened with, against how many cars are out
+        # there.** Bathurst, 20 Sep 2026: `seeded with 160 known drivers` for
+        # a seven-car race (`logs/pitcrew.log:3233`), while the app itself was
+        # saying "P3 of 7" out loud all evening off `packet.cars_in_race`.
+        # Two numbers that were both known, in two different places, and
+        # nothing ever put them side by side. Counted and reported only - a
+        # cap on founding is a behaviour change and is not this.
+        self._seeded = len(self._roster)
+        self._field_size: int | None = None
+        self._said_the_field = False
         self._on_stop = on_stop
+        # **Our own fill, which `on_stop` must never carry.** See `OwnFill`:
+        # the branch that refuses to file his stop as a rival's is right, and
+        # it left nothing filing it as his. Fired once per own stop, at the
+        # close, with the same evidence a rival's stop carries.
+        self._on_own_fill = on_own_fill
         # **Entering is a different event from having stopped, and it is the
         # one the driver can still act on.** `on_stop` fires when the car
         # LEAVES, which for `rival_boxed` - "he has boxed on 12 litres, that is
@@ -408,6 +477,9 @@ class PitWall:
         self._row_y: dict[int, int] = {}
         self._pitted: set[int] = set()
         self._stops: list[Seen] = []
+        # Our own stops, kept apart from `_stops` so that nothing which walks
+        # the rivals can pick one up. See `OwnFill`.
+        self._own_fills: list[OwnFill] = []
         # The two intervals GT7 publishes either side of us, per lap. Kept as
         # trends rather than instants because a closing RATE is the cheapest
         # pace signal on the screen - see `race/gaps.py`.
@@ -437,7 +509,20 @@ class PitWall:
                        "closed_mid_rise": 0,
                        # A tyre read on his row from a disc that is not his
                        # visit's own - scenery, see `DISC_ANCHOR_PX`.
-                       "disc_off_anchor": 0}
+                       "disc_off_anchor": 0,
+                       # **The same two questions asked of OUR row alone.**
+                       # Bathurst, 20 Sep 2026: his lap-11 stop logged "0 fuel
+                       # reads over 17 s" while rivals in the same window took
+                       # 20 to 60 each, and his lap-21 stop read enough to
+                       # clear the bar - so the own row is sometimes readable
+                       # and sometimes not, and nothing in the log could say
+                       # how often. Our own row is the white plate, which is
+                       # what the white-disc and bright-ink tests find easiest
+                       # to see, so a column found on it is not yet a figure
+                       # read off it. `own_pit_cols` is FRAMES, `own_fuel_read`
+                       # is readings - the two numbers the next race needs to
+                       # answer whether his row is genuinely harder.
+                       "own_pit_cols": 0, "own_fuel_read": 0}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -567,6 +652,9 @@ class PitWall:
         self._announced.clear()
         self._own = None
         self._stops = []
+        # Rule 11: last race's fill is not this race's, and a stale one read
+        # live is read as "he has just taken 40 litres".
+        self._own_fills = []
         self.ahead.new_session()
         self.behind.new_session()
         self.samples = []
@@ -580,6 +668,39 @@ class PitWall:
 
     def stops(self) -> list[Seen]:
         return list(self._stops)
+
+    def own_fills(self) -> list[OwnFill]:
+        """Our own stops this session, oldest first. Never rivals'."""
+        return list(self._own_fills)
+
+    def own_fill(self) -> OwnFill | None:
+        """His fill: the one happening now, else the last one finished.
+
+        **The live one only once it has met the bar a stop is filed on** -
+        `_is_a_stop`, the same two bars `_close` and `_announce_entry` use, so
+        the three cannot drift. A glimpse is not a stop, ours any more than a
+        rival's, and a figure on a screen that says he is filling when he is
+        driving past the pit entry is the same error as saying it aloud.
+
+        `standing` is True on the live one, and its `fuel_out_l` is the
+        latest reading rather than the last - so `litres` is what has gone in
+        so far. `None` where nothing has been watched at all.
+        """
+        visit = self._visits.get(self._own) if self._own is not None else None
+        if visit is not None and self._is_a_stop(visit):
+            return self._own_fill_from(visit, standing=True)
+        return self._own_fills[-1] if self._own_fills else None
+
+    @staticmethod
+    def _own_fill_from(visit, *, standing: bool = False,
+                       exit_is_a_bound: bool = False) -> OwnFill:
+        return OwnFill(driver_id=visit.driver, stop=visit.as_stop(),
+                       reads=len(visit.readings),
+                       compound_reads=(1 if visit.compound_changed
+                                       else len(visit.compounds)),
+                       watched_s=max(0.0, visit.last_s - visit.started_s),
+                       partial=visit.partial, standing=standing,
+                       exit_is_a_bound=exit_is_a_bound)
 
     def positions(self, *, max_age_s: float | None = None,
                   now: float | None = None) -> dict[str, int]:
@@ -607,6 +728,29 @@ class PitWall:
             if name:
                 out[name] = place
         return out
+
+    def note_field_size(self, cars: int | None) -> None:
+        """How many cars are actually in this race, from the packet.
+
+        Said once, the first time a real figure arrives, against the number of
+        identities the roster was seeded with - because the mismatch is the
+        thing nobody could see: 160 candidates for a 7-car field, every one of
+        them a cluster a row could be matched to or split against.
+
+        **A reading, not a rule.** Nothing here refuses or caps anything on
+        it; it is on the health line so the next race can be read.
+        """
+        if not cars or cars <= 0:
+            return                       # 0 is "no reading", never a field
+        self._field_size = int(cars)
+        if self._said_the_field:
+            return
+        self._said_the_field = True
+        _log.info("pit-wall: seeded with %d known driver%s for a field of %d, "
+                  "and holding %d identit%s now", self._seeded,
+                  "" if self._seeded == 1 else "s", self._field_size,
+                  len(self._roster),
+                  "y" if len(self._roster) == 1 else "ies")
 
     def has_pitted(self, driver_id: int) -> bool:
         """Whether this car has been seen in the lane THIS session.
@@ -647,7 +791,15 @@ class PitWall:
                 "-> any named %d -> our row %d -> gaps %d -> pit columns %d "
                 "-> fuel read %d | %d driver%s placed, %d stop%s filed, "
                 "%d closed mid-rise, %d off-disc tyre read%s | "
-                "roster rows matched %d, founded %d, contested %d" % (
+                "our own row: pit columns on %d frames -> fuel read %d, "
+                "%d own fill%s kept | seeded %d for a field of %s, "
+                "holding %d | "
+                # **`merged` beside the rest** (rule 10, and B#7): a cluster
+                # folded into another was neither counted nor logged, so a
+                # race that split seven cars into twenty-seven identities
+                # could not say whether the merge path had run at all.
+                "roster rows matched %d, founded %d, contested %d, merged %d"
+                % (
                     self._frames, s["ladder"], s["own_row"], s["rows"],
                     s["named"], s["own_driver"], s["gaps"], s["pit_cols"],
                     s["fuel_read"],
@@ -655,8 +807,14 @@ class PitWall:
                     len(self._stops), "" if len(self._stops) == 1 else "s",
                     s["closed_mid_rise"], s["disc_off_anchor"],
                     "" if s["disc_off_anchor"] == 1 else "s",
+                    s["own_pit_cols"], s["own_fuel_read"],
+                    len(self._own_fills),
+                    "" if len(self._own_fills) == 1 else "s",
+                    self._seeded,
+                    "unknown" if self._field_size is None
+                    else self._field_size, len(self._roster),
                     counts.get("matched", 0), counts.get("founded", 0),
-                    counts.get("contested", 0)))
+                    counts.get("contested", 0), counts.get("merged", 0)))
 
     def see(self, frame, *, lap: int | None = None, now: float | None = None):
         """Take one frame. Never raises; returns the stops it just closed."""
@@ -734,6 +892,8 @@ class PitWall:
                 continue
             driver = ids[near]
             saw_pit_columns = True
+            if own is not None and driver == own:
+                self._stage["own_pit_cols"] += 1
             in_lane.add(driver)
             # **The columns being drawn is the fact; the digits are a reading
             # of it.** These are two different questions and an earlier version
@@ -762,6 +922,8 @@ class PitWall:
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
             if litres is not None:
                 self._stage["fuel_read"] += 1
+                if own is not None and driver == own:
+                    self._stage["own_fuel_read"] += 1
                 visit.readings.append(litres)
             self._announce_entry(driver, visit, lap, own)
             dx0, dy0, dx1, dy1 = pit.disc
@@ -865,9 +1027,30 @@ class PitWall:
         return closed + self._close_stale(now)
 
     def _own_driver(self, ids: dict, board) -> int | None:
-        own_y = (board[1] + board[3]) // 2
-        near = [y for y in ids if abs(y - own_y) <= ROW_MATCH_TOL]
-        return ids[near[0]] if near else None
+        """Which cluster is ours, asked the way `roster.read` asks it.
+
+        **One relation, not two** (rule 13). This used to test the rung
+        against the box MIDPOINT within `ROW_MATCH_TOL`, which is the same
+        question `roster.read` answers with `is_own_row` - and the two
+        disagreed the moment the plate guard began returning whole plates.
+        Measured on the Bathurst race of 20 Sep 2026: of the 242 own rows the
+        repaired locator reads, the midpoint test reaches only 172, **58.9%
+        of frames against 60.3% before the guard** - so the fix that recovered
+        the gaps would have left `_own_driver`, and everything gated on it
+        including the tablet's board hook, worse than it found them.
+        """
+        # **Closest to the middle of the plate, not first out of the dict.**
+        # `near[0]` was insertion order, which is the board reader's row
+        # order and not a statement about which row is ours - the same file
+        # settles pit rows with a `min` on distance 150 lines above. The box
+        # is a band now rather than a point, so where two rungs fall inside
+        # it the nearer one is the answer and the order they were read in is
+        # not (rule 3: a guess dressed as a reading).
+        near = [y for y in ids if is_own_row(board, y)]
+        if not near:
+            return None
+        middle = (board[1] + board[3]) / 2.0
+        return ids[min(near, key=lambda y: abs(y - middle))]
 
     @staticmethod
     def _neighbour(frame_rows, own_row: int | None, step: int):
@@ -987,8 +1170,24 @@ class PitWall:
             # - so the car "in the lane" WAS the own row in every test here.
             self._absent.pop(driver, None)
             self._absent_since.pop(driver, None)
-            _log.info("pit-wall: own stop on lap %s not filed as a rival's",
-                      visit.lap if visit is not None else None)
+            # **Not a rival's - and not thrown away either.** It goes down its
+            # own path, `OwnFill`, which nothing that files rivals can read.
+            fill = self._own_fill_from(visit, exit_is_a_bound=bool(stale))
+            self._own_fills.append(fill)
+            _log.info("pit-wall: own stop on lap %s not filed as a rival's - "
+                      "kept as ours: in %s L, out %s L, %s L taken, %d reads "
+                      "over %.0f s%s%s", fill.lap, fill.fuel_in_l,
+                      fill.fuel_out_l,
+                      "?" if fill.litres is None else "%.0f" % fill.litres,
+                      fill.reads, fill.watched_s,
+                      " (joined mid-fill)" if fill.partial else "",
+                      " (exit is a lower bound)" if fill.exit_is_a_bound
+                      else "")
+            if self._on_own_fill is not None:
+                try:
+                    self._on_own_fill(fill)
+                except Exception:           # pragma: no cover - belt
+                    _log.exception("pit-wall: the own-fill hook raised")
             return None
         self._absent.pop(driver, None)
         self._absent_since.pop(driver, None)
