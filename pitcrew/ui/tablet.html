@@ -67,7 +67,7 @@
   /* ---- the buttons: big, far apart, and each shows what the APP has */
   #buttons.stale { opacity: 0.55; }
   #buttons { position: relative; z-index: 6;
-    display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 2vh;
+    display: grid; grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 1.4vh;
     padding: 1.6vh 1.6vw 1.6vh 0; }
   .btn { position: relative; overflow: hidden; isolation: isolate; border: 3px solid var(--edge);
     border-radius: 1.4vh; background: var(--panel); color: var(--ink); touch-action: none;
@@ -88,20 +88,29 @@
   .btn .fill { position: absolute; inset: 0; z-index: -1; background: rgba(242, 194, 48, 0.35);
     transform-origin: bottom; transform: scaleY(0); }
 
-  #pair { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
-    justify-content: center; gap: 3vh; background: rgba(12, 11, 9, 0.96); z-index: 5;
-    font-family: var(--label); font-weight: 700; text-align: center; }
-  #pair.on { display: flex; }
-  #pair .t { font-size: 5vh; } #pair .s { font-size: 3vh; color: var(--dim); }
-  #pair input { font-family: var(--number); font-size: 7vh; width: 12ch; text-align: center;
-    background: var(--panel); color: var(--ink); border: 3px solid var(--edge); border-radius: 1vh; }
-  #pair button { font-family: var(--label); font-weight: 700; font-size: 4vh; padding: 1vh 4vw;
-    background: var(--near); color: var(--ground); border: 0; border-radius: 1vh; }
-  #pair button.quiet { background: transparent; color: var(--dim); font-size: 3vh;
-    border: 2px solid var(--edge); }
-  /* A locked button still reads the app's state; only its hint changes, and
-     its face dims so the row does not look armed. */
-  #buttons.locked .btn .now { opacity: 0.55; }
+  /* ---- the three sessions, on the cover (21 Sep 2026). His ask: start a
+     practice, a qualifying run or the race from the tablet. They live on the
+     cover because the cover IS "no session running" - the one state in which
+     starting one is the thing to do - and they go with it the moment one
+     opens, so there is no Start to brush against at racing speed.
+
+     A column, not a row: "Qualifying" beside two others is four words across
+     a panel that may be the narrow way up, and these are pressed with a
+     thumb from the seat. */
+  #start { display: none; flex-direction: column; gap: 2vh; width: 62%; margin-top: 4vh; }
+  #cover.start #start { display: flex; }
+  #cover.start .big { font-size: 10vh; }
+  .sbtn { font-family: var(--label); font-weight: 700; text-transform: uppercase;
+    font-size: 4.6vh; letter-spacing: 0.08em; padding: 2.2vh 2vw; text-align: center;
+    border: 3px solid var(--edge); border-radius: 1.4vh; background: var(--panel);
+    color: var(--ink); touch-action: none; cursor: pointer;
+    -webkit-user-select: none; user-select: none; }
+  .sbtn.pressed { transform: scale(0.97); }
+  /* **The app's answer to the last press, in its own words.** A refusal is
+     the whole point of it - "Free Run is active", "Create an event before
+     racing" - so it is drawn in the near ink and not the dim one. */
+  #note { font-family: var(--label); font-weight: 700; font-size: 3.2vh;
+    color: var(--near); margin-top: 3vh; min-height: 1.2em; max-width: 84%; }
 
   #head { display: flex; align-items: baseline; gap: 3vw; font-family: var(--label);
     font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -316,12 +325,16 @@
   <div class="btn" id="b-george"><div class="what">George</div><div class="now">--</div><div class="hint">tap</div></div>
   <div class="btn" id="b-fuel"><div class="what">Beep</div><div class="now">--</div><div class="hint">tap</div></div>
   <div class="btn" id="b-pit"><div class="fill"></div><div class="what">Pit</div><div class="now">This lap</div><div class="hint">hold</div></div>
+  <div class="btn" id="b-session"><div class="fill"></div><div class="what">Session</div><div class="now">--</div><div class="hint">hold to stop</div></div>
 </div>
 </div>
-<div id="pair"><div class="t">Buttons code</div><div class="s" id="pair-why">shown in Pit Crew settings, beside the tablet address</div>
-  <input id="pair-code" inputmode="numeric" maxlength="12" autocomplete="off"><button id="pair-go">Use this code</button>
-  <button id="pair-shut" class="quiet">Not now - just show me the race</button></div>
-<div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div></div>
+<div id="cover" class="on"><div class="big">PIT CREW</div><div class="why">connecting to the PC…</div>
+  <div id="start">
+    <div class="sbtn" id="s-practice">Practice</div>
+    <div class="sbtn" id="s-quali">Qualifying</div>
+    <div class="sbtn" id="s-race">Race</div>
+  </div>
+  <div id="note"></div></div>
 <script>
 (function () {
   "use strict";
@@ -352,15 +365,17 @@
       "color-mix(in oklab, var(--reg-derived), var(--reg-absent) " + pct + "%)");
   }
 
+  var SESSION_WORD = { practice: "Practice", quali: "Quali", race: "Race" };
+
   var HEAD = ["P", "Driver", "Gap", "Stop", "Fuel in → out", "Fuel says"];
   // Shorter where the column is narrow; the arrow in each row says in → out.
   HEAD[4] = "Fuel";
 
   function $(id) { return document.getElementById(id); }
-  function show(big, why, fault) {
+  function show(big, why, fault, startable) {
     cover.querySelector(".big").textContent = big;
     cover.querySelector(".why").textContent = why;
-    cover.className = "on" + (fault ? " fault" : "");
+    cover.className = "on" + (fault ? " fault" : "") + (startable ? " start" : "");
     // The buttons stay reachable beside the cover, but what they READ is
     // only as fresh as the last answer - so they say they are stale.
     $("buttons").classList.toggle("stale", !!fault);
@@ -435,7 +450,23 @@
 
   function render(d) {
     if (typeof d.stale_after_s === "number") staleAfter = d.stale_after_s;
-    if (d.idle) { show("PIT CREW", "no race running", false); return; }
+    // **Idle is where a session is started, and the poll having answered is
+    // the whole proof the PC is there.** `age_s` is how long ago the numbers
+    // were published, and between sessions nothing publishes at all - so
+    // gating the Start buttons on it would take them away a second and a half
+    // after the last session closed, which is exactly when they are wanted.
+    if (d.idle) {
+      // **Start is offered only where nothing is open.** An armed race is
+      // idle here - there is no field until the green - and a session that
+      // has just opened is idle for the one tick before the board publishes.
+      // Offering Start in either is offering to open a second session, which
+      // is the bind-over-a-bind the app refuses anyway: better not to ask.
+      var sess = d.controls && d.controls.session;
+      if (sess === "race") show("ARMED", "race armed - waiting for the green", false);
+      else if (sess) show("PIT CREW", SESSION_WORD[sess] + " running - waiting for the numbers", false);
+      else show("PIT CREW", "no session running", false, true);
+      return;
+    }
     if (d.empty) { show("PIT CREW", "waiting for the first numbers", false); return; }
     if (d.age_s === null || d.age_s > staleAfter) {
       show("NO DATA", "Pit Crew has stopped updating", true); return;
@@ -513,61 +544,52 @@
   // ---------------------------------------------------------------- buttons
   // **A press asks for a setting, never a flip**, so a retry or a double tap
   // cannot undo itself; and a button only ever shows what the app sent back.
-  var HOLD_MS = 500, controls = null;
-  // **Held here first, stored second.** With site data blocked the store
-  // throws, and a page that only read it back asked for the code for ever.
-  var heldKey = "";
-  function key() {
-    if (heldKey) return heldKey;
-    try { heldKey = localStorage.getItem("pitcrew-tablet-key") || ""; } catch (e) {}
-    return heldKey;
-  }
-  function setKey(k) {
-    heldKey = k;
-    try { localStorage.setItem("pitcrew-tablet-key", k); } catch (e) {}
-  }
-  function pair(on, why) {
-    $("pair").className = on ? "on" : "";
-    $("pair-why").textContent = why ||
-      "shown in Pit Crew settings, beside the tablet address";
-    if (on) $("pair-code").focus();
-  }
-  $("pair-go").addEventListener("click", function () {
-    var k = $("pair-code").value.trim();
-    if (k) { setKey(k); pair(false); drawButtons(controls); }
-  });
-  // **And it can be left.** A prompt with no way out, over a screen he needs
-  // to read at racing speed, is worse than no buttons at all. Tapping the
-  // backdrop closes it; the field is behind it and is what he came for.
-  $("pair").addEventListener("click", function (e) {
-    if (e.target === $("pair")) { pair(false); drawButtons(controls); }
-  });
-  $("pair-shut").addEventListener("click", function () {
-    pair(false); drawButtons(controls);
-  });
+  // **A press asks for a setting, never a flip**, so a retry or a double tap
+  // cannot undo itself; and a button only ever shows what the app sent back.
+  //
+  // **And it carries no code** (21 Sep 2026, his call: it is a page on his
+  // own Wi-Fi). There was a six-digit one, stored in the browser and asked
+  // for at the moment of the first press. What actually kept a stray page on
+  // the network from posting one is still here and is not the code: the
+  // request is `application/json`, so it is not a CORS simple request, and
+  // the preflight it needs is answered 404.
+  var HOLD_MS = 500, NOTE_MS = 15000, controls = null;
 
   function press(action, value) {
-    if (!key()) { pair(true); return; }
     fetch("/tablet/press", { method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: action, value: value, key: key() }) })
-      .then(function (r) {
-        if (r.status === 403) { heldKey = ""; pair(true, "that code was refused"); }
-        else if (!r.ok) pair(true, "the app did not take that press");
-      })
+      body: JSON.stringify({ action: action, value: value }) })
       .catch(function () { /* the button does not change, which says so */ });
+  }
+
+  // **The app's answer to the last press.** Accepted is not done - the press
+  // returns before the app has touched it - so what happened comes back on
+  // the polled state like everything else here.
+  //
+  // `note_n` is why this is not just "draw `note`": the same refusal twice
+  // is two presses, and a page that compared the WORDS would answer the
+  // second one with the sentence already on screen and no sign it had been
+  // heard. The count ticks on every answer the app gives, so a repeat
+  // re-arms the line and its timer.
+  var noteN = null, noteTimer = null;
+  function drawNote(c) {
+    var n = c && typeof c.note_n === "number" ? c.note_n : null;
+    if (n === noteN) return;
+    noteN = n;
+    clearTimeout(noteTimer); noteTimer = null;
+    var words = (c && c.note) || "";
+    $("note").textContent = words;
+    // The app drops it at the same age, but nothing republishes between
+    // sessions - so on this page the timer is what retires it.
+    if (words) {
+      noteTimer = setTimeout(function () { $("note").textContent = ""; }, NOTE_MS);
+    }
   }
 
   function drawButtons(c) {
     controls = c || null;
     var racing = !!(c && c.racing);
-    var g = $("b-george"), f = $("b-fuel"), p = $("b-pit");
-    // **An unpaired button says so on its own face.** It still draws the
-    // app's state - that is a reading, and it is true - but a control that
-    // looks live and answers a press with a keypad is one he presses twice
-    // at the worst moment.
-    var locked = !key();
-    $("buttons").classList.toggle("locked", locked);
+    var g = $("b-george"), f = $("b-fuel"), p = $("b-pit"), s = $("b-session");
     g.classList.toggle("on", !!(c && c.george)); g.classList.toggle("off", !!(c && !c.george));
     g.querySelector(".now").textContent = c ? (c.george ? "On" : "Off") : "--";
     g.querySelector(".hint").textContent = c && !c.george ? "beep stays on" : "tap";
@@ -580,11 +602,15 @@
     p.querySelector(".now").textContent = c && c.pit ? "Boxing " + c.pit : "This lap";
     p.querySelector(".hint").textContent = !c || !c.pit ? "hold" :
       (c.pit_cancellable ? "hold to cancel" : "in this lap");
-    if (locked) {
-      [g, f, p].forEach(function (el) {
-        el.querySelector(".hint").textContent = "tap for the code";
-      });
-    }
+    // **What is OPEN, not what is under way.** A race armed on the grid is a
+    // session and is not racing; the two keys are separate for that reason,
+    // and this button is the one that can close it.
+    var open = c && c.session;
+    s.classList.toggle("on", !!open);
+    s.classList.toggle("dead", !open);
+    s.querySelector(".now").textContent = open ? SESSION_WORD[open] : "None";
+    s.querySelector(".hint").textContent = open ? "hold to stop" : "none running";
+    drawNote(c);
   }
 
   function tap(el, fn) {
@@ -611,11 +637,20 @@
   tap($("b-fuel"), function () {
     if (controls && controls.racing) press("fuel", controls.fuel === "save" ? "full" : "save");
   });
+  // **Starting is a tap; both are under the cover.** There is no session to
+  // interrupt and no wheel in his hands at the moment these are on screen -
+  // the hold is for the two buttons that are reachable with a race running.
+  tap($("s-practice"), function () { press("session", "practice"); });
+  tap($("s-quali"), function () { press("session", "quali"); });
+  tap($("s-race"), function () { press("session", "race"); });
 
-  // **The pit button needs a hold**, so a brush of the hand on the way to the
-  // wheel cannot declare a stop. George says it back either way.
-  (function () {
-    var el = $("b-pit"), fill = el.querySelector(".fill"), timer = null, anim = null;
+  // **A hold, so a brush of the hand on the way to the wheel cannot declare
+  // a stop - or end the race.** One implementation for both: two copies of a
+  // 500 ms timer and its fill animation is two places for the fill to be
+  // left running. `ready` decides whether this press means anything at all,
+  // and it is asked on the way down, so a dead button never starts the fill.
+  function hold(id, ready, fire) {
+    var el = $(id), fill = el.querySelector(".fill"), timer = null, anim = null;
     function stop() {
       clearTimeout(timer); timer = null;
       if (anim) { anim.cancel(); anim = null; }
@@ -623,29 +658,23 @@
     }
     el.addEventListener("pointerdown", function (e) {
       e.preventDefault();
-      if (!controls || !controls.racing) return;
+      if (!ready()) return;
       el.classList.add("pressed");
       if (fill.animate) {
         anim = fill.animate([{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }],
                             { duration: HOLD_MS, easing: "linear", fill: "forwards" });
       }
-      timer = setTimeout(function () {
-        timer = null;
-        press("pit", !controls.pit);
-        stop();
-      }, HOLD_MS);
+      timer = setTimeout(function () { timer = null; fire(); stop(); }, HOLD_MS);
     });
     ["pointerup", "pointercancel", "pointerleave"].forEach(function (ev) { el.addEventListener(ev, stop); });
-  })();
+  }
+  hold("b-pit", function () { return !!(controls && controls.racing); },
+       function () { press("pit", !controls.pit); });
+  // George says the stop back either way; a session ended says so by the
+  // cover coming up, which is the same answer from the other side.
+  hold("b-session", function () { return !!(controls && controls.session); },
+       function () { press("session", "stop"); });
 
-  // **The code is never asked for to READ the race.** It used to be
-  // demanded on load, so opening the page on a new tablet - or in any
-  // browser whose site data had been cleared - put a keypad over the timing
-  // tower and every figure behind it. Nothing on this page needs a code to
-  // be LOOKED at: the field, the stops and the predictions are the same
-  // read-only payload the phone gets. The code authorises a PRESS, and it
-  // is asked for at the moment one is made, which is also the only moment
-  // its purpose is obvious.
   poll();
 })();
 </script>

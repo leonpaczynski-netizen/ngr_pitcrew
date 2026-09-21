@@ -35,6 +35,7 @@ from pitcrew.analysis.resolve import circuit_key
 from pitcrew.analysis.session import counted_laps
 from pitcrew.analysis.runs import (
     FOR_QUALIFYING,
+    FOR_RACE,
     REASON_FUEL_IMPLAUSIBLE,
     REASON_RESET,
     auto_out_laps,
@@ -266,6 +267,12 @@ BOARD_FAILURES_BEFORE_STANDING_DOWN = 120
 # for the rest of the race - `hud.py` records the same lesson as "half a
 # thousand log lines saying the same thing".
 BOARD_TRACEBACK_EVERY = 20
+
+# How long the tablet's one-line answer to a press stays current. Long enough
+# to read from the seat, short enough that a refusal cannot still be on the
+# page next time he looks at it (rule 11) - and nothing republishes between
+# sessions, so this is the only thing that retires it.
+TABLET_NOTE_S = 15.0
 
 
 def new_temp_window() -> tuple[deque, threading.Lock]:
@@ -2997,12 +3004,12 @@ class PitCrewController(QObject):
         # closes; without this line the next unrelated Save carries the stale
         # copy back over it and he re-drags the board.
         #
-        # It is the first field that is mutated at runtime AND has no control
+        # It is the only field that is mutated at runtime AND has no control
         # on the settings screen, which is why `speech_backend` and the rest
-        # never needed this.
+        # never needed this. `tablet_key` was the other one; the tablet's
+        # buttons carry no code as of 21 Sep 2026.
         new = replace(new,
-                      driver_board_geometry=self.settings.driver_board_geometry,
-                      tablet_key=self.settings.tablet_key)
+                      driver_board_geometry=self.settings.driver_board_geometry)
         try:
             settings.save(self.store, new)
         except ValueError as exc:
@@ -3838,6 +3845,20 @@ class PitCrewController(QObject):
         when `tools/read_hud_wear.py` exists to do exactly that off a
         recording.
         """
+        # **A press from the tablet is not asked.** This is the app's one
+        # modal, it opens on the PC, and he is in the seat with the tablet in
+        # his hand - so from there the question is one he cannot see and
+        # cannot answer, and the app would sit on `exec()` with the page
+        # showing nothing at all. The safe answer is the one the dialog
+        # defaults to: do not go out. `_tablet_session_press` turns that into
+        # a refusal on the tablet's own face naming the gauge, which is the
+        # sentence he would have read here.
+        if self.__dict__.get("_pressing_from_tablet"):
+            log("pitcrew").warning(
+                "hud-wear: pre-flight refused (%s: %s) and the press came "
+                "from the tablet, which cannot answer the dialog - not going "
+                "out", check.source, check.reason)
+            return False
         from PyQt6.QtWidgets import QMessageBox
 
         # **Parented, and NOT on a `window` attribute that does not exist.**
@@ -7545,7 +7566,6 @@ class PitCrewController(QObject):
         from pitcrew.ui.strip_server import StripServer
 
         server = StripServer(port=self.settings.strip_port)
-        server.press_key = self._tablet_key()
         # **Only an emit crosses the thread.** The handler runs on the
         # server's request thread; the race, the voice and the widgets are
         # touched on Qt's, through the queued signal.
@@ -7658,18 +7678,6 @@ class PitCrewController(QObject):
 
     # -- the tablet's buttons (17 Sep 2026) -----------------------------------
 
-    def _tablet_key(self) -> str:
-        """The code a press must carry: made once, kept in the settings."""
-        if not self.settings.tablet_key:
-            import secrets
-
-            self.settings.tablet_key = f"{100000 + secrets.randbelow(900000)}"
-            try:
-                settings.save(self.store, self.settings)
-            except Exception as exc:                        # noqa: BLE001
-                log("ui").warning("the tablet code could not be kept: %s", exc)
-        return self.settings.tablet_key
-
     def set_engineer_speaks(self, speaks: bool) -> None:
         """George on or off, from anywhere, with the Race screen agreeing.
 
@@ -7688,7 +7696,14 @@ class PitCrewController(QObject):
                 self.voice.warm()
             except Exception:                               # noqa: BLE001
                 log("race").warning("the voice would not warm", exc_info=True)
-        screen = self.__dict__.get("race_screen")
+        # **`_race_screen`, not `race_screen`.** The instance dict never
+        # holds the public name - it is a lazy property backed by the private
+        # one - so this read was None every time and the picker on the Race
+        # screen never followed a George press from the tablet. Found 21 Sep
+        # 2026 while the session buttons were being added. Still read off the
+        # dict rather than through the property, because syncing a picker is
+        # not a reason to build the screen that owns it.
+        screen = self.__dict__.get("_race_screen")
         picker = getattr(screen, "engineer_picker", None)
         if picker is not None:
             index = picker.findData(speaks)
@@ -7704,6 +7719,11 @@ class PitCrewController(QObject):
         log("race").info("tablet press: %s = %r", action, value)
         if action == "george":
             self.set_engineer_speaks(bool(value))
+            return
+        # **Before the race guard, not after it.** Opening a session is the
+        # one press whose whole purpose is that there is no session running.
+        if action == "session":
+            self._tablet_session_press(value)
             return
         if race is None or not race.running:
             log("race").info("tablet press %s ignored: no race running", action)
@@ -7771,6 +7791,125 @@ class PitCrewController(QObject):
         self.voice.say(said)
         log("race").info("declared stop confirmed: %s", said)
 
+    # -- opening and closing a session from the tablet (21 Sep 2026) ---------
+    #
+    # His ask: *"I also want to be able to start a practice session,
+    # qualifying session and a race from the tablet."* The three screens exist
+    # so he does not have to get out of the seat, and Start was the one press
+    # that still sent him back to the desk.
+
+    SESSION_WORDS = {"practice": "Practice", "quali": "Qualifying",
+                     "race": "The race"}
+
+    def _open_session_kind(self) -> str | None:
+        """Which session is open, in the tablet's words. None is none.
+
+        **A race counts from the moment it is armed, not from the green.**
+        `_tablet_controls["racing"]` answers a different question - whether
+        the race is under way, which is what the fuel and pit buttons need -
+        and a Start button reading off that would offer to arm a race that is
+        already sitting on the grid (rule 13: two calls, two meanings, so two
+        keys).
+        """
+        if self.race is not None or self.session_kind == "race":
+            return "race"
+        if self.session_kind == "practice":
+            return ("quali" if self.practice.practice_intent() == FOR_QUALIFYING
+                    else "practice")
+        return None
+
+    def _tell_the_tablet(self, text: str) -> None:
+        """One line for the tablet's own face: what happened, or why not.
+
+        **It carries the moment it was set** (rule 11). Nothing publishes
+        between sessions - the board timer is stopped - so without an age the
+        last refusal would sit on the page until the next session opened, and
+        "Free Run is active" from an hour ago reads as now.
+
+        **And a count, because the same refusal twice is two presses.** The
+        page cannot tell a repeat from the sentence already on screen, so it
+        would answer the second press with silence - which is the failure the
+        pit button's `BOX_TOO_LATE` exists to avoid, on a button he presses
+        when something is already not working.
+        """
+        _, _, said = self.__dict__.get("_tablet_note") or (None, None, 0)
+        self._tablet_note = (text, _monotonic(), said + 1)
+        log("session").info("tablet told: %s", text)
+
+    def _tablet_session_press(self, value) -> None:
+        """Open or close a session from the tablet. Qt thread, already logged.
+
+        **Every refusal is the screen's own sentence, read back.**
+        `start_practice` and `start_race` each refuse half a dozen ways - no
+        event, Free Run holding the listener, a session already open, a plan
+        that will not certify - and each writes the reason into its status
+        line. Wording them again here would be one refusal said two ways
+        (rule 13), and the second copy is the one that goes stale. The only
+        refusal decided here is a session already open, because from the
+        tablet that is a mis-press rather than a condition.
+
+        **A press never opens the gauge dialog** - see `confirm_without_gauge`.
+        It is the app's one modal, it opens on the PC, and from the seat he
+        can neither see nor answer it.
+        """
+        opened = self._open_session_kind()
+        if value == "stop":
+            if opened is None:
+                self._tell_the_tablet("Nothing is running.")
+                self._strip_idle()
+                return
+            self._tell_the_tablet(f"{self.SESSION_WORDS[opened]} stopped.")
+            if opened == "race":
+                self.stop_race()
+            else:
+                self._on_recording_toggled(False)
+            # The stop takes the board down, which publishes idle - but the
+            # line above has to be on that publish, so this is not a second
+            # copy of it, it is the one that carries the sentence when the
+            # board was never up.
+            self._strip_idle()
+            return
+        if opened is not None:
+            # **And nothing is republished here.** `_strip_idle` tells BOTH
+            # pages there is no session and resets the strip's comparison
+            # series - which is right when there is none and is rule 11
+            # backwards when there is one. With a session open the board is
+            # publishing four times a second and the line goes out on the
+            # next tick.
+            self._tell_the_tablet(
+                f"{self.SESSION_WORDS[opened]} is already running.")
+            return
+        self._pressing_from_tablet = True
+        try:
+            if value == "race":
+                # The property, not `__dict__`: `race_screen` is a lazy one
+                # backed by `_race_screen`, so the instance dict never holds
+                # that name. `start_race` reads it first either way, so
+                # nothing is built here that was not built already.
+                screen = self.race_screen
+                started = self.start_race()
+            else:
+                screen = self.practice
+                # **Set either way, because a press is an instruction.** The
+                # picker is on the PC and holds whatever the last session was;
+                # pressing Practice with it left on Qualifying would arm the
+                # coach for a run he did not ask it for.
+                self.practice.set_practice_intent(
+                    FOR_QUALIFYING if value == "quali" else FOR_RACE)
+                self._on_recording_toggled(True)
+                started = self.session_id is not None
+        finally:
+            self._pressing_from_tablet = False
+        if started:
+            log("session").info("%s opened from the tablet", value)
+            return
+        why = ""
+        if screen is not None and hasattr(screen, "status_text"):
+            why = screen.status_text()
+        self._tell_the_tablet(
+            why or "The PC would not start it - the log has the reason.")
+        self._strip_idle()
+
     def _tablet_controls(self) -> dict:
         """What the buttons read back - the app's state, never the page's."""
         race = self.race
@@ -7782,6 +7921,9 @@ class PitCrewController(QObject):
         if declared is not None and state is not None:
             # His HUD's number for it, like everything else he reads.
             declared = state.lap_on_screen() + (declared - state.lap - 1)
+        note, at, said = self.__dict__.get("_tablet_note") or (None, None, 0)
+        if at is not None and _monotonic() - at > TABLET_NOTE_S:
+            note = None
         return {
             "george": bool(self.__dict__.get("_engineer_speaks", True)),
             "fuel": None if engaged is None else ("save" if engaged else "full"),
@@ -7790,6 +7932,15 @@ class PitCrewController(QObject):
             # Past the lap it was declared for there is nothing to take back.
             "pit_cancellable": cancellable,
             "racing": bool(race is not None and race.running),
+            # **Which session is open, and which is under way, are two keys**
+            # (rule 13): `racing` is the green flag and gates the fuel and pit
+            # buttons; `session` is what is open at all and gates Start, so an
+            # armed race waiting for the lights reads as a race on both.
+            "session": self._open_session_kind(),
+            "note": note,
+            # Ticks on every answer given, so the page can tell a second
+            # identical refusal from the one already on screen.
+            "note_n": said,
         }
 
     def _publish_tablet(self, strip, board=None) -> bool:

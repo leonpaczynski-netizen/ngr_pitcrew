@@ -265,6 +265,10 @@ def test_the_monitor_does_not_turn_to_an_empty_rack_in_practice():
 
     ctl = PitCrewController.__new__(PitCrewController)
     ctl.race = None
+    # `_tablet_controls` reads which session is OPEN, and it reads
+    # `session_kind` directly - a default there would hide one that
+    # went missing - so a controller built by hand sets it by hand.
+    ctl.session_kind = None
     ctl._strip_composer = type("C", (), {"compose": lambda _s, state: {}})()
     ctl._strip_was_live = True
     ctl._strip_failures = 0

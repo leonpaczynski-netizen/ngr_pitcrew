@@ -621,6 +621,16 @@ class RaceScreen(QWidget):
             f"color: {theme.WARNING if warn else theme.STENCIL_DIM};"
             f"background: transparent;")
 
+    def status_text(self) -> str:
+        """What the status line says now.
+
+        **So a refusal is worded once.** A press from the tablet reads this
+        back rather than the controller writing a second copy of a sentence
+        this screen already has (rule 13) - and every refusal on the way into
+        a session ends up here, so there is nothing to keep in step.
+        """
+        return self.subtitle.text()
+
     def show_call(self, call):
         """Put the call on the log. Returns its row, so the verdict can be
         written onto it when the laps that answer it have been driven."""

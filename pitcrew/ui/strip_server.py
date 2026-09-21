@@ -11,11 +11,18 @@ never reaches GT7. `GET /` is the phone's page, `GET /tablet` the tablet's,
 
 **One route accepts anything, and only for the app** (17 Sep 2026): the
 tablet's buttons POST to `/tablet/press` - George on or off, the beep's fuel
-column, "I'm pitting this lap". A press must carry `press_key` (the code in
-the settings, compared in constant time), names one of `PRESS_ACTIONS`, is
-capped in size, and is handed to `on_press` - which only emits a queued Qt
-signal. Everything else is 404, and a press the app is not listening for is
-503 rather than a silent success.
+column, "I'm pitting this lap", and which session to open. A press names one
+of `PRESS_ACTIONS`, is capped in size, and is handed to `on_press` - which
+only emits a queued Qt signal. Everything else is 404, and a press the app is
+not listening for is 503 rather than a silent success.
+
+**No code on the press** (21 Sep 2026, his call: *"I don't need codes on the
+buttons on the tablet, it's a local only web page, no one in my home will
+muck around with it"*). What is left is not nothing, and it is the guard that
+was doing the work anyway: a press must be `application/json`, which is not a
+CORS simple request, so a page open in any browser on his Wi-Fi cannot post
+one without a preflight this server answers with 404. The code only ever
+stopped somebody who had already decided to type the URL in by hand.
 
 **Staleness is decided here, where the clock is.** The phone cannot compare
 its clock with the PC's, so every answer carries `age_s` - how long since the
@@ -54,14 +61,13 @@ STALE_AFTER_S = 1.5
 # every 250 ms; two seconds of silence is a phone that has gone.
 LIVE_WITHIN_S = 2.0
 # What a press may ask for, and the largest body one may send.
+# `session` opens or closes one: the three the app has, and "stop" for
+# whichever is open. The tablet is where he sits, and walking to the PC to
+# press Start is the one thing the three screens were meant to end.
 PRESS_ACTIONS = {"george": (True, False), "fuel": ("save", "full"),
-                 "pit": (True, False)}
+                 "pit": (True, False),
+                 "session": ("practice", "quali", "race", "stop")}
 PRESS_MAX_BYTES = 512
-# Wrong codes before presses are refused for a while. A six-digit code on a
-# LAN listener is small enough to hammer, and each refusal writes a log line.
-PRESS_WRONG_LIMIT = 5
-PRESS_COOL_OFF_S = 30.0
-
 PAGE = Path(__file__).with_name("strip.html")
 # The pages served: the routes that draw each, its file, and where its numbers
 # come from.
@@ -141,12 +147,10 @@ class StripServer:
                               "client": None} for name in PAGES}
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        # The tablet's buttons: the code a press must carry, and what is
-        # called with `(action, value)` once it does. None refuses them all.
-        self.press_key: str | None = None
+        # The tablet's buttons: what is called with `(action, value)` when
+        # one is pressed. None answers every press 503, which is what a page
+        # left open after the app closed must hear.
         self.on_press = None
-        self._wrong_presses = 0
-        self._cool_off_until = 0.0
 
     # ------------------------------------------------------------ lifecycle
 
@@ -270,22 +274,19 @@ class StripServer:
     def _press(self, headers, stream) -> tuple[int, dict]:
         """One press from the tablet: `(status, answer)`. Request thread.
 
-        Refused, and logged, for a wrong code, an unknown action or value, or
-        a body too big to be a press. **Accepted is not done**: the answer says
-        the press was handed over, and the page reads the result back off the
-        state it polls, so a press that changed nothing is visible as such.
+        Refused, and logged, for an unknown action or value, or a body too
+        big to be a press. **Accepted is not done**: the answer says the press
+        was handed over, and the page reads the result back off the state it
+        polls, so a press that changed nothing is visible as such.
         """
-        import hmac
-
         # **A refusal that never reads the body is a refusal he never sees.**
         # Answering and closing with the request body still in flight makes
         # Windows reset the connection, and the tablet gets
         # `ConnectionAbortedError` where the server sent a perfectly good
-        # "too many wrong codes" - so the page says the PC is unreachable
-        # when what actually happened is that it said no, and why. The two
-        # branches below both returned before the read: the cool-off, which
-        # is the one refusal with something to tell him, and the content-type
-        # check. Drained first, so every answer on this route is delivered.
+        # refusal - so the page says the PC is unreachable when what actually
+        # happened is that it said no, and why. The content-type branch below
+        # returned before the read; drained first, so every answer on this
+        # route is delivered.
         def drain() -> None:
             try:
                 length = int(headers.get("Content-Length") or 0)
@@ -297,9 +298,6 @@ class StripServer:
                 except OSError:
                     pass
 
-        if self._clock() < self._cool_off_until:
-            drain()
-            return 429, {"ok": False, "why": "too many wrong codes"}
         # **A press says it is one.** Without this a `text/plain` body is a
         # CORS simple request, so any page open in a browser on his network
         # could post one without a preflight.
@@ -319,18 +317,6 @@ class StripServer:
             return 400, {"ok": False, "why": "not a press"}
         if not isinstance(press, dict):
             return 400, {"ok": False, "why": "not a press"}
-        key = self.press_key
-        if not key or not hmac.compare_digest(str(press.get("key", "")), key):
-            self._wrong_presses += 1
-            if self._wrong_presses >= PRESS_WRONG_LIMIT:
-                self._cool_off_until = self._clock() + PRESS_COOL_OFF_S
-                self._wrong_presses = 0
-                log("ui").warning("tablet presses refused for %.0f s: %d wrong "
-                                  "codes", PRESS_COOL_OFF_S, PRESS_WRONG_LIMIT)
-            else:
-                log("ui").warning("tablet press refused: wrong code")
-            return 403, {"ok": False, "why": "wrong code"}
-        self._wrong_presses = 0
         action, value = press.get("action"), press.get("value")
         if action not in PRESS_ACTIONS or value not in PRESS_ACTIONS[action]:
             return 400, {"ok": False, "why": "unknown press"}

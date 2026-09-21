@@ -157,11 +157,11 @@ class Settings:
     # `ui/strip.py` for what it shows and `ui/strip_server.py` for how.
     strip_enabled: bool = True
     strip_port: int = 8765
-    # **The code the tablet's buttons carry** (17 Sep 2026). The page can be
-    # opened by anything on the Wi-Fi; only a press carrying this is acted
-    # on. Made up on first start and kept, like the board's position - it has
-    # no control on the settings screen, only a line showing it.
-    tablet_key: str = ""
+    # **The tablet's buttons carry no code** (21 Sep 2026, his call: it is a
+    # page on his own Wi-Fi and nobody in the house is going to muck around
+    # with it). What still stops a stray page posting one is in
+    # `ui/strip_server.py`: a press must be `application/json`, which needs a
+    # CORS preflight that route does not answer.
 
     # --- push to talk
     ptt_enabled: bool = True

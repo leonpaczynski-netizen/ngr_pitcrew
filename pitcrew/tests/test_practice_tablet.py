@@ -209,6 +209,10 @@ def _controller(race=None):
 
     ctl = PitCrewController.__new__(PitCrewController)
     ctl.race = race
+    # `_tablet_controls` reads which session is OPEN, and it reads
+    # `session_kind` directly - a default there would hide one that
+    # went missing - so a controller built by hand sets it by hand.
+    ctl.session_kind = None
     return ctl
 
 

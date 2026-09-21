@@ -229,6 +229,11 @@ def test_the_board_hands_its_gaps_over_only_while_the_tablet_reads():
             self.published.append((page, body))
 
     ctl = PitCrewController.__new__(PitCrewController)
+    # Built by hand, so the plain attributes the tablet reads are set by
+    # hand too: `session_kind` is what says which session is OPEN, and
+    # `_open_session_kind` reads it directly on purpose - a default there
+    # would hide one that went missing.
+    ctl.session_kind = None
     ctl.race = None
     assert ctl._publish_tablet(Server(tablet=True)) is True
     server = Server(tablet=False)
@@ -254,6 +259,11 @@ def test_between_sessions_both_pages_are_told_there_is_no_session():
             self.published.append((page, body))
 
     ctl = PitCrewController.__new__(PitCrewController)
+    # Built by hand, so the plain attributes the tablet reads are set by
+    # hand too: `session_kind` is what says which session is OPEN, and
+    # `_open_session_kind` reads it directly on purpose - a default there
+    # would hide one that went missing.
+    ctl.session_kind = None
     ctl.race = None
     ctl.strip = Server()
     ctl._strip_composer = StripComposer()
@@ -306,15 +316,26 @@ def test_a_tablet_that_is_being_sent_nothing_does_not_take_the_gaps():
             raise ValueError("a data race on the board read")
 
     ctl = PitCrewController.__new__(PitCrewController)
+    # Built by hand, so the plain attributes the tablet reads are set by
+    # hand too: `session_kind` is what says which session is OPEN, and
+    # `_open_session_kind` reads it directly on purpose - a default there
+    # would hide one that went missing.
+    ctl.session_kind = None
     ctl.race = Broken()
     server = Server()
     assert ctl._publish_tablet(server) is False
     assert server.published == []
 
 
-def test_the_press_route_refuses_a_body_that_is_not_a_press_and_cools_off():
-    from pitcrew.ui.strip_server import PRESS_WRONG_LIMIT
+def test_the_press_route_refuses_a_body_that_is_not_a_press():
+    """**The content type is the guard, and it is the one that was working.**
 
+    The six-digit code went on 21 Sep 2026 (his call: a page on his own
+    Wi-Fi). This is what is left, and it is what actually stopped a stray
+    page: a JSON body is not a CORS simple request, so a browser has to
+    preflight it, and this route answers a preflight with 404. A form post -
+    which needs no preflight at all - is refused outright.
+    """
     server, port, presses = _press_server()
     try:
         import urllib.error
@@ -331,14 +352,10 @@ def test_the_press_route_refuses_a_body_that_is_not_a_press_and_cools_off():
             except urllib.error.HTTPError as refused:
                 return refused.code
 
-        # A form post is a CORS simple request: any page on his network could
-        # send one without a preflight. A press says it is JSON.
-        assert post('{"action": "george", "value": false, "key": "123456"}',
+        assert post('{"action": "george", "value": false}',
                     kind="text/plain") == 415
-        for _ in range(PRESS_WRONG_LIMIT):
-            assert post('{"action": "george", "value": false, "key": "000000"}') == 403
-        # Hammering a six-digit code is answered with a cool-off, not a log flood.
-        assert post('{"action": "george", "value": false, "key": "123456"}') == 429
+        assert post("not json at all") == 400
+        assert post("[1, 2, 3]") == 400
         assert presses == []
     finally:
         server.stop()
@@ -351,7 +368,6 @@ def _press_server():
 
     presses = []
     server = StripServer(port=0, host="127.0.0.1")
-    server.press_key = "123456"
     server.on_press = lambda action, value: presses.append((action, value))
     assert server.start()
     return server, server._httpd.server_address[1], presses
@@ -373,25 +389,32 @@ def _post(port, body):
         return refused.code
 
 
-def test_a_press_is_acted_on_only_with_the_code_and_a_known_action():
+def test_a_press_is_acted_on_only_for_a_known_action_and_value():
     server, port, presses = _press_server()
     try:
-        assert _post(port, {"action": "pit", "value": True, "key": "999999"}) == 403
-        assert _post(port, {"action": "launch", "value": True, "key": "123456"}) == 400
-        assert _post(port, {"action": "fuel", "value": "max", "key": "123456"}) == 400
+        assert _post(port, {"action": "launch", "value": True}) == 400
+        assert _post(port, {"action": "fuel", "value": "max"}) == 400
+        # The sessions are a closed list too: "qualifying" is the store's word
+        # for the intent and "quali" is the tablet's, and only one of them is
+        # a press.
+        assert _post(port, {"action": "session", "value": "qualifying"}) == 400
         assert presses == []
-        assert _post(port, {"action": "fuel", "value": "save", "key": "123456"}) == 202
-        assert presses == [("fuel", "save")]
+        assert _post(port, {"action": "fuel", "value": "save"}) == 202
+        assert _post(port, {"action": "session", "value": "practice"}) == 202
+        assert _post(port, {"action": "session", "value": "stop"}) == 202
+        assert presses == [("fuel", "save"), ("session", "practice"),
+                           ("session", "stop")]
     finally:
         server.stop()
 
 
-def test_a_server_with_no_code_refuses_every_press():
-    server, port, presses = _press_server()
-    server.press_key = None
+def test_a_press_the_app_is_not_listening_for_is_refused_not_swallowed():
+    """503, never a silent 202: a page left open after the app closed must
+    hear that the press went nowhere."""
+    server, port, _ = _press_server()
+    server.on_press = None
     try:
-        assert _post(port, {"action": "george", "value": False, "key": ""}) == 403
-        assert presses == []
+        assert _post(port, {"action": "george", "value": False}) == 503
     finally:
         server.stop()
 
@@ -454,6 +477,209 @@ def test_a_stop_cannot_be_declared_from_the_box():
     assert race.declare_box_this_lap() is False
 
 
+# --------------------------------------- starting a session from the tablet
+
+
+class _Practice:
+    """The Practice screen, as much of it as a tablet press touches."""
+
+    def __init__(self, intent="race", status=""):
+        self.intent, self.status, self.recording = intent, status, None
+
+    def practice_intent(self):
+        return self.intent
+
+    def set_practice_intent(self, intent):
+        self.intent = intent
+
+    def status_text(self):
+        return self.status
+
+
+def _tablet_ctl(**kw):
+    """A controller with only what a session press reads.
+
+    Built by hand for the reason `_publish_tablet`'s tests are: the real
+    `__init__` wants a store, a bridge, Qt and a UDP socket, and none of that
+    is what is under test here.
+    """
+    from pitcrew.controller import PitCrewController
+
+    ctl = PitCrewController.__new__(PitCrewController)
+    ctl.race = None
+    ctl.session_kind = None
+    ctl.session_id = None
+    ctl.race_screen = None
+    ctl.practice = _Practice()
+    for name, value in kw.items():
+        setattr(ctl, name, value)
+    return ctl
+
+
+def test_the_tablet_opens_each_of_the_three_sessions():
+    """His ask, 21 Sep 2026: practice, qualifying and the race, from the seat.
+
+    **The intent is set either way**, because a press is an instruction: the
+    picker is on the PC and holds whatever the last session was, so pressing
+    Practice with it left on Qualifying would arm the coach for a run he did
+    not ask for.
+    """
+    from pitcrew.analysis.runs import FOR_QUALIFYING, FOR_RACE
+
+    toggled = []
+    ctl = _tablet_ctl(practice=_Practice(intent=FOR_QUALIFYING))
+    ctl._on_recording_toggled = lambda wanted: (
+        toggled.append(wanted), setattr(ctl, "session_id", 7))
+
+    ctl._on_tablet_press("session", "practice")
+    assert toggled == [True]
+    assert ctl.practice.intent == FOR_RACE
+    # Nothing to say: it started.
+    assert ctl.__dict__.get("_tablet_note") is None
+
+    ctl = _tablet_ctl()
+    ctl._on_recording_toggled = lambda wanted: setattr(ctl, "session_id", 8)
+    ctl._on_tablet_press("session", "quali")
+    assert ctl.practice.intent == FOR_QUALIFYING
+
+    armed = []
+    ctl = _tablet_ctl()
+    ctl.start_race = lambda: (armed.append(True), True)[1]
+    ctl._on_tablet_press("session", "race")
+    assert armed == [True]
+
+
+def test_the_tablet_will_not_open_a_second_session_over_the_first():
+    """And it names the one that is open. Starting one session over another
+    is the failure `start_practice`'s own guard exists for - two UDP binds,
+    the first socket keeping the datagrams on Windows, the second session
+    deaf - and from the tablet it is a mis-press rather than a condition.
+    """
+    ctl = _tablet_ctl(session_kind="practice")
+    started = []
+    ctl._on_recording_toggled = lambda wanted: started.append(wanted)
+    ctl._on_tablet_press("session", "race")
+    assert started == []
+    assert ctl._tablet_controls()["note"] == "Practice is already running."
+
+    # **An armed race counts as open before the green.** `racing` is False on
+    # the grid; a Start read off that would offer to arm it twice.
+    ctl = _tablet_ctl(race=object())
+    assert ctl._open_session_kind() == "race"
+
+
+def test_a_refused_start_puts_the_screens_own_reason_on_the_tablet():
+    """Rule 13: one refusal, one wording. `start_race` already writes every
+    one of its half-dozen refusals into its status line, and the tablet reads
+    that back rather than carrying a second copy that can drift from it.
+    """
+    class Screen:
+        def status_text(self):
+            return "Free Run is active. Stop it before arming the race."
+
+    ctl = _tablet_ctl(race_screen=Screen())
+    ctl.start_race = lambda: False
+    ctl._on_tablet_press("session", "race")
+    assert ctl._tablet_controls()["note"] == (
+        "Free Run is active. Stop it before arming the race.")
+
+    # A refusal with nothing to say still says something.
+    ctl = _tablet_ctl()
+    ctl.start_race = lambda: False
+    ctl._on_tablet_press("session", "race")
+    assert "the log has the reason" in ctl._tablet_controls()["note"]
+
+
+def test_the_tablets_answer_retires_and_a_repeat_reads_as_a_second_press():
+    """Two guards, and both are needed.
+
+    Nothing publishes between sessions - the board timer is stopped - so
+    without an age the last refusal sits on the page until the next session
+    opens (rule 11). And without a count the page cannot tell a second
+    identical refusal from the sentence already on screen, so it would answer
+    the second press with silence.
+    """
+    from pitcrew import controller as C
+
+    ctl = _tablet_ctl()
+    ctl.start_race = lambda: False
+    ctl._on_tablet_press("session", "race")
+    first = ctl._tablet_controls()
+    ctl._on_tablet_press("session", "race")
+    second = ctl._tablet_controls()
+    assert first["note"] == second["note"]
+    assert second["note_n"] == first["note_n"] + 1
+
+    words, at, said = ctl._tablet_note
+    ctl._tablet_note = (words, at - C.TABLET_NOTE_S - 1, said)
+    assert ctl._tablet_controls()["note"] is None
+
+
+def test_the_tablet_stops_whichever_session_is_open():
+    stopped = []
+    ctl = _tablet_ctl(session_kind="practice")
+    ctl._on_recording_toggled = lambda wanted: stopped.append(wanted)
+    ctl._on_tablet_press("session", "stop")
+    assert stopped == [False]
+    assert ctl._tablet_controls()["note"] == "Practice stopped."
+
+    ctl = _tablet_ctl(session_kind="race", race=object())
+    ctl.stop_race = lambda: stopped.append("race")
+    ctl._on_tablet_press("session", "stop")
+    assert stopped[-1] == "race"
+
+    ctl = _tablet_ctl()
+    ctl._on_tablet_press("session", "stop")
+    assert ctl._tablet_controls()["note"] == "Nothing is running."
+
+
+def test_the_gauge_dialog_never_opens_behind_a_tablet_press():
+    """It is the app's one modal and it opens on the PC.
+
+    From the seat he can neither see it nor answer it, and the app would sit
+    on `exec()` with the page showing nothing at all - so the press takes the
+    answer the dialog itself defaults to, which is not to go out. The refusal
+    then reaches him on the tablet's own face.
+    """
+    from types import SimpleNamespace
+
+    ctl = _tablet_ctl()
+    ctl._pressing_from_tablet = True
+    check = SimpleNamespace(source="OBS", reason="it did not answer",
+                            headline="", recovery="", caveat="")
+    assert ctl.confirm_without_gauge("this race", check) is False
+
+
+def test_george_pressed_on_the_tablet_moves_the_picker_on_the_race_screen():
+    """Found 21 Sep 2026, and it had never worked.
+
+    The sync read `self.__dict__["race_screen"]`, and that name is never in
+    the instance dict - `race_screen` is a lazy property backed by
+    `_race_screen`. So it was None every time, and the Race screen went on
+    showing "Engineer speaks" with George switched off from the seat: one
+    setting, two readings, and the one on the screen was the wrong one.
+    """
+    class Picker:
+        def __init__(self):
+            self.data, self.index = {True: 0, False: 1}, None
+
+        def findData(self, value):                       # noqa: N802 - Qt
+            return self.data[value]
+
+        def setCurrentIndex(self, index):                # noqa: N802 - Qt
+            self.index = index
+
+    class Screen:
+        def __init__(self):
+            self.engineer_picker = Picker()
+
+    ctl = _tablet_ctl()
+    ctl.race_screen = Screen()
+    ctl._on_tablet_press("george", False)
+    assert ctl._engineer_speaks is False
+    assert ctl.__dict__["_race_screen"].engineer_picker.index == 1
+
+
 def test_the_controller_routes_each_press_and_confirms_a_stop_out_loud():
     """The confirmation is said with George OFF - his call."""
     from pitcrew.controller import PitCrewController
@@ -466,6 +692,11 @@ def test_the_controller_routes_each_press_and_confirms_a_stop_out_loud():
             self.said.append(line)
 
     ctl = PitCrewController.__new__(PitCrewController)
+    # Built by hand, so the plain attributes the tablet reads are set by
+    # hand too: `session_kind` is what says which session is OPEN, and
+    # `_open_session_kind` reads it directly on purpose - a default there
+    # would hide one that went missing.
+    ctl.session_kind = None
     ctl.race = _coordinator()
     ctl.race.state.lap = 5
     ctl.race.state.fuel_per_lap_l = 5.0
@@ -492,7 +723,10 @@ def test_the_controller_routes_each_press_and_confirms_a_stop_out_loud():
     assert ctl.voice.said[-1] == "Stop cancelled. Back on the plan."
     controls = ctl._tablet_controls()
     assert controls == {"george": False, "fuel": "save", "fuel_held": True,
-                        "pit": None, "pit_cancellable": False, "racing": True}
+                        "pit": None, "pit_cancellable": False, "racing": True,
+                        # A race under way is a race open: `racing` is the
+                        # green flag, `session` is what is running at all.
+                        "session": "race", "note": None, "note_n": 0}
     # A hold past the lap it was declared for has nothing to take back, and
     # the button says so rather than answering with silence.
     ctl._on_tablet_press("pit", False)
@@ -903,18 +1137,15 @@ def test_his_burn_says_how_many_stops_it_rests_on():
 def test_a_refusal_reaches_the_tablet_with_its_reason():
     """**A refusal that never reads the body is a refusal he never sees.**
 
-    The cool-off and the content-type check both answered before reading the
-    request, so the connection was reset with the reply in flight and the
-    page got a transport error where the server had sent "too many wrong
-    codes". The tablet then says the PC is unreachable - which is the one
-    thing that had NOT happened - and he presses the button again, which is
-    what the cool-off exists to stop.
+    The content-type check answered before reading the request, so Windows
+    reset the connection with the reply in flight and the page got a
+    transport error where the server had sent a perfectly good "not a press".
+    The tablet then says the PC is unreachable - which is the one thing that
+    had NOT happened - and he presses the button again.
     """
     import json
     import urllib.error
     import urllib.request
-
-    from pitcrew.ui.strip_server import PRESS_WRONG_LIMIT
 
     server, port, presses = _press_server()
     try:
@@ -929,60 +1160,64 @@ def test_a_refusal_reaches_the_tablet_with_its_reason():
             except urllib.error.HTTPError as refused:
                 return refused.code, json.loads(refused.read() or b"{}")
 
-        wrong = '{"action": "george", "value": false, "key": "000000"}'
-        right = '{"action": "george", "value": false, "key": "123456"}'
-
         # The body is read even where the content type is refused outright.
-        status, why = post(right, kind="text/plain")
+        status, why = post('{"action": "george", "value": false}',
+                           kind="text/plain")
         assert (status, why.get("why")) == (415, "not a press")
-
-        for _ in range(PRESS_WRONG_LIMIT):
-            assert post(wrong)[0] == 403
-        # ...and the cool-off says so, in words, rather than dropping the
-        # connection on a body it never drained.
-        status, why = post(right)
-        assert (status, why.get("why")) == (429, "too many wrong codes")
         assert presses == []
     finally:
         server.stop()
 
 
-def test_the_field_is_readable_without_the_buttons_code():
-    """**The code authorises a PRESS, never a READ.**
+def _tablet_page():
+    from pathlib import Path
 
-    The page demanded it on load, so a new tablet - or any browser whose site
-    data had been cleared - put a keypad over the timing tower and every
-    figure behind it. Nothing on this page needs a code to be looked at: it
-    is the same read-only payload the phone gets. Measured 18 Sep 2026: all
-    four tablet scenes rendered as the pairing prompt and nothing else.
+    return (Path(__file__).resolve().parents[1] / "ui"
+            / "tablet.html").read_text(encoding="utf-8")
+
+
+def test_the_page_asks_for_no_code_at_all():
+    """21 Sep 2026, his call: *"I don't need codes on the buttons on the
+    tablet, it's a local only web page, no one in my home will muck around
+    with it."*
+
+    The whole pairing machinery is gone - the panel, the keypad, the stored
+    key and the `locked` face - rather than being left switched off, because
+    a code nothing checks is a second answer to the question of who may
+    press. What is NOT gone is the content type: that is what stops a page
+    open elsewhere on the Wi-Fi posting one, and it never asked him for
+    anything.
     """
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[1] / "ui"
-              / "tablet.html").read_text(encoding="utf-8")
-
-    # Nothing opens the prompt on load; `poll()` starts regardless.
-    assert "if (!key()) pair(true);" not in source, (
-        "the page is gating the race behind the buttons code again")
-    # It is opened from a press, which is the moment it is needed...
-    assert 'if (!key()) { pair(true); return; }' in source
-    # ...and from a refusal, which is the moment it is wrong.
-    assert 'pair(true, "that code was refused")' in source
-    # ...and it can be left, or it is a gate by another name.
-    assert 'id="pair-shut"' in source
-    assert '$("pair").addEventListener' in source
+    source = _tablet_page()
+    for gone in ("pair", "localStorage", "heldKey", "buttons.locked",
+                 "tablet-key"):
+        assert gone not in source, f"the buttons code is back: {gone}"
+    assert '"Content-Type": "application/json"' in source
+    assert '{ action: action, value: value }' in source
 
 
-def test_an_unpaired_button_says_so_rather_than_looking_live():
-    """A control that draws the app's state and answers a press with a keypad
-    is one he presses twice at the worst moment."""
-    from pathlib import Path
+def test_the_three_sessions_are_started_from_the_cover():
+    """His ask: start a practice, a qualifying run or the race from the seat.
 
-    source = (Path(__file__).resolve().parents[1] / "ui"
-              / "tablet.html").read_text(encoding="utf-8")
-    assert 'var locked = !key();' in source
-    assert '"tap for the code"' in source
-    assert "#buttons.locked" in source
+    **They are on the cover and nowhere else.** The cover is exactly the "no
+    session running" state, so a Start cannot be brushed against with a race
+    under way - and the button that ENDS one is a hold, like the pit button,
+    for the same reason.
+    """
+    source = _tablet_page()
+    for ask in ("s-practice", "s-quali", "s-race"):
+        assert f'id="{ask}"' in source
+    assert 'press("session", "practice")' in source
+    assert 'press("session", "quali")' in source
+    assert 'press("session", "race")' in source
+    # Started with a tap, stopped with a hold.
+    assert 'hold("b-session"' in source
+    assert 'press("session", "stop")' in source
+    # The start face is shown from `idle`, which is the state itself - never
+    # from the payload's age, because nothing publishes between sessions and
+    # the buttons would go a second and a half after the last one closed.
+    assert 'if (d.idle) {' in source
+    assert "#cover.start #start" in source
 
 
 def test_the_screen_and_the_voice_answer_the_stop_question_the_same_way():
