@@ -234,6 +234,19 @@ class SettingsScreen(QWidget):
                  "version it was taken under cannot be compared with the "
                  "next one."))
 
+        # **Which monitor our windows open on** (21 Sep 2026: *"I want the app
+        # to open on the wide screen not the main screen and same with the
+        # board so it doesn't cover OBS"*). Governs the app window, the
+        # driver board and the full-screen notice together - they are all
+        # ours, and the primary is not.
+        self.preferred_display = QComboBox()
+        plate.body.addWidget(Field(
+            "Open our windows on", self.preferred_display,
+            hint="The app window, the driver board and the full-screen "
+                 "notice. The widest screen is the default, which keeps them "
+                 "off the monitor OBS is on. A monitor that is unplugged "
+                 "falls back to the widest rather than to the main screen."))
+
         row = QHBoxLayout()
         row.setSpacing(theme.GAP)
         self.banner_enabled = QCheckBox("Show a full-screen notice")
@@ -830,6 +843,7 @@ class SettingsScreen(QWidget):
         index = self.feed_source.findData(settings.feed_source)
         self.feed_source.setCurrentIndex(max(0, index))
         self.ps5_ip.setText(settings.ps5_ip)
+        self._fill_displays(settings.preferred_display)
         self.banner_enabled.setChecked(settings.banner_enabled)
         self.driver_board_enabled.setChecked(settings.driver_board_enabled)
         self.strip_enabled.setChecked(settings.strip_enabled)
@@ -866,6 +880,41 @@ class SettingsScreen(QWidget):
         self.noise_scale.setValue(settings.voice_noise_scale)
         self.noise_w_scale.setValue(settings.voice_noise_w_scale)
 
+    def _fill_displays(self, chosen: str) -> None:
+        """The monitors attached now, with the default first.
+
+        Filled on every `load` rather than once at build: a monitor plugged
+        in since the app started is one he can choose, and a list built at
+        launch would never show it.
+
+        **A stored name that is not attached is kept in the list**, marked as
+        such. Dropping it would set the box to the default and the next Save
+        would write that default back - a setting quietly rewritten because a
+        monitor was off at the time.
+        """
+        from pitcrew.ui import displays
+
+        blocked = self.preferred_display.blockSignals(True)
+        try:
+            self.preferred_display.clear()
+            attached = displays.attached()
+            widest = displays.choose(attached)
+            self.preferred_display.addItem(
+                f"The widest screen ({widest.name})" if widest
+                else "The widest screen", "")
+            for display in attached:
+                self.preferred_display.addItem(
+                    f"{display.name} - {display.width}x{display.height}"
+                    + (" (main screen)" if display.primary else ""),
+                    display.name)
+            if chosen and self.preferred_display.findData(chosen) < 0:
+                self.preferred_display.addItem(
+                    f"{chosen} - not attached", chosen)
+            index = self.preferred_display.findData(chosen)
+            self.preferred_display.setCurrentIndex(max(0, index))
+        finally:
+            self.preferred_display.blockSignals(blocked)
+
     def _sync_feed_source(self) -> None:
         """Show the address box only where it is read.
 
@@ -884,6 +933,7 @@ class SettingsScreen(QWidget):
             feed_source=self.feed_source.currentData(),
             ps5_ip=self.ps5_ip.text().strip(),
             banner_enabled=self.banner_enabled.isChecked(),
+            preferred_display=self.preferred_display.currentData() or "",
             driver_board_enabled=self.driver_board_enabled.isChecked(),
             strip_enabled=self.strip_enabled.isChecked(),
             # `driver_board_geometry` deliberately has no line here: it has no

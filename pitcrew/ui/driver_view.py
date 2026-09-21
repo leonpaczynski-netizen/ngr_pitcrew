@@ -2720,14 +2720,42 @@ class DriverWindow(QWidget):
         rect = self.geometry()
         return f"{rect.x()},{rect.y()},{rect.width()},{rect.height()}"
 
-    def restore_geometry(self, text: str | None) -> bool:
+    def open_on_display(self, name: str = "") -> None:
+        """Centre it on the monitor he chose in settings.
+
+        Where a board goes when there is no remembered spot, or the
+        remembered spot is on the wrong monitor. 21 Sep 2026: the saved
+        geometry was `0,0,2480,1050` - it began on the 1920 primary and ran
+        560 px onto the ultrawide, so it lay across OBS.
+        """
+        from pitcrew.ui import displays
+
+        screen = displays.screen_for(name)
+        if screen is None:
+            return
+        self._placing = True
+        try:
+            displays.centre_on(self, screen)
+        finally:
+            self._placing = False
+        log("ui").info("the driver board opens on %s", screen.name())
+
+    def restore_geometry(self, text: str | None, *, display: str = "") -> bool:
         """Put it back where he left it. False if the text was unusable.
 
         **Checked against the screens that exist now**, because a monitor that
         was there last race may not be tonight - and a window restored onto a
         display that has gone is a board he cannot see and cannot find to drag
         back. Qt will happily place a window entirely off every screen.
+
+        **And checked against the monitor he chose** (21 Sep 2026). A spot
+        saved before he picked a display is a spot chosen under the old rule,
+        and here that spot was over the stream. Mostly-on, not wholly-on: he
+        drags the board part-way off an edge on purpose to reach the app
+        behind it, and that is still the display he chose.
         """
+        from pitcrew.ui import displays
+
         if not text:
             return False
         try:
@@ -2745,6 +2773,13 @@ class DriverWindow(QWidget):
             log("ui").warning(
                 "the driver board was last on a screen that is not here now, "
                 "so it opens on this one instead")
+            return False
+        chosen = displays.choose(displays.attached(app), display)
+        if chosen is not None and not displays.holds(chosen,
+                                                     (x, y, width, height)):
+            log("ui").info(
+                "the driver board's saved spot is not on %s, so it opens "
+                "there instead", chosen.name)
             return False
         self.setGeometry(wanted)
         self.keep_on_screen()

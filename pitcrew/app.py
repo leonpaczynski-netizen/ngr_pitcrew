@@ -40,7 +40,7 @@ from pitcrew.controller import (DEFAULT_PORT, PitCrewController,
                                 start_calendar_read)
 from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
-from pitcrew.ui import font_warm, theme
+from pitcrew.ui import displays, font_warm, theme
 from pitcrew.ui.car_screen import CarScreen
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
@@ -787,8 +787,14 @@ class NavRail(QWidget):
                 f"background: transparent;")
 
 
-def fit_to_screen(widget, width: int, height: int) -> tuple[int, int]:
+def fit_to_screen(widget, width: int, height: int, screen=None
+                  ) -> tuple[int, int]:
     """The requested size, clipped to what the screen will actually show.
+
+    `screen` is the one the window is about to be moved to - the display he
+    chose in settings, which is not the one Qt has the window on while it is
+    still being built. Clipping against the wrong screen is how a window
+    sized for a 1080 panel arrives on an 800-tall one (21 Sep 2026).
 
     The app asked for 1600x1000 unconditionally. One of this driver's three
     displays is a 1280x800 desktop at 150% scaling with a 752 px working area
@@ -800,7 +806,8 @@ def fit_to_screen(widget, width: int, height: int) -> tuple[int, int]:
     Clamped against `availableGeometry`, which is the work area rather than
     the panel, so the taskbar is already accounted for.
     """
-    screen = widget.screen() if hasattr(widget, "screen") else None
+    if screen is None:
+        screen = widget.screen() if hasattr(widget, "screen") else None
     if screen is None:
         return width, height
     available = screen.availableGeometry()
@@ -857,7 +864,8 @@ class _FirstPaint(QObject):
 
 class PitCrewWindow(QMainWindow):
     def __init__(self, store: Store, *, port: int = DEFAULT_PORT,
-                 warm=None, voice_engine=None, calendar=None) -> None:
+                 warm=None, voice_engine=None, calendar=None,
+                 display: str = "") -> None:
         super().__init__()
         # The launch's speech warm-up, held back until `release_speech`.
         self._warm = warm
@@ -870,13 +878,21 @@ class PitCrewWindow(QMainWindow):
         # armed once per window, not once per end of `warm_screens`.
         self._prewarm_handed_over = False
         self.setWindowTitle("Next Gear Racing Pit Crew")
+        # **The monitor he chose, not the one Windows calls first** (21 Sep
+        # 2026). OBS is on the primary. Sized against that screen and then
+        # moved onto it, in that order: `fit_to_screen` asks the screen the
+        # window is on, and until it has been moved that is still the primary.
+        # The full-screen notice follows the app window's screen on its own
+        # (`ui/banner.py`), so this carries it too.
+        target = displays.screen_for(display)
         # The floor is the *smaller* of what the layout wants and what the
         # screen can show. Pinning it above the work area makes the window
         # unresizable and puts its own controls off the edge.
-        fitted = fit_to_screen(self, *WINDOW)
+        fitted = fit_to_screen(self, *WINDOW, screen=target)
         self.setMinimumSize(min(MIN_WINDOW[0], fitted[0]),
                             min(MIN_WINDOW[1], fitted[1]))
         self.resize(*fitted)
+        displays.centre_on(self, target)
         if ICON.exists():
             self.setWindowIcon(QIcon(str(ICON)))
 
@@ -1408,7 +1424,10 @@ def main() -> int:
         #
         # After the sole-instance claim, deliberately: a second copy that is
         # about to be refused must not first load a quarter of a gigabyte.
-        warm = ptt.start_warm_up(settings.load(store).speech_backend,
+        # Read once and used twice: the speech backend below, and the monitor
+        # the window opens on.
+        launch_settings = settings.load(store)
+        warm = ptt.start_warm_up(launch_settings.speech_backend,
                                  start=False)
         # The league calendar, read beside the window build rather than in
         # the first fill in front of the first frame - see
@@ -1419,7 +1438,8 @@ def main() -> int:
         with diagnostics.timed_step("the window build"):
             window = PitCrewWindow(store, warm=warm,
                                    voice_engine=voice_engine,
-                                   calendar=calendar)
+                                   calendar=calendar,
+                                   display=launch_settings.preferred_display)
         diagnostics.mark("window built")
         with diagnostics.timed_step("the window's show()"):
             window.show()

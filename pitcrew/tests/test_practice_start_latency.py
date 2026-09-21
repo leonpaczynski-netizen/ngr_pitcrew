@@ -741,7 +741,12 @@ def test_a_board_built_early_opens_where_he_left_it(qt_app, window):
     ctrl.settings.driver_board_enabled = True
     ctrl.prewarm_for_sessions()
     placed: list[str] = []
-    ctrl.driver_board.restore_geometry = placed.append
+
+    def _remember(text, *, display=""):
+        placed.append(text)
+        return True
+
+    ctrl.driver_board.restore_geometry = _remember
     ctrl.settings.driver_board_geometry = "10,20,300,200"
     ctrl._open_driver_board()
     try:

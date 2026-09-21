@@ -3023,6 +3023,7 @@ class PitCrewController(QObject):
         if self._colour is not None:
             self._colour.level = new.colour_calls
         rebind = new.ptt_key != self.settings.ptt_key
+        moved_display = new.preferred_display != self.settings.preferred_display
         # Everything that decides where the stream comes from. Port and
         # filter were the only two checked, so switching between SimHub and
         # the console mid-session - or correcting a mistyped console address,
@@ -3038,6 +3039,8 @@ class PitCrewController(QObject):
             self._start_strip()
         elif not new.strip_enabled and self.__dict__.get("strip") is not None:
             self._stop_strip()
+        if moved_display:
+            self._move_to_display(new.preferred_display)
         self._apply_audio_devices(new)
         if self._port_override is None:
             self.port = new.udp_port
@@ -7485,8 +7488,13 @@ class PitCrewController(QObject):
             # Built hidden at idle by `prewarm_for_sessions` where it could
             # be; placed HERE either way, from the geometry as it is now, so
             # a board built early still opens where he last left it.
-            self._build_driver_board().restore_geometry(
-                self.settings.driver_board_geometry)
+            board = self._build_driver_board()
+            if not board.restore_geometry(
+                    self.settings.driver_board_geometry,
+                    display=self.settings.preferred_display):
+                # No remembered spot, a monitor that has gone, or a spot on
+                # the wrong monitor - all three want the display he chose.
+                board.open_on_display(self.settings.preferred_display)
             self._board_ever_shown = True
         # Escape, or anything else that closes it, has to stop the feed -
         # otherwise the timer goes on pushing into a hidden widget for the
@@ -7502,6 +7510,35 @@ class PitCrewController(QObject):
         # freeze at whatever it read when he came in, on the one number he is
         # sitting there watching.
         self._board_timer.start(250)
+
+    def _move_to_display(self, name: str) -> None:
+        """Take our windows to the monitor he has just picked, now.
+
+        Not at the next launch. A setting whose effect you have to restart to
+        see is one he changes twice and then distrusts - and the reason he
+        picked it (*"so it doesn't cover OBS"*) is a thing he is looking at
+        while he picks.
+
+        The app window is reached through a screen it contains, because this
+        controller holds no reference to it and never has - see the parenting
+        note in `_refuse_without_a_gauge`.
+        """
+        from pitcrew.ui import displays
+
+        screen = displays.screen_for(name)
+        if screen is None:
+            return
+        anchor = (getattr(self, "settings_screen", None)
+                  or getattr(self, "race_screen", None))
+        window = anchor.window() if anchor is not None else None
+        if window is not None:
+            width, height = displays.fit(screen, window.width(),
+                                         window.height())
+            window.resize(width, height)
+            displays.centre_on(window, screen)
+        if self.driver_board is not None:
+            self.driver_board.open_on_display(name)
+        log("ui").info("our windows move to %s", screen.name())
 
     def _build_driver_board(self):
         """The board window, built once and reused - hidden until opened."""

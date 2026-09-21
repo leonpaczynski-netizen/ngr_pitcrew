@@ -810,7 +810,10 @@ class _Board:
     def raise_(self):
         pass
 
-    def restore_geometry(self, _geometry):
+    def restore_geometry(self, _geometry, *, display=""):
+        return True
+
+    def open_on_display(self, _display=""):
         pass
 
 

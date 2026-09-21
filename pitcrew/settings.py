@@ -119,6 +119,20 @@ class Settings:
     # who does not want a screen-filling flash between runs.
     banner_enabled: bool = True
 
+    # **The monitor the app, the board and the full-screen notice open on**
+    # (21 Sep 2026: *"I want the app to open on the wide screen not the main
+    # screen and same with the board so it doesn't cover OBS"*). OBS runs on
+    # the 1920 primary; the ultrawide beside it is where everything of ours
+    # belongs, and Qt opens a window on the primary unless it is told
+    # otherwise.
+    #
+    # A screen name as Qt reports it. **Empty means the widest screen**, which
+    # is the ultrawide on this rig and so needs nothing typed in - and a name
+    # that is not attached tonight falls back to the same rule rather than to
+    # the primary, because an unplugged monitor must not put the board back
+    # over the stream. See `ui/displays.py`.
+    preferred_display: str = ""
+
     # **The GT7 version every measurement is filed against.** GT7 rewrote its
     # physics, tyre model and geometry in 1.49 and again in 1.55, so a figure
     # without the version it was taken under cannot be compared with the next
