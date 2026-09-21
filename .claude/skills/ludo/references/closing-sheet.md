@@ -55,3 +55,9 @@ Four rules:
 **It is the last thing in the message.** Not followed by commentary, caveats or
 a summary — those go above it. The bottom of the chat is where his thumb is.
 That holds for the two-word version as much as the full one.
+
+⚠️ **The second engineer's verdict goes at the TOP of the message, never here**
+(`references/second-engineer.md`). It is one line, and it is the only thing that
+outranks the sheet for position — because he needs to know before he starts typing
+whether the sheet was checked, and the bottom of the chat still belongs to the
+lines he has to set.

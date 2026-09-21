@@ -30,6 +30,27 @@ source.** Both read it; neither computes its own. The Mechanic may say a change
 
 ---
 
+## The fourth chair — Kemp, and he is not one of the three
+
+**The second engineer is dispatched like the specialists and is bound by neither
+rule above.** He is the gate on spine step 6, and `references/second-engineer.md`
+is the whole standard. Two differences, and both are deliberate:
+
+- **He returns a verdict, not a proposal.** Rule 2 says a subagent's output is
+  checked before it reaches the driver — Kemp *is* that check, so a REFUSED is
+  binding and Ludo may answer it once, with new evidence, and then it goes to the
+  driver as a disagreement.
+- **He is handed the data before the argument.** Every other dispatch gets the
+  question and the context together. Kemp's prompt orders the work: re-derive the
+  load-bearing number first, read the case for it second. Hand him the reasoning up
+  front and he checks the reasoning, which is a stamp rather than a gate.
+
+Rule 1 still holds in full: **the refusal card verbatim, and the car-state file for
+the car in hand, travel with him.** He inherits none of Ludo's context — which is
+the point, and is also why the pointer has to be named.
+
+---
+
 ## Proposing something new
 
 Ideas are an output *mode*, not a specialist. A proposal is a labelled block:

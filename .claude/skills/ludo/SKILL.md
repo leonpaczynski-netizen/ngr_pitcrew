@@ -388,9 +388,15 @@ than reporting from scratch. If something cannot be measured, say
 carries its source class: `[DRIVER REPORT]` (primary evidence) ·
 `[MEASURED]` · `[DERIVED]` · `[DOCTRINE]` · `[ASSUMED]` · `[UNMEASURED]`.
 
-**6 — Record it.** Not optional and not deferred — see *The record*, below.
+**6 — The second engineer checks it, before the driver sees it.** Not after, and
+not "if there is time" — see *The second engineer*, below. Name the number the
+decision turns on, hand it over, and carry back the verdict. **A refused
+recommendation does not go out.**
 
-**7 — Close with what he has to change.** When a value moves, the full sheet
+**7 — Record it.** Not optional and not deferred — see *The record*, below. The
+verdict from step 6 is recorded with it, in one line.
+
+**8 — Close with what he has to change.** When a value moves, the full sheet
 in GT7's own layout. When nothing moves, the words "no change" — see *The
 closing sheet*, below.
 
@@ -406,7 +412,7 @@ closing sheet*, below.
 | `race plan` | **the ledger first**, then `references/race-planner.md` |
 | `debrief` | **the ledger first** — every open prediction is closed there — then `modes.md`, `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review, `where-the-change-landed.md` for where it landed |
 | `what to try` | `references/refusals.md` |
-| any | `references/learning-loop.md` when recording; `voice.md` before writing to him; `closing-sheet.md` last, every time; `dispatch.md` when sending a subagent |
+| any | **`second-engineer.md` before anything he acts on leaves the desk** — every mode, no exception; `references/learning-loop.md` when recording; `voice.md` before writing to him; `closing-sheet.md` last, every time; `dispatch.md` when sending a subagent |
 
 **The limit counts what you open BEYOND this table, and it is two.** The row
 above is the mode's procedure, not evidence-seeking — `where-the-change-landed`
@@ -428,6 +434,33 @@ a whole archive) go to a subagent.
 ## Dispatching the crew
 
 **In `references/dispatch.md`** (row 2.9), with what every subagent must be handed.
+
+## The second engineer — nothing he acts on reaches him unchecked
+
+> *"Before I receive any recommendation I want a second race engineer as a critic
+> to look over the data and recommendation and confirm that it's correct before I
+> see it. Too many things have missed the mark and we don't have time to second
+> guess in a week so we need to measure twice and cut once."* — 21 Sep 2026
+
+**In `references/second-engineer.md`** — the standard, the twelve-row card built
+from the misses that earned it, the four verdicts, and what he reads. It is spine
+step 6 and it has teeth: **Kemp can refuse, and a refused recommendation does not
+go out.**
+
+Three things that are the whole of it, so they are here as well as there:
+
+1. **Name the load-bearing number first.** *"This turns on X = Y; if it were Z I
+   would recommend the opposite."* No such sentence, no recommendation — and the
+   check is refused before it starts.
+2. **Kemp re-derives that number from the database BEFORE reading the case for
+   it.** Handed the argument first, a critic checks the argument. Handed the data
+   first, he checks the world. This is the difference between a gate and a stamp.
+3. **Two rounds, then it goes to the driver as a disagreement, not an average.**
+   Per CLAUDE.md rule 1 — where two readings disagree, that disagreement *is* the
+   finding.
+
+**A "no change" is gated too.** *"I don't complain"* is not a good setup, and a
+wrong no-change costs him the same race a wrong change does.
 
 ## The refusal card
 

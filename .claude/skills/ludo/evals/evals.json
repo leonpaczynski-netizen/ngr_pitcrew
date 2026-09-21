@@ -1,6 +1,6 @@
 {
   "skill_name": "ludo",
-  "note": "Ten of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, or asks in a mode whose own priorities forbid the obvious answer, and the right output is a refusal or a redirection that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis, and that it picks the mode the ask actually belongs to.\n\nEvals 15-21 each encode an incident this programme recorded and would have been answered WRONGLY before it was understood - the refuted accel direction, corner names, a writer run as a diagnosis step, practice wear read as race wear, a 0.0 read as 'did not happen', the derived shift table quoted as the issued one, and a pit loss with the refuelling still inside it. The count is not a target: they were written for what the record supports, and the row's 'nine documented failures' was an artefact - no such list exists.",
+  "note": "Ten of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, or asks in a mode whose own priorities forbid the obvious answer, and the right output is a refusal or a redirection that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis, and that it picks the mode the ask actually belongs to.\n\nEvals 15-21 each encode an incident this programme recorded and would have been answered WRONGLY before it was understood - the refuted accel direction, corner names, a writer run as a diagnosis step, practice wear read as race wear, a 0.0 read as 'did not happen', the derived shift table quoted as the issued one, and a pit loss with the refuelling still inside it. The count is not a target: they were written for what the record supports, and the row's 'nine documented failures' was an artefact - no such list exists.\n\nEvals 22-23 (21 Sep 2026) check the second-engineer gate: that nothing he acts on leaves the desk without a critic's verdict re-derived from the data, that the verdict is named honestly when the check is shortened for time, and that a 'no change' is gated exactly like a change.",
   "evals": [
     {
       "id": 1,
@@ -254,6 +254,31 @@
         "Separates the lane-and-dead-time loss from the refuelling",
         "Says a 'measured' stamp is not a guarantee of what was measured",
         "Re-derives the figure rather than asserting a remembered one"
+      ]
+    },
+    {
+      "id": 22,
+      "name": "gate-no-recommendation-reaches-him-unchecked",
+      "prompt": "quick one - im on in an hour. just tell me what to change on the shelby for bathurst and the stop count",
+      "expected_output": "Does NOT hand him a sheet and a stop count straight out. Runs the second-engineer gate (SKILL.md spine step 6, `references/second-engineer.md`): names the load-bearing number in one sentence - for the stop count that is the measured L/lap at THIS circuit, since Shelby burn spans 1.272-1.833 L/km across five circuits at the same multiplier, which is 7.9-11.4 L/lap over Bathurst and straddles the 10.7 two-stop line - and dispatches the check with the refusal card and the car-state file, the critic re-deriving that figure off the database BEFORE reading the case for it. He is told the green is close, so the SHORT check is allowed (rank zero plus the load-bearing number) but it must be NAMED as a short check. The answer opens with the one-line verdict - confirmed, corrected, refused or cannot-check - and the setup sheet, if a value moves, is still the last thing in the message.",
+      "assertions": [
+        "Does not deliver the recommendation without a second-engineer verdict",
+        "Names the one figure the decision turns on, and what value would flip it",
+        "The critic re-derives that figure from the data rather than reviewing the write-up",
+        "The verdict line is at the TOP of the message and the setup sheet stays at the bottom",
+        "If the check is shortened for time, it says so rather than reporting a full check"
+      ]
+    },
+    {
+      "id": 23,
+      "name": "trap-a-no-change-is-gated-too",
+      "prompt": "drove the huracan at monza last night, nothing to report really, car felt fine. anything to change?",
+      "expected_output": "Treats 'nothing to report' as a reading to be checked, not as a pass. Two things fire: a no-complaint is not evidence of a good setup, and a 'no change' verdict is gated exactly like a change is - a wrong no-change costs him the same race and arrives with nothing to argue with. So the no-change goes through the second engineer with its own load-bearing number, and the critic runs the card: was the lap spread quoted over one population (clean laps against laps with an off, which at Bathurst were 2:05.2 against 2:20.8 and looked like one 10.5% spread), is a null being read as 'it did not happen', does the sample carry the claim. Also flags that Monza corner identity is unavailable, so nothing per-corner may be claimed. Closes with the two words 'no change' if nothing moves - no reprinted sheet.",
+      "assertions": [
+        "Does not accept 'felt fine' as a verdict on the setup",
+        "Puts the no-change through the same gate as a change",
+        "Splits clean laps from laps with an off before quoting any spread",
+        "Does not reprint the full setup sheet when nothing moved"
       ]
     }
   ]
