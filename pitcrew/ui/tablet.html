@@ -267,6 +267,45 @@
   .plight .lsub { display: block; font-family: var(--number); font-size: 2.2vh;
     letter-spacing: 0; text-transform: none; }
 
+  /* ---- compound bests on the practice face (Story 3, 25 Sep 2026). Shown
+     below the lights band. Absent key → display:none; empty list → shown
+     but blank (the two are different findings — rule 3). */
+  #p-bests { display: none; }
+  #p-bests.on { display: flex; flex-direction: column; gap: 0.4vh; }
+  .pbest { display: flex; gap: 2vw; align-items: baseline; }
+  .pbest-cpd { font-family: var(--label); font-weight: 700; font-size: 2.8vh;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--aged-measured, var(--reg-measured)); min-width: 3.4vw; }
+  .pbest-t { font-family: var(--number); font-weight: 700; font-variant-numeric: tabular-nums;
+    font-size: 3.4vh; line-height: 1; }
+  .pbest-n { font-family: var(--label); font-size: 2.0vh; color: var(--dim); }
+
+  /* ---- own-car block (Story 1, 25 Sep 2026). Shown below the field table
+     on the race face: our gaps to each neighbour, four tyre temps, the stint
+     plan averages (DERIVED), and the box countdown.
+     Three groups in a flex row: GAPS | TEMPS | BOX + DELTAS.
+     **Null gap-side (P1 / last) shows a dash, not an absent cell** — "no car
+     ahead" and "gap expired" are both dashes but the heading disambiguates
+     (rule 3, same convention as the field table's gap column). */
+  #own { display: none; border-top: 1px solid var(--edge); padding-top: 0.7vh; }
+  #own.on { display: flex; gap: 2.8vw; align-items: flex-start; flex-wrap: wrap; }
+  .og { display: flex; flex-direction: column; gap: 0.3vh; }
+  .og-temps { display: grid; grid-template-columns: 1fr 1fr;
+    column-gap: 1.6vw; row-gap: 0.3vh; }
+  .oi { display: flex; align-items: baseline; gap: 0.8vw; }
+  .oc { font-family: var(--label); font-weight: 700; font-size: 2.0vh;
+    letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+    color: var(--aged-measured, var(--reg-measured)); }
+  /* DERIVED caption uses the derived register ink (rule 5). */
+  .oc.r-d { color: var(--reg-derived); }
+  .ov { font-family: var(--number); font-weight: 700; font-variant-numeric: tabular-nums;
+    font-size: 3.0vh; line-height: 1; white-space: nowrap; }
+  /* "Absent" means the reading does not exist (null / expired), not that the
+     car is missing — the cell is there; only the number is not (rule 3). */
+  .ov.absent { color: var(--reg-absent); }
+  .os { font-family: var(--label); font-size: 1.8vh; color: var(--dim);
+    white-space: nowrap; }
+
   /* **The cover takes the table, not the buttons.** Over the whole screen it
      swallowed every press - including George on/off, which is meant to work
      with no race running at all, which is exactly when the cover is up. */
@@ -299,6 +338,9 @@
     .pf .sub { font-size: 1.7vw; } .pf.tyre .sub { font-size: 1.5vw; }
     .pcap { font-size: 2vw; }
     .plight { font-size: 2.4vw; } .plight .lsub { font-size: 1.8vw; }
+    .pbest-cpd { font-size: 2.2vw; } .pbest-t { font-size: 2.8vw; }
+    .pbest-n { font-size: 1.7vw; }
+    .oc { font-size: 1.6vw; } .ov { font-size: 2.4vw; } .os { font-size: 1.5vw; }
   }
 </style>
 </head>
@@ -319,6 +361,10 @@
     <div class="pcap" id="p-secnote"></div>
     <div class="band" id="p-lights"></div>
   </div>
+  <!-- compound bests (Story 3): below practice face, only in practice mode -->
+  <div id="p-bests"></div>
+  <!-- own-car block (Story 1): below field table, only in race mode -->
+  <div id="own"></div>
   <div id="foot"></div>
 </div>
 <div id="buttons">
@@ -371,7 +417,22 @@
   // Shorter where the column is narrow; the arrow in each row says in → out.
   HEAD[4] = "Fuel";
 
+  // ---- helpers -------------------------------------------------------
   function $(id) { return document.getElementById(id); }
+
+  // Format integer milliseconds as m:ss.sss — the same convention the
+  // monitor rack uses. `null` / `undefined` → "--".  No floating point:
+  // input is always an integer from Python's round().
+  function fmtMs(ms) {
+    if (ms == null) return "--";
+    var total_s = Math.floor(ms / 1000);
+    var frac    = ms % 1000;
+    var m   = Math.floor(total_s / 60);
+    var sec = total_s % 60;
+    var fs  = (frac < 100 ? "0" : "") + (frac < 10 ? "0" : "") + frac;
+    return m + ":" + (sec < 10 ? "0" : "") + sec + "." + fs;
+  }
+
   function show(big, why, fault, startable) {
     cover.querySelector(".big").textContent = big;
     cover.querySelector(".why").textContent = why;
@@ -445,6 +506,32 @@
       e.appendChild(el("span", "lsub", l.sub || ""));
       return e;
     }));
+    // **Compound bests (Story 3).** Absent key → leave hidden; empty list →
+    // show the container anyway (two different statements — rule 3). One row
+    // per compound: name, best lap, count. `fmtMs` formats milliseconds exactly
+    // as the monitor rack does, so the two surfaces cannot disagree (rule 13).
+    var bests = d.compound_bests;
+    var pb = $("p-bests");
+    if (bests == null) {
+      pb.className = "";  // absent key: hidden
+    } else {
+      pb.className = "on";  // present (even if empty)
+      var rows = bests.map(function (b) {
+        var row = el("div", "pbest");
+        // M1: compound is null when the disc was never read — show "--", not
+        // the string "null" that JSON.stringify would produce if it were
+        // accidentally stringified.  Explicit null check, not truthiness.
+        row.appendChild(el("span", "pbest-cpd",
+                           b.compound != null ? b.compound : "--"));
+        row.appendChild(el("span", "pbest-t", fmtMs(b.best_ms)));
+        row.appendChild(el("span", "pbest-n",
+                           b.lap_count != null ? b.lap_count + " laps" : ""));
+        return row;
+      });
+      fill("p-bests", rows);
+    }
+    // In practice mode the own-car block is not needed.
+    $("own").className = "";
     $("foot").textContent = "";
   }
 
@@ -510,6 +597,126 @@
       table.appendChild(row);
     });
     $("table").replaceChildren(table);
+
+    // **Own-car block (Story 1).** Absent `own` key → hidden (no DriverState).
+    // Present → built from three groups: GAPS | TEMPS | BOX + DELTAS.
+    // The compound bests section belongs to practice only; hide it here.
+    $("p-bests").className = "";
+    var own = d.own;
+    var ownEl = $("own");
+    if (!own) {
+      ownEl.className = "";
+    } else {
+      ownEl.className = "on";
+      // Helper: one gap item — a labelled value, optional trend sub-line.
+      function gapItem(label, g) {
+        var item = el("div", "oi");
+        item.appendChild(el("span", "oc", label));
+        var absent = !g || g.unread || g.gap_s == null;
+        item.appendChild(el("span", "ov" + (absent ? " absent" : ""),
+                            absent ? "--" : g.gap_s.toFixed(2) + " s"));
+        var item2 = el("div", "oi");
+        item2.appendChild(el("span", "os",
+                              (g && !g.unread && g.trend) ? g.trend : ""));
+        var wrap = el("div", "og");
+        wrap.appendChild(item);
+        wrap.appendChild(item2);
+        return wrap;
+      }
+      // Helper: one derived item — DERIVED ink on caption, null → "--".
+      function derivedItem(label, val, sub) {
+        var item = el("div", "oi");
+        item.appendChild(el("span", "oc r-d", label));
+        item.appendChild(el("span", "ov" + (val == null ? " absent" : ""),
+                            val == null ? "--" : val));
+        var wrap = el("div", "og");
+        wrap.appendChild(item);
+        if (sub) wrap.appendChild(el("div", "oi", "").appendChild(el("span", "os", sub)));
+        return wrap;
+      }
+
+      // Group 1: gap ahead and gap behind.
+      var gapGroup = el("div", "og");
+      gapGroup.appendChild(gapItem("AHEAD", own.gap_ahead));
+      gapGroup.appendChild(gapItem("BEHIND", own.gap_behind));
+
+      // Group 2: four tyre temps in a 2×2 grid.
+      var tempGroup = el("div", "og-temps");
+      var t = own.temps_c;
+      ["FL","FR","RL","RR"].forEach(function(pos) {
+        var key = pos.toLowerCase();
+        var val = t && t[key] != null ? Math.round(t[key]) + "°" : "--";
+        var grp = el("div", "og");
+        grp.appendChild(el("div", "oc", pos));
+        grp.appendChild(el("div", "ov" + (t && t[key] != null ? "" : " absent"), val));
+        tempGroup.appendChild(grp);
+      });
+      var tempOuter = el("div", "og");
+      tempOuter.appendChild(tempGroup);
+
+      // Group 3: laps countdown + two DERIVED stint deltas.
+      // **`own.laps` supersedes `own.box`** (backend added it 25 Sep 2026).
+      // `own.laps` has { value, label, tone } — value and tone come verbatim
+      // from box_block when a stop is still to come (including "NOW" on the
+      // in-lap), or from laps_remaining to the flag.  Never "0".
+      // `own.laps` is absent (null) when there is no plan — fall back to
+      // `own.box` alone so the lap count still appears (e.g. during an armed
+      // race with no strategy).
+      var box = own.box || {};
+      var laps = own.laps;   // null when no plan
+      var boxGroup = el("div", "og");
+      var bItem = el("div", "oi");
+      if (laps != null) {
+        // laps block present: value is always correct from the backend.
+        var lTone = laps.tone || "plain";
+        var lVal  = laps.value;
+        var lLbl  = laps.label || "";
+        bItem.appendChild(el("span", "oc", "LAPS"));
+        var lValEl = el("span", "ov", lVal);
+        if (lTone === "near") lValEl.style.color = "var(--near)";
+        else if (lTone === "good") lValEl.style.color = "var(--good)";
+        bItem.appendChild(lValEl);
+        bItem.appendChild(el("span", "os", lLbl));
+      } else {
+        // No plan: fall back to box countdown (value only, no label needed).
+        bItem.appendChild(el("span", "oc", "BOX"));
+        var bVal = el("span", "ov", box.value || "--");
+        if (box.tone === "urgent") bVal.style.color = "var(--near)";
+        else if (box.tone === "good") bVal.style.color = "var(--good)";
+        bItem.appendChild(bVal);
+        if (box.sub) bItem.appendChild(el("span", "os", box.sub));
+      }
+      boxGroup.appendChild(bItem);
+
+      // Stint lap-time delta (DERIVED, ms → ±s string).
+      var lapDelta = own.stint_lap_delta_ms;
+      var lapStr = lapDelta == null ? null
+                 : (lapDelta >= 0 ? "+" : "") + (lapDelta / 1000).toFixed(3) + " s";
+      var lapSub = own.stint_lap_laps != null
+                   ? "[DERIVED " + own.stint_lap_laps + " laps]" : null;
+      var lapItem = el("div", "oi");
+      lapItem.appendChild(el("span", "oc r-d", "PACE"));
+      lapItem.appendChild(el("span", "ov" + (lapStr == null ? " absent" : ""),
+                              lapStr || "--"));
+      if (lapSub) lapItem.appendChild(el("span", "os", lapSub));
+      boxGroup.appendChild(lapItem);
+
+      // Stint burn delta (DERIVED, L/lap signed string).
+      var burnDelta = own.stint_burn_delta_l;
+      var burnStr = burnDelta == null ? null
+                  : (burnDelta >= 0 ? "+" : "") + burnDelta.toFixed(2) + " L";
+      var burnSub = own.stint_burn_laps != null
+                    ? "[DERIVED " + own.stint_burn_laps + " laps]" : null;
+      var burnItem = el("div", "oi");
+      burnItem.appendChild(el("span", "oc r-d", "BURN"));
+      burnItem.appendChild(el("span", "ov" + (burnStr == null ? " absent" : ""),
+                               burnStr || "--"));
+      if (burnSub) burnItem.appendChild(el("span", "os", burnSub));
+      boxGroup.appendChild(burnItem);
+
+      ownEl.replaceChildren(gapGroup, tempOuter, boxGroup);
+    }
+
     $("foot").textContent = (d.left_off ? d.left_off + " more not shown · " : "") + (d.why || "");
     cover.className = "";
   }

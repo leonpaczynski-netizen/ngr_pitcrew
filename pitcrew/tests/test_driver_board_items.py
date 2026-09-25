@@ -898,8 +898,67 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
             {"lap": 100 + n, "lap_ms": 599_999, "lap_delta_s": 99.999,
              "burn_l": 12.34, "burn_delta_l": None, "saving": None,
              "why": "an implausible fuel reading struck it",
-             "pit": False, "out": False}
+             "pit": False, "out": False,
+             "compound": "RS",
+             "sectors_ms": (38_412, 41_999, 25_000)}
             for n in range(40))))
+        # **The rival stops panel** (Story 2, 25 Sep 2026).  The panel
+        # displaces the tyre section when rival_table is non-empty.
+        # Probe both: 15 entries (the realistic worst — one shown as
+        # "+1 more") and 16 entries ("+0 more" / exact fit).
+        # Each row exercises: long driver name, bound markers (≤/≥), the
+        # burn_assumed asterisk, and multi-stop data (earlier_stops).
+        from pitcrew.race.fill_verdict import FillVerdictResult, RivalStopRow
+        long = "AVeryLongPSN16"   # exactly 14 chars — stays inside 16-char cap
+        def _row(i, *, dimmed=False, burn_assumed=False,
+                 fuel_in_is_bound=False, fuel_out_is_bound=False,
+                 earlier_stops=()):
+            return RivalStopRow(
+                driver=f"{long}-{i:02d}" if i > 12 else f"RIVAL-{i:02d}",
+                last_stop_lap=i + 5,
+                fuel_in_l=8.0 + i * 0.3,
+                fuel_in_is_bound=fuel_in_is_bound,
+                fuel_out_l=45.0 - i * 0.5,
+                fuel_out_is_bound=fuel_out_is_bound,
+                compound_in="RH", compound_out="RS",
+                stop_count=1 + len(earlier_stops),
+                burn_per_lap_l=7.5 + i * 0.05,
+                burn_assumed=burn_assumed,
+                dimmed=dimmed,
+                earlier_stops=earlier_stops,
+                verdict=FillVerdictResult(
+                    verdict="spare", margin_l=4.5, bound=False),
+            )
+        rival_15 = tuple([
+            _row(0, burn_assumed=True),
+            _row(1, fuel_in_is_bound=True,
+                 earlier_stops=({"lap": 3},)),
+            _row(2, fuel_out_is_bound=True),
+            _row(3, dimmed=True),
+            _row(4, earlier_stops=({"lap": 2}, {"lap": 7})),
+            _row(5, burn_assumed=True, fuel_in_is_bound=True),
+            _row(6),
+            _row(7),
+            _row(8),
+            _row(9),
+            _row(10),
+            _row(11),
+            _row(12),
+            _row(13, dimmed=True),
+            _row(14),
+        ])
+        rival_16 = rival_15 + (_row(15),)
+        history_12 = tuple(
+            {"lap": 1 + n, "lap_ms": 599_999, "target_ms": 599_999,
+             "lap_delta_s": -99.999, "burn_l": 12.34, "burn_delta_l": 9.99,
+             "saving": bool(n % 2), "why": "beep col",
+             "pit": False, "out": False, "compound": "RS"}
+            for n in range(12))
+        race_hist_base = replace(
+            states[0], show_history=True, laps_of_fuel=99.9,
+            fuel_to_stop=-99.9, fuel_to_flag=-99.9, history=history_12)
+        states.append(replace(race_hist_base, rival_table=rival_15))
+        states.append(replace(race_hist_base, rival_table=rival_16))
         for state in states:
             view.update_state(state)
             app.processEvents()

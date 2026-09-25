@@ -8016,7 +8016,11 @@ class PitCrewController(QObject):
             racing = race is not None and (race.running or bool(
                 getattr(race.state, "finished", False)))
             if racing:
-                body = tablet.compose(race.field_view())
+                # **The same DriverState the phone and monitor are already
+                # building from.** One object passed in, so `temps_c` and
+                # `box_block` cannot produce two readings from one packet
+                # (rules 12 and 13).  `board` was built at line 7682.
+                body = tablet.compose(race.field_view(), board)
             else:
                 # `compose_practice` is the one that decides: anything that
                 # is not a practice or qualifying state comes back idle, so
@@ -8143,6 +8147,27 @@ class PitCrewController(QObject):
             self._practice_rack_failures = failures + 1
             return ()
 
+    def _practice_compound_bests(self) -> "list[dict] | None":
+        """Per-compound best laps for the practice tablet (Story 3, 25 Sep 2026).
+
+        Built from the same LapRow objects the rack uses, so compound_bests and
+        the compound column in the rack quote the same laps.  None if the rows
+        cannot be read - absent rather than empty so the tablet knows whether
+        the computation ran at all (rule 3).
+        """
+        from pitcrew.race.compound_bests import compound_bests_for_session
+
+        try:
+            return compound_bests_for_session(self.practice.rows())
+        except Exception as exc:                            # noqa: BLE001
+            failures = self.__dict__.get("_practice_bests_failures", 0)
+            if failures % BOARD_TRACEBACK_EVERY == 0:
+                log("ui").warning(
+                    "the practice compound bests could not be built: "
+                    "%s: %s", type(exc).__name__, exc)
+            self._practice_bests_failures = failures + 1
+            return None
+
     def _driver_board_state(self):
         """Everything the board draws, in one object.
 
@@ -8176,6 +8201,13 @@ class PitCrewController(QObject):
                 # whether it is SHOWN, and its guard is already the right
                 # one: an empty rack never replaces the live board.
                 history=self._practice_history(),
+                # **Per-compound best laps for the practice tablet** (Story 3,
+                # 25 Sep 2026).  Built from the same LapRow objects the rack
+                # draws from so the compound column and the compound best agree
+                # about the same laps (rules 12 and 13).  An empty list is a
+                # valid result: a session with laps but no compound reads, which
+                # is itself a finding and must not be collapsed to None (rule 3).
+                compound_bests=self._practice_compound_bests(),
                 **fields)
         state = self.race.state
         has_plan = bool(getattr(self.race, "_stints", None))
@@ -8347,6 +8379,11 @@ class PitCrewController(QObject):
         # `laps_completed` drifts off it after a crossing lost in the lane.
         base = replace(base, lap_number=state.lap_on_screen(),
                        history=tuple(getattr(state, "lap_history", ()) or ()))
+        # ---- rival stop table (Story 2, 25 Sep 2026) ------------------------
+        # Scoped to the current session so last race's stops do not appear.
+        # Built here rather than in a separate method so it is one place that
+        # needs to be told "race is over" rather than two (rule 13).
+        base = replace(base, rival_table=self._rival_table(state))
         if not in_box:
             return base
 
@@ -8412,6 +8449,74 @@ class PitCrewController(QObject):
         note = f"{words.board} - {name}" if name else words.board
         return GapView(seconds=seconds, note=note, urgent=words.urgent,
                        good=words.good)
+
+    def _rival_table(self, state) -> tuple:
+        """Pre-worded rival-stop rows for the race monitor (Story 2, 25 Sep 2026).
+
+        Scoped to `self.session_id` so last race's stops do not appear alongside
+        tonight's (rule 11 applied to the stop table).
+
+        **Guarded and empty on any fault.** This is optional decoration on the
+        running board; a raise here must not take the phone strip down with it.
+        Empty and None are the same for the panel, but empty is the honest
+        failure: the rows could not be built, not that no stops have happened.
+        """
+        from pitcrew.race.fill_verdict import rival_stop_rows
+
+        session_id = getattr(self, "session_id", None)
+        if session_id is None:
+            return ()
+        try:
+            raw_stops = self.store.rival_stops(session_id=session_id)
+            league = getattr(self, "_league", None)
+            entered = getattr(league, "entered", []) if league is not None else []
+            own_driver = self.store.driver_name()
+            laps_remaining = (state.laps_remaining()
+                              if callable(getattr(state, "laps_remaining", None))
+                              else None)
+            own_burn = getattr(state, "fuel_per_lap_l", None)
+            # C5: `exit_is_a_bound` and `entry_is_a_bound` are never persisted
+            # in the DB (they are live judgements from the pit wall thread).
+            # Overlay them onto each driver's latest stop dict before passing
+            # to `rival_stop_rows` so the monitor sees the same flags the
+            # voice sees about this race.
+            rivals = dict(getattr(state, "rivals", None) or {})
+            if rivals:
+                # Find the latest stop for each driver (last in the list by id).
+                latest_idx: dict[str, int] = {}
+                for i, stop in enumerate(raw_stops):
+                    key = str(stop.get("driver") or "").lower()
+                    latest_idx[key] = i
+                stops = list(raw_stops)
+                for driver_key, idx in latest_idx.items():
+                    rival = rivals.get(driver_key)
+                    if rival is None:
+                        for k, v in rivals.items():
+                            if str(k).lower() == driver_key:
+                                rival = v
+                                break
+                    if rival is not None:
+                        stop_copy = dict(stops[idx])
+                        stop_copy["exit_is_a_bound"] = bool(
+                            getattr(rival, "exit_is_a_bound", False))
+                        stop_copy["partial"] = bool(
+                            getattr(rival, "entry_is_a_bound",
+                                    stop_copy.get("partial", False)))
+                        stops[idx] = stop_copy
+            else:
+                stops = raw_stops
+            # C3: pass live rivals and car capacity so first-stop burns use
+            # the voice's own figure, and capacity-0 (electric) is guarded.
+            capacity = getattr(state, "fuel_capacity_l", None)
+            return rival_stop_rows(
+                stops, entered, own_driver, laps_remaining, own_burn,
+                rivals=rivals if rivals else None,
+                capacity_l=capacity,
+            )
+        except Exception:                                   # noqa: BLE001
+            log("race").exception(
+                "the rival stop table could not be built - empty table shown")
+            return ()
 
     def _board_fuel(self, state, *, has_plan: bool) -> dict:
         """The two in-hand figures and, where there is none, the reason.

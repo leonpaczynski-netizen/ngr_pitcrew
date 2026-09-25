@@ -61,6 +61,8 @@ from pitcrew.race.rival_calls import (
     fuel_shortfall,
     must_stop_again,
 )
+from pitcrew.race.gaps import trend_words
+from pitcrew.race.stint_averages import stint_plan_averages
 
 # The prediction, as the tablet words it. Each is a claim of a different
 # strength, and they are kept apart for that reason (rule 13).
@@ -164,6 +166,29 @@ class Car:
 
 
 @dataclass(frozen=True)
+class OwnGap:
+    """The gap to one neighbour, worded for the tablet's own-car block.
+
+    `gap_s` is the reading in seconds; `None` means it was never recorded (no
+    interval box for that position).  `unread` is True when a reading EXISTS
+    but has gone stale - `gap_still_stands` refused it.  An empty cell and an
+    expired-but-present reading are two different silences and the page must
+    be able to tell them apart (rule 3).
+
+    `trend` is the `TrendWords.board` string from `trend_words()`, or None when
+    the rate is inside the noise or the laps are too few to say.  None is not
+    a rate of zero (rule 3).
+
+    `rate_s_per_lap` is the raw closing rate the trend was built from, or None
+    when `trend` is None.
+    """
+    gap_s: float | None
+    unread: bool
+    trend: str | None
+    rate_s_per_lap: float | None
+
+
+@dataclass(frozen=True)
 class FieldView:
     rows: tuple[Car, ...] = ()
     # Age of the board read the places came from; None where none was read.
@@ -175,6 +200,24 @@ class FieldView:
     # Whether that distance is the plan's estimate rather than a count.
     laps_total_hedged: bool = False
     why: str | None = None
+    # ---- own-car block (Story 1, 25 Sep 2026) --------------------------------
+    # The gap to each neighbour from OUR side, using the same staleness gate
+    # (`gap_still_stands`) the rival rows already use - one expression so the
+    # screen and the voice cannot report two different gaps for the same car
+    # (rule 13).  None on P1 (no car ahead) or last place (no car behind).
+    own_gap_ahead: "OwnGap | None" = None
+    own_gap_behind: "OwnGap | None" = None
+    # Mean lap-delta and burn-delta for the current stint, DERIVED from the
+    # plan targets (rule 5).  None when fewer than 2 qualifying laps exist so
+    # the count cannot carry a trend (rule 4).  Both carry their count.
+    own_stint_lap_delta_ms: int | None = None
+    own_stint_lap_laps: int | None = None
+    own_stint_burn_delta_l: float | None = None
+    own_stint_burn_laps: int | None = None
+    # Laps remaining to the flag, from `RaceState.laps_remaining()`.  Populated
+    # by `field_view()` for the tablet's own-car laps-to-flag display (C1).
+    # None when the race state does not carry a laps_remaining method.
+    own_laps_remaining: int | None = None
 
 
 def gap_still_stands(read_key: int | None, lap_on_screen: int | None,
@@ -507,4 +550,57 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
     # goes to the bottom rather than being given one.
     rows.sort(key=lambda row: (row.place is None, row.place or 0,
                                str(row.name or "")))
-    return FieldView(rows=tuple(rows), board_age_s=age, **base)
+
+    # ---- own-car block (Story 1, 25 Sep 2026) --------------------------------
+    # Build OwnGap for each neighbour using the SAME trend snapshots and the
+    # SAME `gap_still_stands` gate the rival rows above use.  One expression
+    # per decision, so the tablet cannot word "our gap" two ways (rule 13).
+    own_ahead: OwnGap | None = None
+    own_behind: OwnGap | None = None
+    if ours:
+        for side in ("ahead", "behind"):
+            trend = _snapshot(getattr(state, f"gap_{side}", None))
+            if trend is None:
+                continue
+            seconds = trend.latest()
+            read_on = max(trend.seen) if getattr(trend, "seen", None) else None
+            stands = gap_still_stands(read_on, lap_now, age)
+            rate, laps_for_trend = trend.closing_s_per_lap()
+            words = trend_words(side, rate, laps_for_trend)
+            own_gap = OwnGap(
+                gap_s=seconds if stands else None,
+                unread=not stands and seconds is not None,
+                trend=words.board if words is not None else None,
+                rate_s_per_lap=rate if words is not None else None,
+            )
+            if side == "ahead":
+                own_ahead = own_gap
+            else:
+                own_behind = own_gap
+
+    # Stint averages: DERIVED from the plan's per-lap targets.  None when fewer
+    # than 2 qualifying laps exist (rule 4 and rule 5).
+    lap_delta_ms, burn_delta_l, avg_n = stint_plan_averages(
+        getattr(state, "lap_history", None)
+    )
+
+    # Laps remaining to the flag — ONE expression, `state.laps_remaining()`,
+    # the same one the voice uses.  Stored here so `tablet.compose()` reads
+    # it from the view and never re-derives it (rule 13).
+    own_laps_remaining: int | None = None
+    laps_remaining_fn = getattr(state, "laps_remaining", None)
+    if callable(laps_remaining_fn):
+        raw = laps_remaining_fn()
+        own_laps_remaining = int(raw) if raw is not None else None
+
+    return FieldView(
+        rows=tuple(rows), board_age_s=age,
+        own_gap_ahead=own_ahead,
+        own_gap_behind=own_behind,
+        own_stint_lap_delta_ms=lap_delta_ms,
+        own_stint_lap_laps=avg_n if avg_n >= 2 else None,
+        own_stint_burn_delta_l=burn_delta_l,
+        own_stint_burn_laps=avg_n if avg_n >= 2 else None,
+        own_laps_remaining=own_laps_remaining,
+        **base,
+    )

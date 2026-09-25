@@ -1853,7 +1853,8 @@ class Store:
     def rival_stops(self, driver: str | None = None,
                     *, include_partial: bool = True,
                     series: str | None = None,
-                    car: str | None = None) -> list[dict]:
+                    car: str | None = None,
+                    session_id: int | None = None) -> list[dict]:
         """Every stop on file, newest last. One row is one observation.
 
         Each row carries the `series` and `car_name` of the race it was watched
@@ -1865,6 +1866,11 @@ class Store:
         **The circuit comes with the row too**, because litres a LAP is a
         property of the lap: a Monza lap and a Bathurst lap are different
         distances, and a mean over both describes no track anybody races on.
+
+        `session_id` scopes the result to a single race.  Used by the live
+        monitor (Story 2, 25 Sep 2026) so the rival table shows only stops
+        from the race in progress rather than the whole career history.  A stop
+        from three races ago carries no information about tonight's strategy.
         """
         sql = ("SELECT r.*, e.series AS series, e.car_name AS car_name, "
                "e.track AS track, e.layout AS layout "
@@ -1883,6 +1889,9 @@ class Store:
         if car is not None:
             where.append("e.car_name IS ?")
             params.append(car)
+        if session_id is not None:
+            where.append("r.session_id = ?")
+            params.append(session_id)
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY r.id"
