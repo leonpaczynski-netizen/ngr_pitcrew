@@ -156,3 +156,63 @@ def test_own_temps_c_null_when_absent():
     """No packet readings → null, not a dict of zeros."""
     body = compose(_view(), _state(temps_c=None))
     assert body["own"]["temps_c"] is None
+
+
+# ----------------------------------------- gap neighbour names (26 Sep 2026)
+
+
+def test_own_gap_ahead_carries_name():
+    """OwnGap.name is forwarded into the payload for the tablet to display."""
+    view = _view(
+        own_gap_ahead=OwnGap(gap_s=0.8, unread=False, trend="holding",
+                             rate_s_per_lap=0.0, name="PUNISHED"),
+    )
+    body = compose(view, _state())
+    assert body["own"]["gap_ahead"]["name"] == "PUNISHED"
+
+
+def test_own_gap_behind_carries_name():
+    """OwnGap.name from gap_behind is forwarded."""
+    view = _view(
+        own_gap_behind=OwnGap(gap_s=2.1, unread=False, trend="pulling away",
+                              rate_s_per_lap=-0.4, name="ROCKY"),
+    )
+    body = compose(view, _state())
+    assert body["own"]["gap_behind"]["name"] == "ROCKY"
+
+
+def test_own_gap_name_null_when_absent():
+    """name is null (not absent) when OwnGap has no name — rule 3."""
+    view = _view(
+        own_gap_ahead=OwnGap(gap_s=1.0, unread=False, trend=None,
+                             rate_s_per_lap=None),
+    )
+    body = compose(view, _state())
+    # name key must be present; its value must be None, not a missing key.
+    assert "name" in body["own"]["gap_ahead"]
+    assert body["own"]["gap_ahead"]["name"] is None
+
+
+# ----------------------------------------- history and fuel_in_hand (26 Sep 2026)
+
+
+def test_own_history_key_present():
+    """history key appears in own; it is a list (may be empty, never absent)."""
+    body = compose(_view(), _state())
+    own = body["own"]
+    assert "history" in own
+    assert isinstance(own["history"], list)
+
+
+def test_own_fuel_in_hand_key_present():
+    """fuel_in_hand key appears in own; it is a list."""
+    body = compose(_view(), _state())
+    own = body["own"]
+    assert "fuel_in_hand" in own
+    assert isinstance(own["fuel_in_hand"], list)
+
+
+def test_own_last_call_text_present():
+    """last_call_text key appears in own; None when no call, str otherwise."""
+    body_no_call = compose(_view(), _state())
+    assert "last_call_text" in body_no_call["own"]

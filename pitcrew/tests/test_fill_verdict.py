@@ -104,3 +104,72 @@ def test_fill_verdict_null_burn_cant_tell():
 def test_fill_verdict_null_laps_cant_tell():
     r = fill_verdict(40.0, 8.0, None, partial=False, exit_is_a_bound=False)
     assert r.verdict == "can't tell"
+
+
+# ----------------------------------------- board_age_s / position freshness
+
+
+def _stop_row():
+    """One entered driver, one stop, position 3 on the board."""
+    from pitcrew.race.fill_verdict import rival_stop_rows
+    return rival_stop_rows(
+        stops=[{"driver": "Rocky", "lap": 5, "fuel_in_l": 30.0,
+                "fuel_out_l": 70.0, "compound": "M",
+                "partial": False, "exit_is_a_bound": False}],
+        entered=["Rocky"],
+        own_driver="Beeni",
+        laps_remaining=10,
+        own_burn_l=5.0,
+        laps_total=30,
+        positions={"Rocky": 3},
+        board_age_s=1.0,          # fresh: 1 s < BOARD_FRESH_S (12 s)
+    )
+
+
+def test_position_fresh_when_board_age_inside_board_fresh_s():
+    """board_age_s=1 s → position_fresh=True, P column shows 'P3'."""
+    (row,) = _stop_row()
+    assert row.position == 3
+    assert row.position_fresh is True
+
+
+def test_position_stale_when_board_age_exceeds_board_fresh_s():
+    """board_age_s=13 s (> BOARD_FRESH_S=12) → position_fresh=False.
+
+    The monitor must show '--' for the P column under exactly the same
+    condition as the tablet's old field view would have refused the place
+    (rule 13).  A board read 13 s old fails field.py's BOARD_FRESH_S guard.
+    """
+    from pitcrew.race.fill_verdict import rival_stop_rows
+    (row,) = rival_stop_rows(
+        stops=[{"driver": "Rocky", "lap": 5, "fuel_in_l": 30.0,
+                "fuel_out_l": 70.0, "compound": "M",
+                "partial": False, "exit_is_a_bound": False}],
+        entered=["Rocky"],
+        own_driver="Beeni",
+        laps_remaining=10,
+        own_burn_l=5.0,
+        laps_total=30,
+        positions={"Rocky": 3},
+        board_age_s=13.0,         # stale: 13 s > BOARD_FRESH_S (12 s)
+    )
+    assert row.position == 3          # value is kept for sorting / display if wanted
+    assert row.position_fresh is False
+
+
+def test_position_stale_when_board_age_none():
+    """board_age_s=None (no board read yet) → position_fresh=False."""
+    from pitcrew.race.fill_verdict import rival_stop_rows
+    (row,) = rival_stop_rows(
+        stops=[{"driver": "Rocky", "lap": 5, "fuel_in_l": 30.0,
+                "fuel_out_l": 70.0, "compound": "M",
+                "partial": False, "exit_is_a_bound": False}],
+        entered=["Rocky"],
+        own_driver="Beeni",
+        laps_remaining=10,
+        own_burn_l=5.0,
+        laps_total=30,
+        positions={"Rocky": 3},
+        board_age_s=None,
+    )
+    assert row.position_fresh is False

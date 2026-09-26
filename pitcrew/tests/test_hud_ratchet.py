@@ -32,7 +32,7 @@ import logging
 
 import pytest
 
-from pitcrew.telemetry.hud import (GAUGE_MAX_RISE, REFUSALS_BEFORE_RESEED,
+from pitcrew.telemetry.hud import (GAUGE_MAX_RISE, REFUSALS_WINDOW_S,
                                    LiveWearSampler, Reading)
 
 from .test_hud_wear import FakeSource
@@ -43,14 +43,14 @@ def a_sampler():
                            lambda lap, wear: None)
 
 
-def kept(sampler, fl, fr, rl, rr):
-    return sampler._keep(0.0, Reading({"fl": fl, "fr": fr,
+def kept(sampler, fl, fr, rl, rr, at=0.0):
+    return sampler._keep(at, Reading({"fl": fl, "fr": fr,
                                        "rl": rl, "rr": rr}))
 
 
-def seeded(at=0.30):
+def seeded(at=0.30, t=0.0):
     sampler = a_sampler()
-    assert kept(sampler, at, at, at, at)
+    assert kept(sampler, at, at, at, at, at=t)
     return sampler
 
 
@@ -96,8 +96,12 @@ def test_a_baseline_that_refuses_everything_is_dropped():
 
     # Every one of these is an honest reading of a fresher set, and every one
     # is refused against a baseline that should never have been filed.
-    for _ in range(REFUSALS_BEFORE_RESEED):
-        assert not kept(sampler, 0.30, 0.28, 0.33, 0.31)
+    # Trigger the window by advancing the timestamp past REFUSALS_WINDOW_S.
+    for _ in range(5):
+        assert not kept(sampler, 0.30, 0.28, 0.33, 0.31, at=0.0)
+    # Final refusal past the window — the bad baseline is dropped.
+    assert not kept(sampler, 0.30, 0.28, 0.33, 0.31,
+                    at=REFUSALS_WINDOW_S + 1.0)
 
     assert sampler.series == [], "the bad baseline should have been discarded"
     # And the very next reading gets in, which is the whole point.
@@ -113,8 +117,8 @@ def test_the_reseed_says_so_loudly():
     handler.emit = lambda record: records.append(record.getMessage())
     logger.addHandler(handler)
     try:
-        for _ in range(REFUSALS_BEFORE_RESEED):
-            kept(sampler, 0.30, 0.28, 0.33, 0.31)
+        kept(sampler, 0.30, 0.28, 0.33, 0.31, at=0.0)
+        kept(sampler, 0.30, 0.28, 0.33, 0.31, at=REFUSALS_WINDOW_S + 1.0)
     finally:
         logger.removeHandler(handler)
 
@@ -122,30 +126,36 @@ def test_the_reseed_says_so_loudly():
 
 
 def test_a_short_run_of_refusals_does_not_reseed():
-    """Three or four in a row is the driver looking away in VR, or the
-    pit-lane HUD moving the gauge. Re-seeding there would hand the series to
+    """A run under REFUSALS_WINDOW_S is the driver looking away in VR or the
+    pit-lane HUD moving the gauge.  Re-seeding there would hand the series to
     the misread `_coherent` exists to reject."""
     sampler = seeded(0.60)
 
-    for _ in range(REFUSALS_BEFORE_RESEED - 1):
-        assert not kept(sampler, 0.30, 0.28, 0.33, 0.31)
+    # Any number of refusals within the window — baseline must survive.
+    for _ in range(20):
+        assert not kept(sampler, 0.30, 0.28, 0.33, 0.31, at=0.0)
 
     assert sampler.series, "it gave up on a healthy baseline too early"
     assert sampler.series[-1][1]["fl"] == 0.60
 
 
-def test_one_good_reading_clears_the_count():
-    """The run has to be consecutive - refusals scattered across a stint are
+def test_one_good_reading_clears_the_timer():
+    """The run has to be consecutive — refusals scattered across a stint are
     ordinary and must never accumulate into a re-seed."""
     sampler = seeded(0.30)
 
-    for _ in range(REFUSALS_BEFORE_RESEED - 1):
-        assert not kept(sampler, 0.90, 0.90, 0.90, 0.90)
-    assert kept(sampler, 0.32, 0.31, 0.34, 0.33)
-    for _ in range(REFUSALS_BEFORE_RESEED - 1):
-        assert not kept(sampler, 0.95, 0.95, 0.95, 0.95)
+    # Accumulate some refusals, well within the window.
+    for _ in range(10):
+        assert not kept(sampler, 0.90, 0.90, 0.90, 0.90, at=0.0)
+    # One good reading clears the refusal timer.
+    assert kept(sampler, 0.32, 0.31, 0.34, 0.33, at=1.0)
+    assert sampler._refused_since_s is None, "accept must reset the timer"
+    # Refusals now restart; even past the old window they don't trigger the
+    # re-seed because the timer was reset.
+    for _ in range(10):
+        assert not kept(sampler, 0.95, 0.95, 0.95, 0.95, at=2.0)
 
-    assert sampler.series, "a cleared count must start again from zero"
+    assert sampler.series, "a cleared timer must start again from zero"
 
 
 # ----------------------------------------------------- 3. the session reset

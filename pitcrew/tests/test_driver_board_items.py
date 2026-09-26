@@ -968,6 +968,15 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
         states.append(replace(race_hist_base, rival_table=rival_16))
         states.append(replace(race_hist_base, rival_table=rival_15,
                                rival_all_divisions=True))
+        # Worst-case sub-lines: 16 rivals each with 1-3 earlier stops so all
+        # sub-line rows are visible.  Sub-lines are 14 px each and one per
+        # driver row, so this is the tallest rival-panel variant.
+        rival_worst = tuple(
+            _row(i, earlier_stops=tuple(
+                {"lap": j + 1} for j in range(min(i % 3 + 1, 3))))
+            for i in range(16)
+        )
+        states.append(replace(race_hist_base, rival_table=rival_worst))
         for state in states:
             view.update_state(state)
             app.processEvents()
@@ -1042,6 +1051,34 @@ def test_a_dash_on_the_flag_block_carries_a_reason_and_not_a_burn(qt_app):
     # rather than by the code. On the rig the mutant renders the whole thing.
     assert "4.19" not in view.flag_stat._sub_text
     assert view.flag_stat._sub_text == "not measured"
+
+
+def test_fuel_flag_block_value_rounding_to_zero_prints_without_minus_sign(qt_app):
+    """-0.049 rounds to -0.0 in Python's f-string formatter. The panel must
+    print "0.0", not "-0.0": the minus sign implies the driver is short when
+    he is effectively level. The tone is still computed from the unrounded
+    value so the short/over signal survives — a fractionally negative number
+    shows in danger ink even though the printed digits are "0.0"."""
+    from pitcrew.ui.driver_view import DriverState, DriverView, fuel_flag_block
+
+    # Confirm the formatter itself — no Qt needed.
+    state_short = DriverState(fuel_to_flag=-0.049, fuel_to_flag_on="on the plan's fill")
+    block = fuel_flag_block(state_short)
+    assert block.value == "0.0", f"expected '0.0', got {block.value!r}"
+
+    # Tone still encodes short: the unrounded value is negative.
+    from pitcrew.ui.driver_view import TONE_URGENT
+    assert block.tone == TONE_URGENT, "a fractionally-short value must still carry danger ink"
+
+    # A fractionally-long value stays "0.0" with safe tone.
+    state_over = DriverState(fuel_to_flag=0.049, fuel_to_flag_on="on the plan's fill")
+    block_over = fuel_flag_block(state_over)
+    assert block_over.value == "0.0", f"expected '0.0', got {block_over.value!r}"
+
+    # Both render without raising.
+    view = DriverView()
+    view.update_state(state_short)
+    assert view.flag_stat.value.text() == "0.0"
 
 
 def test_a_stop_that_sizes_to_zero_litres_is_not_a_stop_nobody_sized(qt_app):

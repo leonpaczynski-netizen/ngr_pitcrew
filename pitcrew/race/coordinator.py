@@ -3217,6 +3217,24 @@ class RaceCoordinator:
 
         return field_view(self.state, self.news.board(), packet=self._packets)
 
+    @property
+    def board_age_s(self) -> float | None:
+        """How old the last board read is, in seconds, from the packet count.
+
+        The SAME arithmetic field.py uses (packet delta / SAMPLE_HZ), so any
+        consumer that gates on this shares field.py's freshness criterion rather
+        than a second copy of the rule (rule 13).  Negative — the board was
+        stamped after the current packet, typically across a session boundary —
+        is returned as None (rule 9).
+        """
+        from pitcrew.telemetry.recorder import SAMPLE_HZ
+
+        board = self.news.board()
+        if board is None:
+            return None
+        age = (int(self._packets) - int(board.packet)) / SAMPLE_HZ
+        return age if age >= 0 else None
+
     def observed_fuel_per_lap(self) -> float | None:
         """The race's own burn, or None before enough green laps exist.
 

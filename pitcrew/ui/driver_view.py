@@ -2135,8 +2135,14 @@ def fuel_flag_block(state: "DriverState") -> Block:
     if state.burn_l is not None:
         burn = f"{state.burn_l:.2f} L/lap"
         rests_on = f"{rests_on} · {burn}" if rests_on else burn
-    return Block(f"{state.fuel_to_flag:.1f}", rests_on,
-                 _tone(state.fuel_to_flag < 0))
+    # **A value that rounds to -0.0 must print "0.0", not "-0.0".**
+    # The tone is computed from the unrounded value so the short/over signal
+    # survives: -0.04 shows "0.0" in danger ink because he is a fraction short.
+    val = state.fuel_to_flag
+    formatted = f"{val:.1f}"
+    if formatted == "-0.0":
+        formatted = "0.0"
+    return Block(formatted, rests_on, _tone(val < 0))
 
 
 def fuel_in_hand_parts(state: "DriverState") -> tuple[tuple[str, str], ...]:
@@ -3223,10 +3229,10 @@ def _legend_for_rows(rival_table: tuple) -> str:
 
 
 class _RivalStopsPanel(QWidget):
-    """Rival pit stop summary, shown below the rack on the history page.
+    """Rival pit stop summary — in race mode this panel IS the history page.
 
-    One row per driver who has stopped in the current session, using
-    `DriverState.rival_table` (a tuple of `RivalStopRow`).  Dimmed rows
+    One row per driver who has stopped (or declared) in the current session,
+    using `DriverState.rival_table` (a tuple of `RivalStopRow`).  Dimmed rows
     mark drivers not in the current round's entered list.
 
     **Built once and re-texted**, exactly like the rack above it.  Showing
@@ -3234,61 +3240,73 @@ class _RivalStopsPanel(QWidget):
     QStackedLayout siblings); hidden widgets do not contribute to the
     minimum size hint.
 
-    **Read between stints, not at racing speed.**  The font is smaller than
-    the rack's values because this table is scanned, not glanced at.
+    **Read between stints, not at racing speed.**  The font is larger than the
+    old embedded version (now 20 px data / 16 px sub-lines) because the panel
+    owns the full page in race mode.
 
-    Columns: DRIVER · LAP · IN · OUT · ON · OFF · # · BURN/LAP · FILL
+    Columns: P · DRIVER · LAP · IN · OUT · ON · OFF · # · BURN/LAP · FILL
+    P is the board position (fresh only, '--' when stale).
     The last two are DERIVED (rule 5); their heads use the derived ink.
+
+    Rows are sorted by position (fresh ascending first; no-position rows after
+    in their original order) so the monitor reads like a live timing tower.
+
+    **Sub-lines** under each driver name show earlier stops when present:
+    e.g. 'earlier: L8 32→60 M→M'.  Absent when stop_count ≤ 1.
     """
 
-    COLS = ("DRIVER", "LAP", "IN", "OUT", "ON", "OFF", "#", "BURN/LAP", "FILL")
+    COLS = ("P", "DRIVER", "LAP", "IN", "OUT", "ON", "OFF", "#", "BURN/LAP", "FILL")
     _NCOLS = len(COLS)
     # Columns from here onward are DERIVED and their heads use CRAYON_DIM.
-    _DERIVED_START = 7
+    _DERIVED_START = 8
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         col = QVBoxLayout(self)
         col.setContentsMargins(0, 6, 0, 0)
         col.setSpacing(2)
-        # **Compact by design.**  This panel replaces the tyre-temp section on
-        # the history page when there are rival stops to review (see
-        # _HistoryPanel.show_state).  It must fit inside the same vertical
-        # budget as the tyres it displaces (~325 px with the rig's fonts).
-        # Sub-label rows are omitted: `stop_count` already shows multi-stop
-        # drivers, and `burn_assumed` is flagged with "*" in the burn cell.
         self._caption = QLabel("RIVAL STOPS")
         self._caption.setStyleSheet(
-            f"font-family:{LABEL_FACE};font-size:17px;font-weight:600;"
+            f"font-family:{LABEL_FACE};font-size:20px;font-weight:600;"
             f"letter-spacing:5px;color:{INK_DIM};background:transparent;")
         col.addWidget(self._caption)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(16)
+        grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(0)
-        # Build column heads: measured ink, or derived ink for last two.
+        # Build column heads: measured ink, or derived ink for derived columns.
         for ci, head in enumerate(self.COLS):
             ink = CRAYON_DIM if ci >= self._DERIVED_START else INK_DIM
             lbl = QLabel(head)
             lbl.setStyleSheet(
-                f"font-family:{LABEL_FACE};font-size:13px;font-weight:600;"
+                f"font-family:{LABEL_FACE};font-size:18px;font-weight:600;"
                 f"letter-spacing:3px;color:{ink};background:transparent;")
             grid.addWidget(lbl, 0, ci)
 
-        # Pre-build MAX_RIVALS data rows (one grid row per driver).
-        # No sub-label rows: keeps the height within budget.
+        # Pre-build MAX_RIVALS data rows.  Each logical driver occupies two
+        # grid rows: row 2r+1 (main data) and row 2r+2 (sub-line for earlier
+        # stops).  The sub-line spans all columns and is hidden when empty.
         self._row_labels: list[tuple] = []
+        self._sub_labels: list[QLabel] = []
         for r in range(MAX_RIVALS):
             line = []
             for ci in range(self._NCOLS):
-                face = LABEL_FACE if ci == 0 else NUMBER_FACE
+                face = LABEL_FACE if ci <= 1 else NUMBER_FACE
                 lbl = QLabel("")
                 lbl.setStyleSheet(
-                    f"font-family:{face};font-size:15px;font-weight:600;"
+                    f"font-family:{face};font-size:30px;font-weight:600;"
                     f"color:{INK};background:transparent;")
-                grid.addWidget(lbl, r + 1, ci)
+                grid.addWidget(lbl, r * 2 + 1, ci)
                 line.append(lbl)
             self._row_labels.append(tuple(line))
+            # Sub-line spans all columns: earlier-stop summary.
+            sub = QLabel("")
+            sub.setStyleSheet(
+                f"font-family:{LABEL_FACE};font-size:21px;font-weight:600;"
+                f"color:{INK_DIM};background:transparent;")
+            sub.setVisible(False)
+            grid.addWidget(sub, r * 2 + 2, 0, 1, self._NCOLS)
+            self._sub_labels.append(sub)
 
         col.addLayout(grid)
 
@@ -3298,13 +3316,18 @@ class _RivalStopsPanel(QWidget):
         self._overflow_label = QLabel("")
         self._overflow_label.setVisible(False)
         self._overflow_label.setStyleSheet(
-            f"font-family:{LABEL_FACE};font-size:13px;font-weight:600;"
+            f"font-family:{LABEL_FACE};font-size:18px;font-weight:600;"
             f"letter-spacing:3px;color:{INK_DIM};background:transparent;")
         col.addWidget(self._overflow_label)
+        # **Top-align** within whatever height the parent allocates.
+        col.addStretch(1)
 
     def show_state(self, rival_table: tuple, *,
                    rival_all_divisions: bool = False) -> None:
         """Populate the grid from a tuple of `RivalStopRow`.
+
+        Rows are sorted by position (fresh ascending first; no-position rows
+        after in their original order) so the panel reads like a timing tower.
 
         When rival_table has more entries than MAX_RIVALS pre-built rows, the
         excess is not silently dropped — an overflow line says how many more
@@ -3325,12 +3348,30 @@ class _RivalStopsPanel(QWidget):
             parts.append(legend)
         self._caption.setText(" · ".join(parts))
 
+        # Sort: fresh-position rows ascending by place; no-position rows after
+        # in their original order (stable sort preserves the original ordering
+        # within each group, so the stale block is unchanged).
+        def _sort_key(rv):
+            p = getattr(rv, "position", None)
+            fresh = getattr(rv, "position_fresh", False)
+            if fresh and p is not None:
+                return (0, p)
+            return (1, 0)
+
+        sorted_table = sorted(rival_table, key=_sort_key)
+
         for i, line in enumerate(self._row_labels):
-            if i < len(rival_table):
-                self._fill_row(line, rival_table[i])
+            if i < len(sorted_table):
+                self._fill_row(line, sorted_table[i])
+                for lbl in line:
+                    lbl.setVisible(True)
+                self._fill_sub(self._sub_labels[i], sorted_table[i])
             else:
                 for lbl in line:
                     lbl.setText("")
+                    lbl.setVisible(True)
+                self._sub_labels[i].setVisible(False)
+                self._sub_labels[i].setText("")
 
         overflow = len(rival_table) - MAX_RIVALS
         if overflow > 0:
@@ -3341,13 +3382,25 @@ class _RivalStopsPanel(QWidget):
             self._overflow_label.setText("")
 
     def _fill_row(self, labels, rv) -> None:
-        """Write one RivalStopRow into its pre-built label row."""
+        """Write one RivalStopRow into its pre-built label row.
+
+        Column order: P · DRIVER · LAP · IN · OUT · ON · OFF · # · BURN/LAP · FILL
+        """
         # Dimmed rows use a dim ink; derived columns always use crayon dim.
         # I4: a signed-in driver's name is in normal ink; a dimmed (not
         # signed-in) driver's name is in INK_DIM.  The original line had
         # INK_DIM on both branches, which erased the distinction.
         row_ink = INK_DIM if rv.dimmed else INK
         drv_ink = INK_DIM if rv.dimmed else INK
+
+        # P: board position, fresh only; '--' when stale or unknown.
+        pos_val = "--"
+        pos_ink = INK_DIM
+        p = getattr(rv, "position", None)
+        fresh = getattr(rv, "position_fresh", False)
+        if fresh and p is not None:
+            pos_val = f"P{p}"
+            pos_ink = INK_DIM if rv.dimmed else INK
 
         # ---- fuel figures: ≤ on entry bound (partial), ≥ on exit bound ----
         fuel_in = ("--" if rv.fuel_in_l is None else
@@ -3368,7 +3421,8 @@ class _RivalStopsPanel(QWidget):
         fill = _fill_verdict_text(rv.verdict)
 
         values = (
-            (rv.driver or "")[:16],       # truncate long PSN ids
+            pos_val,                       # P
+            (rv.driver or "")[:16],        # DRIVER: truncate long PSN ids
             (f"L{rv.last_stop_lap}" if rv.last_stop_lap is not None else "--"),
             fuel_in,
             fuel_out,
@@ -3378,21 +3432,50 @@ class _RivalStopsPanel(QWidget):
             burn,
             fill,
         )
-        # Per-column ink: driver uses drv_ink (INK for signed-in, INK_DIM for
-        # dimmed); data columns use row_ink; derived columns use derived ink.
+        # Per-column ink: P/driver use position/drv ink; data columns use
+        # row_ink; derived columns use derived ink.
         # FILL: verdict-specific ink (warning/good/dim by urgency, rule 5).
         der = CRAYON_DIM if not rv.dimmed else INK_DIM
         fill_ink = _fill_verdict_ink(rv.verdict) if not rv.dimmed else INK_DIM
-        inks = (drv_ink,           # DRIVER: dimmed when not entered (I4 fix)
+        inks = (pos_ink,           # P: position ink (dim when stale)
+                drv_ink,           # DRIVER: dimmed when not entered (I4 fix)
                 row_ink, row_ink, row_ink, row_ink, row_ink, row_ink,
                 der, fill_ink)     # BURN/LAP: derived; FILL: verdict urgency
 
         for ci, (lbl, val, ink) in enumerate(zip(labels, values, inks)):
             lbl.setText(val)
-            face = LABEL_FACE if ci == 0 else NUMBER_FACE
+            face = LABEL_FACE if ci <= 1 else NUMBER_FACE
             lbl.setStyleSheet(
-                f"font-family:{face};font-size:15px;font-weight:600;"
+                f"font-family:{face};font-size:30px;font-weight:600;"
                 f"color:{ink};background:transparent;")
+
+    def _fill_sub(self, sub: "QLabel", rv) -> None:
+        """Populate (or hide) the earlier-stops sub-line for one driver row.
+
+        Text format: 'earlier: L8 32→60 M→M · L3 67→45 S→M'
+        Each stop: L<lap> <fuel_in>→<fuel_out> <cmpd_in>→<cmpd_out>
+        Hidden when stop_count ≤ 1 (nothing earlier to show).
+        """
+        earlier = getattr(rv, "earlier_stops", ())
+        if not earlier:
+            sub.setVisible(False)
+            sub.setText("")
+            return
+
+        parts = []
+        for s in earlier:
+            lap = s.get("lap")
+            fi = s.get("fuel_in_l")
+            fo = s.get("fuel_out_l")
+            ci = s.get("compound_in") or "?"
+            co = s.get("compound") or "?"
+            fi_txt = f"{fi:.0f}" if fi is not None else "?"
+            fo_txt = f"{fo:.0f}" if fo is not None else "?"
+            lap_txt = f"L{lap}" if lap is not None else "L?"
+            parts.append(f"{lap_txt} {fi_txt}→{fo_txt} {ci}→{co}")
+
+        sub.setText("earlier: " + " · ".join(parts))
+        sub.setVisible(True)
 
 
 class _HistoryPanel(QWidget):
@@ -3510,12 +3593,22 @@ class _HistoryPanel(QWidget):
         self.fuel.setStyleSheet(
             f"font-family:{LABEL_FACE};font-size:26px;font-weight:600;"
             f"letter-spacing:3px;background:transparent;")
+        # **Rack section — hidden in race mode** (the monitor gives the full
+        # page to the rival table in a race; the rack returns in practice and
+        # qualifying).  All caption/fuel/grid/summary widgets live inside this
+        # container so a single setVisible(False) removes them together without
+        # needing to hide each one separately, and without the 2,730 px defect
+        # (QWidget in QVBoxLayout contributes 0 height when hidden).
+        self._rack_section = QWidget()
+        rack_col = QVBoxLayout(self._rack_section)
+        rack_col.setContentsMargins(0, 0, 0, 0)
+        rack_col.setSpacing(8)
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         head.addWidget(self.caption)
         head.addStretch(1)
         head.addWidget(self.fuel)
-        column.addLayout(head)
+        rack_col.addLayout(head)
         grid = QGridLayout()
         grid.setHorizontalSpacing(46)
         grid.setVerticalSpacing(4)
@@ -3543,10 +3636,11 @@ class _HistoryPanel(QWidget):
                 grid.addWidget(label, row + 1, index)
                 line.append(label)
             self.cells.append(line)
-        column.addLayout(grid)
+        rack_col.addLayout(grid)
         self.summary = QLabel("")
         self.summary.setStyleSheet(self._css(INK_DIM, 26))
-        column.addWidget(self.summary)
+        rack_col.addWidget(self.summary)
+        column.addWidget(self._rack_section)
 
         # **The tyre section and the rival stops table share the same slot.**
         # Both live inside a QWidget container so that `setVisible(False)` on
@@ -3590,6 +3684,11 @@ class _HistoryPanel(QWidget):
         self.rival_panel = _RivalStopsPanel()
         self.rival_panel.setVisible(False)
         column.addWidget(self.rival_panel)
+        # **Top-align the column contents.** A stretch at the END of the column
+        # absorbs any excess height so rival_panel sits flush at the top of the
+        # allocated space (the QStackedLayout gives _HistoryPanel its full
+        # allocated height; without this stretch the panel would be centred).
+        column.addStretch(1)
 
         # **S1/S2/S3 column visibility (race vs practice, 25 Sep 2026).**
         # In race mode HistoryRow.sectors is always None (the sector model
@@ -3721,21 +3820,23 @@ class _HistoryPanel(QWidget):
                 # was drawn at the note's size and the row wobbled.
                 small = cell_idx in (4, 5)
                 label.setStyleSheet(self._css(ink, 26 if small else 34))
-        # ---- rival stops panel (race mode, when there are stops) ----------
-        # Toggle the rival panel and tyre_section: they occupy the same slot
-        # in the column so the board height is unchanged whether stops are
-        # present or not.  "Hide before show" order kept in both directions.
-        show_rivals = (session == "race"
-                       and bool(getattr(state, "rival_table", ())))
-        if show_rivals:
-            self.tyre_section.setVisible(False)   # hide first
+        # ---- rival stops panel (race mode) ----------------------------------
+        # In race mode: hide the rack and give the full page to the rival
+        # panel.  The tyre section is also hidden in race mode (it is there
+        # for practice/qualifying, where the driver reads it between runs).
+        # "Hide before show" order is maintained in all branches.
+        if session == "race":
+            self._rack_section.setVisible(False)   # hide rack first
+            self.tyre_section.setVisible(False)    # hide tyres first
             self.rival_panel.setVisible(True)
             self.rival_panel.show_state(
-                state.rival_table,
+                getattr(state, "rival_table", ()),
                 rival_all_divisions=getattr(state, "rival_all_divisions", False))
         else:
+            # Practice / qualifying: rack returns, rival panel goes away.
             self.rival_panel.setVisible(False)     # hide first
             self.tyre_section.setVisible(True)
+            self._rack_section.setVisible(True)
         self.summary.setText(history_summary(state.history, kind=session))
         # **Fuel in hand, on the page he is actually looking at.** Rich text
         # for the same reason the split head above is: the two figures are
@@ -3776,7 +3877,11 @@ class DriverView(QWidget):
         outer.setContentsMargins(40, 8, 40, 18)
         # **Bottom-anchored.** He glances UP from the game screen below, so the
         # bottom edge of this display is the shortest eye travel.
+        # **In race-history mode the stretch is set to 0** so the rival table
+        # starts at the top rather than in the middle of the page.  The stretch
+        # item is always at index 0 in `outer`.
         outer.addStretch(1)
+        self._outer_layout = outer
 
         middle = QHBoxLayout()
         middle.setSpacing(70)
@@ -4082,7 +4187,23 @@ class DriverView(QWidget):
         self.wet_light.show_light(*wet_light(state.wet))
         self.abs_light.show_light(*abs_light(state.abs_setting, state.front_lock))
         self.tcs_light.show_light(*tcs_light(state.tcs_active))
-        self.last_call.show_call(state.last_call)
+        # **George's last call is hidden in race history mode.**  In race mode
+        # the history page gives the whole monitor to the rival table; the call
+        # text adds nothing the driver cannot hear, and the horizontal space it
+        # sits on top of the page is the only real estate the rival table has.
+        # It stays visible on all other pages (running, box, practice, quali).
+        # "Hide before show" convention: set visibility before show_call so the
+        # widget does not flash.
+        race_history = (state.show_history
+                        and (state.session_kind or "") == "race")
+        # **Top-anchor in race-history mode** so the rival table fills from
+        # the top of the monitor.  The bottom-anchor stretch (always at index 0
+        # in `outer`) is set to factor 0 (no expansion) in race-history mode
+        # and restored to 1 in all other modes.
+        self._outer_layout.setStretch(0, 0 if race_history else 1)
+        self.last_call.setVisible(not race_history)
+        if not race_history:
+            self.last_call.show_call(state.last_call)
 
         # The words are `box_block`'s, shared with the strip page.
         box = box_block(state)

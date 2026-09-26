@@ -161,6 +161,7 @@ def test_the_floor_reads_av1_s_discs_and_respects_live_feed():
     "disc_S_s213_punished.png",
     "disc_S_s213_rocky_l10.png",
     "disc_S_s188_jubby.png",
+    "disc_S_s188_maddyL26_exit.png",
 ])
 def test_av1_s_disc_reads_as_soft(fixture):
     """Real disc sub-crops from AV1-compressed recordings decode as S.
@@ -169,6 +170,11 @@ def test_av1_s_disc_reads_as_soft(fixture):
     groundtruth video frames using the stored disc bounding boxes.  With
     LETTER_MAX=160, each crop returns a glyph; with MATCH_FLOOR=0.455 the
     glyph scores inside the floor.  Colour_of reads S on all three.
+
+    disc_S_s188_maddyL26_exit.png is Magical daddy's lap-26 exit frame
+    (t=2782.0 s), ground truth H→S.  It is the disc that was missed at the
+    every=3 replay cadence (phase alignment: k=13910, 13910 % 3 = 2).  Added
+    to confirm the exit S IS readable once captured.
     """
     from pathlib import Path
     from PIL import Image
@@ -176,3 +182,17 @@ def test_av1_s_disc_reads_as_soft(fixture):
     img = np.array(Image.open(p).convert("RGB"))
     assert colour_of(img) == "S", "disc body should read as red (S)"
     assert read(img) == "S", "full read should return S"
+
+
+def test_av1_h_disc_reads_as_hard():
+    """Real hard disc from s188 Magical daddy's standing frames (t=2775 s).
+
+    This is the arrival compound — H throughout the stop — confirming the
+    standing disc does NOT read as S and would not cause a false change.
+    """
+    from pathlib import Path
+    from PIL import Image
+    p = Path(__file__).parent / "fixtures" / "disc_H_s188_maddyL26_standing.png"
+    img = np.array(Image.open(p).convert("RGB"))
+    assert colour_of(img) == "H", "standing disc should read as H (hard)"
+    assert read(img) == "H", "full read should return H"

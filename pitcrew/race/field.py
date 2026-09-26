@@ -184,11 +184,16 @@ class OwnGap:
 
     `rate_s_per_lap` is the raw closing rate the trend was built from, or None
     when `trend` is None.
+
+    `name` is the resolved driver name on that side — the roster's name for the
+    trend subject, after conflict resolution.  None when the roster has not yet
+    named the car on this side (gap value is still valid, rule (c) above).
     """
     gap_s: float | None
     unread: bool
     trend: str | None
     rate_s_per_lap: float | None
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -629,6 +634,7 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
                 unread=not stands and seconds is not None,
                 trend=trend_word,
                 rate_s_per_lap=trend_rate,
+                name=resolved.get(side),
             )
             if side == "ahead":
                 own_ahead = own_gap

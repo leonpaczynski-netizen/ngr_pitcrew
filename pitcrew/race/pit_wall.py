@@ -238,11 +238,24 @@ class Visit:
         the same compound or the flip landed between two grabs; this returns
         the arrival compound as the best estimate and `compound_changed` is
         None, so nothing downstream reads "same tyre" as a fact.
+
+        **`left_view` stops return `None` — CLAUDE.md rule 3.** When the car
+        dropped off the visible board before the lane exit was seen, the disc
+        never flipped on screen: `left_on` is None, and there is no exit
+        frame to read the departure tyre from. Returning `arrived_on` here
+        would dress a guess as a measurement — a car that dropped off mid-fill
+        could have come back out on any compound. `compound_in` carries the
+        arrival tyre; this field carries what was confirmed at the exit only.
         """
         arrived = self.arrived_on
         left = self.left_on
         if left is not None and arrived is not None and left != arrived:
             return left
+        # **Rule 3: left_view means the exit was never seen.** The disc flips
+        # only as the car exits the lane, so without an exit frame the
+        # departure compound is not known — not `arrived_on` as a stand-in.
+        if self.left_view:
+            return None
         return arrived
 
     @property
@@ -770,6 +783,20 @@ class PitWall:
     def own_fills(self) -> list[OwnFill]:
         """Our own stops this session, oldest first. Never rivals'."""
         return list(self._own_fills)
+
+    @property
+    def any_visit_open(self) -> bool:
+        """True while any car (rival or own) is standing in the pit lane.
+
+        Read by the HUD sampler on its worker thread to decide whether to
+        switch to the burst-sampling interval so the exit disc flip is caught.
+
+        **Thread-safe**: `_visits` is only ever written by `see()`, which
+        runs on the same sampler worker thread that reads this property (via
+        `hud_session._pass_frame` → `see()`). The dict non-empty check is
+        atomic under the GIL.
+        """
+        return bool(self._visits)
 
     def own_fill(self) -> OwnFill | None:
         """His fill: the one happening now, else the last one finished.
@@ -1477,6 +1504,12 @@ class PitWall:
         # 83 L. Filed, because he did stop and that is a fact worth keeping,
         # but kept out of anything that computes a rate.
         visit.closed_on_absence = on_absence
+        # **Propagate left_view into the visit object** so that `as_stop()`
+        # (specifically `Visit.compound`) can see it. `_close_stale` sets it
+        # before calling us; `close_all` does not - it passes the flag as a
+        # parameter only. Both paths converge here.
+        if left_view:
+            visit.left_view = True
         if stale and not left_view and visit.rising_when_last_read:
             # Counted and said, not prevented - see
             # `Visit.rising_when_last_read` for why the readings alone cannot

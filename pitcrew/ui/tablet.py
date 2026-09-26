@@ -364,6 +364,9 @@ def _gap_block(own_gap) -> dict | None:
     Returns None when the argument is None (P1 has no car ahead; last has
     none behind).  The page renders null as "not applicable" rather than as
     a dash that would look like a missed reading.
+
+    `name` is the resolved display name of the neighbouring car (None at
+    P1/last or when the board has not yet been read).
     """
     if own_gap is None:
         return None
@@ -372,6 +375,7 @@ def _gap_block(own_gap) -> dict | None:
         "unread": own_gap.unread,
         "trend": own_gap.trend,
         "rate_s_per_lap": own_gap.rate_s_per_lap,
+        "name": getattr(own_gap, "name", None),
     }
 
 
@@ -431,9 +435,46 @@ def compose(view: "FieldView | None", state=None) -> dict:
     own = None
     if state is not None:
         from pitcrew.ui.driver_view import box_block
+        from pitcrew.ui.driver_view import history_rows, fuel_in_hand_parts
 
         bb = box_block(state)
         temps = getattr(state, "temps_c", None)
+
+        # **History rack: one expression for race laps (rule 13).** The same
+        # `history_rows(kind="race")` the monitor uses, so the two surfaces
+        # cannot show different lap times for the same lap.  The tablet renders
+        # a compact version (time, delta, burn) below the big gap cards.
+        hist_rows = history_rows(getattr(state, "history", None), kind="race")
+        history_payload = [
+            {
+                "lap": r.lap,
+                "time": r.time,
+                "delta": r.delta,
+                "burn": r.burn,
+                "note": r.note,
+                "delta_tone": r.delta_tone,
+                "burn_tone": r.burn_tone,
+            }
+            for r in hist_rows
+        ]
+
+        # **Fuel-in-hand: one expression (rule 13).** The monitor uses
+        # `fuel_in_hand_parts(state)` in the rack; we use exactly the same
+        # call so the tablet and monitor cannot disagree.  Each item is
+        # [words, ink] — the HTML page inks each part separately.
+        fuel_parts = fuel_in_hand_parts(state)
+        fuel_in_hand_payload = [
+            {"words": words, "ink": ink}
+            for words, ink in fuel_parts
+        ]
+
+        # George's last call text (one line for the header, spoken anyway).
+        last_call_obj = getattr(state, "last_call", None)
+        last_call_text = (
+            getattr(last_call_obj, "text", None)
+            if last_call_obj is not None else None
+        )
+
         own = {
             # The gap to each immediate neighbour.  `_gap_block` returns None
             # at P1 / last place, which is the correct word for "no car there"
@@ -466,6 +507,14 @@ def compose(view: "FieldView | None", state=None) -> dict:
             # None when neither a stop nor a plan exists (no plan running),
             # never a zero or a dash (rule 3).
             "laps": _laps_block(state, view),
+            # Race rack: my last laps with time, delta and burn, from the same
+            # history_rows(kind="race") the monitor draws.
+            "history": history_payload,
+            # Fuel-in-hand: [[words, ink], ...] from fuel_in_hand_parts, the
+            # same expression the monitor uses (rule 13).
+            "fuel_in_hand": fuel_in_hand_payload,
+            # George's last call, one line for the tablet header (spoken anyway).
+            "last_call_text": last_call_text,
         }
 
     return {

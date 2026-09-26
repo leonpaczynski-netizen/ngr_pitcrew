@@ -350,6 +350,13 @@ class RivalStopRow:
     start_basis: str | None = None
     verdict: "FillVerdictResult | None" = None
     earlier_stops: tuple = ()             # raw stop dicts, oldest first
+    # Live board position.  None when no fresh read.
+    # `position_fresh` is True only when `board_age_s <= BOARD_FRESH_S`
+    # (from `news.py`), the SAME rule field.py uses for the places it draws —
+    # so the monitor's P column goes to "--" under exactly the same condition
+    # as the tablet's old field view would have refused the place (rule 13).
+    position: int | None = None
+    position_fresh: bool = False
 
 
 def rival_stop_rows(
@@ -362,6 +369,8 @@ def rival_stop_rows(
     rivals: dict | None = None,
     capacity_l: float | None = None,
     laps_total: int | None = None,
+    positions: "dict[str, int] | None" = None,
+    board_age_s: float | None = None,
 ) -> tuple[RivalStopRow, ...]:
     """Grouped per driver, latest stop first, with fill verdict.
 
@@ -436,6 +445,13 @@ def rival_stop_rows(
             # Use the name as it appears in stops.
             display_name_for[name_key.lower()] = name_key
 
+    # Build a lowercase → position lookup from the positions dict so the
+    # per-row lookup is case-insensitive (same pattern as the rivals lookup).
+    _positions_lower: dict[str, int] = {}
+    if positions:
+        for name, place in positions.items():
+            _positions_lower[str(name).lower()] = int(place)
+
     rows: list[RivalStopRow] = []
     for driver_lower, driver_name in display_name_for.items():
         driver_stops = groups.get(driver_lower) or groups.get(driver_name) or []
@@ -454,12 +470,24 @@ def rival_stop_rows(
 
         dimmed = driver_lower not in entered_lower
 
+        _pos = _positions_lower.get(driver_lower)
+        # **Same freshness rule as field.py** (rule 13).  The board may hold a
+        # position up to a lap old between crossings; the P column must go "--"
+        # exactly when the tablet's field view would have refused the place.
+        # Import BOARD_FRESH_S — never copy the constant.
+        from pitcrew.race.news import BOARD_FRESH_S
+        _pos_fresh = (_pos is not None
+                      and board_age_s is not None
+                      and board_age_s <= BOARD_FRESH_S)
+
         if not driver_stops:
             # Entered but no stops yet: row with dashes.
             rows.append(RivalStopRow(
                 driver=driver_name,
                 dimmed=dimmed,
                 stop_count=0,
+                position=_pos,
+                position_fresh=_pos_fresh,
             ))
             continue
 
@@ -598,6 +626,8 @@ def rival_stop_rows(
             start_basis=start_basis_val,
             verdict=verdict,
             earlier_stops=earlier_hud,
+            position=_pos,
+            position_fresh=_pos_fresh,
         ))
 
     return tuple(rows)

@@ -237,16 +237,13 @@
     grid-template-rows: repeat(6, min-content); align-content: space-evenly; }
   #practice.on { display: grid; }
   /* **`#race-content` takes the 1fr row in race mode** — it is a flex column
-     that gives the field table however much space it naturally needs (up to
-     what remains after the own panel's reserved height) and hands the rest
-     to the own-car panel.  In practice, `#practice` is displayed in the
-     same row and `#race-content` stays hidden; neither adds to the other. */
+     that holds the own-car panel (which takes the whole height now that the
+     field table has moved to the monitor).  In practice, `#practice` is
+     displayed in the same row and `#race-content` stays hidden; neither adds
+     to the other. */
   #race-content { display: none; grid-row: 2; min-height: 0; flex-direction: column;
     gap: 1.2vh; }
   #race-content.on { display: flex; }
-  /* The field table: flex-shrink lets it give up height to the own panel when
-     space is tight — rows compress rather than the own panel disappearing. */
-  #table { flex: 1 1 auto; min-height: 0; }
   .band { display: grid; column-gap: 1.2vw; }
   #p-faces, #p-sectors, #p-lights { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   #p-tyres { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -307,43 +304,31 @@
     font-size: 3.4vh; line-height: 1; }
   .pbest-n { font-family: var(--label); font-size: 2.0vh; color: var(--dim); }
 
-  /* ---- own-car block (Story 1, final design 25 Sep 2026).
-     Lives inside `#race-content` as its second flex child — the field table
-     is the first child and gets `flex: 1 1 auto` (fills remaining space,
-     can compress); own gets `flex: 0 0 auto` with `min-height: 38vh` so it
-     always has a guaranteed slab of screen regardless of how many field rows
-     there are.
-
-     **Two rows inside the own block:**
-     Row 1 — `own-bigs`: three equal cards filling all of own's height minus
-       the strip.  Numerals at `min(12vh, 8.5vw)` so they stay proportionate
-       in portrait.  Each card: LABEL / BIG NUMBER / trend-word sub-line.
-     Row 2 — `own-strip`: six equal cards at `min(6vh, 4.2vw)` — FL, FR,
-       RL, RR temperatures and PACE / BURN deltas.  DERIVED labels in the
-       derived register ink (rule 5).
+  /* ---- own-car block (redesigned 26 Sep 2026).
+     The field table has moved to the monitor, so own takes the WHOLE
+     height of #race-content.  Three zones stacked vertically:
+       Zone 1 — `own-bigs`: three big cards (AHEAD, BEHIND, LAPS), flex: 1
+       Zone 2 — `own-strip`: six supplemental cards (4 temps + PACE + BURN)
+       Zone 3 — `own-rack`: compact lap-history rows (smaller text)
+       Zone 4 — `own-fuel`: fuel-in-hand line (single line)
+     The big cards get priority: if the screen is short, zones 3-4 shrink
+     before the big numbers do (min-height: 0 on the bigs ensures they grow).
 
      **Null gap-side (P1 / last) and absent readings draw "--" in the absent
-     ink, not an empty cell** (rule 3). */
-  /* **Own-car block layout (revised 25 Sep 2026 — fault A fix).**
+     ink, not an empty cell** (rule 3).
 
-     `min-height` reduced from 38vh → 28vh so the field table above it has more
-     room when there are many rows.  Numerals now scale relative to their *card*
-     width/height via container-query units (cqw / cqh) so they cannot overflow
-     the card regardless of viewport size.
-
-     Big cards use `container-type: size` → font-size: `min(12vh, 55cqh)` so
-     the numeral fills the card height but never the card width.  The unit
-     ("s", "L") is a separate smaller element beside the number.
-
-     Strip cards use `container-type: inline-size` → font-size: `min(6vh, 27cqw)`.
-     At 157 px card (1280×800): 27 cqw = 42 px; "-0.222" (6 chars × 0.6 em)
-     = 152 px ≤ 157 px ✓.  At 125 px card (1024×768): 34 px → 122 px ≤ 125 px ✓. */
-  #own { display: none; flex: 0 0 auto; min-height: 28vh;
+     Big cards use `container-type: size` → font-size: `min(12vh, 55cqh)`.
+     Strip cards use `container-type: inline-size` → font-size: `min(6vh, 27cqw)`. */
+  #own { display: none; flex: 1 1 auto; min-height: 0;
     flex-direction: column; gap: 0.8vh; }
   #own.on { display: flex; }
-  /* Big-card row: fills the own block above the strip. */
+  /* Big-card row: grows to fill remaining space above the strip/rack/fuel. */
   .own-bigs { flex: 1 0 0; min-height: 0; display: grid;
     grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1.2vw; }
+  /* Name under the big gap numeral — smaller than the sub (trend word). */
+  .own-name { font-family: var(--label); font-weight: 700;
+    font-size: min(2.0vh, 1.5vw); color: var(--dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .own-card { background: var(--panel); border-radius: 1.2vh;
     display: flex; flex-direction: column; align-items: center;
     justify-content: center; min-height: 0; padding: 0.4vh 0.5vw;
@@ -388,16 +373,30 @@
     color: var(--dim); }
   .own-scard.absent .own-sval { color: var(--reg-absent); }
 
-  /* **Compact own panel (>12 field rows).** When there are 13+ competitors
-     (a full GT7 lobby) the normal two-row block would compress the field
-     table to unreadable size.  A single card row (AHEAD / BEHIND / LAPS /
-     PACE / BURN) at exactly 15vh keeps the field table at ≥ 2.2vh text
-     (≥ 18 px at 800 px high) while the big numerals stay ≥ 7vh via the
-     `55cqh` clamp already on `.own-val`.  Temps are omitted in compact
-     mode — only the five figures the driver acts on survive. */
-  #own.compact { height: 15vh; min-height: 15vh; }
-  .own-compact-row { flex: 1 1 0; min-height: 0; display: grid;
-    grid-template-columns: repeat(5, minmax(0,1fr)); gap: 1.2vw; }
+  /* **Race rack: compact history rows below the big cards + strip.**
+     Each row: lap number · time · delta · burn, in one line, monospace,
+     toned with the same delta/burn inks the monitor rack uses.
+     Smaller than the big cards (floor at 1.8vh so it never squeezes them). */
+  .own-rack { flex: 0 0 auto; min-height: 0; display: flex;
+    flex-direction: column; gap: 0.15vh; overflow: hidden; }
+  .own-rack-row { display: flex; gap: 1.2vw; align-items: baseline;
+    font-family: var(--number); font-size: min(2.2vh, 1.6vw); font-weight: 700;
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+  .own-rack-lap { color: var(--dim); min-width: 3.5ch; }
+  .own-rack-time { color: var(--ink); min-width: 8.5ch; }
+  .own-rack-delta { min-width: 7.5ch; }
+  .own-rack-burn { min-width: 7ch; }
+  .own-rack-note { color: var(--dim); font-family: var(--label);
+    font-size: min(1.8vh, 1.3vw); overflow: hidden; text-overflow: ellipsis; }
+  .t-urgent { color: var(--near); } .t-good { color: var(--good); }
+
+  /* **Fuel-in-hand line: one line below the rack.**
+     Words and inks come from `fuel_in_hand_parts(state)` — the same
+     expression the monitor uses (rule 13). */
+  .own-fuel { flex: 0 0 auto;
+    font-family: var(--label); font-weight: 700; font-size: min(2.4vh, 1.8vw);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    letter-spacing: 0.04em; }
 
   /* **The cover takes the table, not the buttons.** Over the whole screen it
      swallowed every press - including George on/off, which is meant to work
@@ -446,15 +445,18 @@
     <div class="big" id="lap"></div>
     <div class="big" id="pos"></div>
     <div id="board"></div>
+    <!-- George's last call: one small line; spoken anyway, so it is extra
+         context rather than the primary signal. Hidden when empty. -->
+    <div id="last-call" style="font-family:var(--label);font-weight:700;
+      font-size:2.8vh;color:var(--dim);margin-left:auto;white-space:nowrap;
+      overflow:hidden;text-overflow:ellipsis;max-width:40vw;"></div>
   </div>
-  <!-- **Race content: field table + own-car panel, stacked vertically.**
-       `#race-content` occupies the 1fr row between head and foot.  The table
-       flexes to fill available space (above the own panel's reserved height).
-       `#practice` is in the same grid row and is mutually exclusive with this:
-       one is display:flex the other display:none at any given moment. -->
+  <!-- **Race content: own-car panel only (field table moved to monitor).**
+       `#race-content` occupies the 1fr row between head and foot.  The own-car
+       panel takes the full height.  `#practice` is in the same grid row and is
+       mutually exclusive with this: one is display:flex the other display:none. -->
   <div id="race-content">
-    <div id="table"></div>
-    <!-- own-car block (Story 1): gap, laps, temps, deltas -->
+    <!-- own-car block: gap (with names), laps, temps, deltas, rack, fuel -->
     <div id="own"></div>
   </div>
   <div id="practice">
@@ -515,9 +517,9 @@
 
   var SESSION_WORD = { practice: "Practice", quali: "Quali", race: "Race" };
 
-  var HEAD = ["P", "Driver", "Gap", "Stop", "Fuel in → out", "Fuel says"];
-  // Shorter where the column is narrow; the arrow in each row says in → out.
-  HEAD[4] = "Fuel";
+  // Field table removed; HEAD array kept only so cached pages from before
+  // this change do not crash on the variable (no longer used in render).
+  var HEAD = [];
 
   // ---- helpers -------------------------------------------------------
   function $(id) { return document.getElementById(id); }
@@ -675,76 +677,37 @@
     $("board").classList.toggle("stale", !!d.board_stale);
     ageBoard(d.board_age_s);
 
-    // Rebuilt whole each answer: a dozen rows twice a second, and a row
-    // patched in place is a row that can show one car's fuel beside
-    // another's name for a frame.
-    var table = document.createDocumentFragment();
-    HEAD.forEach(function (h, i) {
-      table.appendChild(el("div", "th" + (i === 2 ? " right" : "")
-                           + (i === 4 ? " col-fuel" : "")
-                           + (i === 5 ? " col-says" : ""), h));
-    });
-    (d.rows || []).forEach(function (r) {
-      var row = el("div", "row" + (r.us ? " us" : ""));
-      row.appendChild(cell("", r.place, "num"));
-      // `=== false` and not `!r.named`: a page cached from before the field
-      // existed would otherwise draw every driver as unnamed.
-      row.appendChild(cell("", r.name, "txt" + (r.named === false ? " unnamed" : "")));
-      // `=== true` and not truthiness, for the same reason `named` is tested
-      // `=== false`: a page cached from before the field carried this would
-      // otherwise decide for itself what an absent flag meant.
-      row.appendChild(cell("right", r.gap, "num" + (r.gap_unread === true ? " unread" : "")));
-      row.appendChild(cell("", r.lane ? el("span", "lane", "IN LANE") : r.stop, "num"));
-      row.appendChild(cell("col-fuel", r.fuel, "num"));
-      // **Fuel-says column: key qualifier inline, provenance as droppable sub.**
-      // `detail` may be "no stop read" (no separator → whole string is sub-line)
-      // or "on the limit · his burn, 1 stop" (separator → qualifier is prepended
-      // to the headline so it survives when the sub is hidden at tight row heights;
-      // provenance "his burn, 1 stop" stays as sub and drops when rows are short).
-      var rawDetail = r.detail || "";
-      var sepIdx = rawDetail.indexOf(" · ");   // " · "
-      var fuelHeadline = r.prediction || "";
-      var fuelSub = rawDetail;
-      if (sepIdx >= 0) {
-        var qualifier = rawDetail.slice(0, sepIdx);
-        fuelSub = rawDetail.slice(sepIdx + 3);
-        if (qualifier) fuelHeadline = fuelHeadline + " · " + qualifier;
-      }
-      row.appendChild(cell(r.tone === "stops" ? "stops" : "", fuelHeadline, "txt", fuelSub || null));
-      table.appendChild(row);
-    });
-    $("table").replaceChildren(table);
+    // Field table removed (moved to monitor). The `rows` key is kept in the
+    // payload for the strip server and other consumers; this page ignores it.
 
-    // **Own-car block (Story 1, final design).** Absent `own` key → hidden.
-    // Present → big-card row (AHEAD / BEHIND / LAPS) + supplemental strip.
+    // **Own-car block (race face — field table on monitor).**
+    // Absent `own` key → hidden.  Present → big cards + strip + rack + fuel.
     // The compound bests section belongs to practice only; hide it here.
     $("p-bests").className = "";
     var own = d.own;
     var ownEl = $("own");
-    // Compact layout when > 12 field rows (a full GT7 lobby): single card row
-    // instead of the normal bigs + strip, so the field table keeps enough height
-    // for readable text.
-    var compact = (d.rows || []).length > 12;
     if (!own) {
       ownEl.className = "";
     } else {
-      ownEl.className = "on" + (compact ? " compact" : "");
+      ownEl.className = "on";
 
       // **Big-card helper.**  Absent readings draw "--" in the absent ink
       // (rule 3: a missing reading is not the same as zero).
       // `num` is the numeric string WITHOUT the unit ("0.49", not "0.49 s").
       // `unit` ("s", "L") is rendered smaller beside the number so the
       // numeral alone can fill the card without the unit causing overflow.
-      function bigCard(label, num, absent, sub, color, unit) {
+      // `name` is the display name of the neighbouring car (optional).
+      function bigCard(label, num, absent, sub, color, unit, name) {
         var card = el("div", "own-card" + (absent ? " absent" : ""));
         card.appendChild(el("div", "own-lbl", label));
         var row = el("div", "own-val-row");
         var numEl = el("span", "own-val", absent ? "--" : num);
         if (!absent && color) numEl.style.color = color;
         row.appendChild(numEl);
-        if (!absent && unit) row.appendChild(el("span", "own-unit", " " + unit));
+        if (!absent && unit) row.appendChild(el("span", "own-unit", " " + unit));
         card.appendChild(row);
         card.appendChild(el("div", "own-sub", sub || ""));
+        if (name) card.appendChild(el("div", "own-name", name));
         return card;
       }
 
@@ -763,8 +726,7 @@
         return card;
       }
 
-      // **Values computed up-front** — used in both normal and compact layout.
-      // Gap values without the unit string so the numeral never overflows the card.
+      // **Gap values** — unit separated so the numeral can fill the card.
       var ga = own.gap_ahead;
       var gb = own.gap_behind;
       var aheadAbsent = !ga || ga.unread || ga.gap_s == null;
@@ -773,6 +735,8 @@
       var behindNum  = behindAbsent ? "--" : gb.gap_s.toFixed(2);
       var aheadTrend = (ga && !ga.unread && ga.trend) ? ga.trend : "";
       var behindTrend = (gb && !gb.unread && gb.trend) ? gb.trend : "";
+      var aheadName  = (ga && ga.name) ? ga.name : null;
+      var behindName = (gb && gb.name) ? gb.name : null;
 
       // `own.laps` supersedes `own.box`: { value, label, tone }.
       var box = own.box || {};
@@ -801,45 +765,58 @@
       var burnNum   = burnDelta == null ? null
                     : (burnDelta >= 0 ? "+" : "") + burnDelta.toFixed(2);
 
-      if (compact) {
-        // **Compact layout (> 12 rows):** single card row so the field table
-        // keeps enough room for readable text (≥ 2.2 vh at all realistic row
-        // counts).  AHEAD / BEHIND / LAPS use `bigCard` (short numbers).
-        // PACE / BURN also use `bigCard` — the `26cqw` on `.own-val` prevents
-        // their longer numerals ("-0.222") from overflowing the wider card.
-        // Temps are omitted; the five figures the driver acts on survive.
-        var cRow = el("div", "own-compact-row");
-        cRow.appendChild(bigCard("AHEAD",  aheadNum,  aheadAbsent,  aheadTrend,  null, aheadAbsent  ? null : "s"));
-        cRow.appendChild(bigCard("BEHIND", behindNum, behindAbsent, behindTrend, null, behindAbsent ? null : "s"));
-        cRow.appendChild(bigCard(lapsLabel, lapsVal,  lapsAbsent,   lapsSub, lapsColor, null));
-        cRow.appendChild(bigCard("PACE",   lapNum  || "--", lapNum  == null, "", null, lapNum  ? "s" : null));
-        cRow.appendChild(bigCard("BURN",   burnNum || "--", burnNum == null, "", null, burnNum ? "L" : null));
-        ownEl.replaceChildren(cRow);
-      } else {
-        // **Normal layout (≤ 12 rows):** three big cards + supplemental strip.
-        var bigs = el("div", "own-bigs");
-        bigs.appendChild(bigCard("AHEAD",   aheadNum,  aheadAbsent,  aheadTrend, null, aheadAbsent ? null : "s"));
-        bigs.appendChild(bigCard("BEHIND",  behindNum, behindAbsent, behindTrend, null, behindAbsent ? null : "s"));
-        bigs.appendChild(bigCard(lapsLabel, lapsVal,   lapsAbsent,   lapsSub, lapsColor, null));
+      // **Three big cards — own takes the full height so these can be large.**
+      var bigs = el("div", "own-bigs");
+      bigs.appendChild(bigCard("AHEAD",   aheadNum,  aheadAbsent,  aheadTrend,  null, aheadAbsent  ? null : "s", aheadName));
+      bigs.appendChild(bigCard("BEHIND",  behindNum, behindAbsent, behindTrend, null, behindAbsent ? null : "s", behindName));
+      bigs.appendChild(bigCard(lapsLabel, lapsVal,   lapsAbsent,   lapsSub,  lapsColor, null, null));
 
-        // **Row 2: supplemental strip — 4 temps + PACE + BURN.**
-        // Numbers and units are separated so the numeral can be sized by
-        // container-query width (27 cqw) without the unit adding extra chars.
-        // DERIVED captions in derived ink (rule 5).
-        var strip = el("div", "own-strip");
-        var t = own.temps_c;
-        ["FL","FR","RL","RR"].forEach(function(pos) {
-          var key = pos.toLowerCase();
-          var hasVal = t && t[key] != null;
-          strip.appendChild(suppCard(
-            pos,
-            hasVal ? Math.round(t[key]).toString() : "--",
-            !hasVal, false, hasVal ? "°" : null));
-        });
-        strip.appendChild(suppCard("PACE", lapNum || "--", lapNum == null, true, lapNum ? "s" : null));
-        strip.appendChild(suppCard("BURN", burnNum || "--", burnNum == null, true, burnNum ? "L" : null));
-        ownEl.replaceChildren(bigs, strip);
-      }
+      // **Supplemental strip — 4 temps + PACE + BURN.**
+      var strip = el("div", "own-strip");
+      var t = own.temps_c;
+      ["FL","FR","RL","RR"].forEach(function(pos) {
+        var key = pos.toLowerCase();
+        var hasVal = t && t[key] != null;
+        strip.appendChild(suppCard(
+          pos,
+          hasVal ? Math.round(t[key]).toString() : "--",
+          !hasVal, false, hasVal ? "°" : null));
+      });
+      strip.appendChild(suppCard("PACE", lapNum || "--", lapNum == null, true, lapNum ? "s" : null));
+      strip.appendChild(suppCard("BURN", burnNum || "--", burnNum == null, true, burnNum ? "L" : null));
+
+      // **Race rack: compact lap history, toned with delta/burn inks (rule 13).**
+      var TONE_INK = { urgent: "var(--near)", good: "var(--good)" };
+      var rackEl = el("div", "own-rack");
+      (own.history || []).forEach(function (r) {
+        var rrow = el("div", "own-rack-row");
+        rrow.appendChild(el("span", "own-rack-lap", r.lap != null ? r.lap : ""));
+        rrow.appendChild(el("span", "own-rack-time", r.time != null ? r.time : "--"));
+        var dEl = el("span", "own-rack-delta", r.delta != null ? r.delta : "--");
+        if (r.delta_tone && TONE_INK[r.delta_tone]) dEl.style.color = TONE_INK[r.delta_tone];
+        rrow.appendChild(dEl);
+        var bEl = el("span", "own-rack-burn", r.burn != null ? r.burn : "--");
+        if (r.burn_tone && TONE_INK[r.burn_tone]) bEl.style.color = TONE_INK[r.burn_tone];
+        rrow.appendChild(bEl);
+        if (r.note) rrow.appendChild(el("span", "own-rack-note", r.note));
+        rackEl.appendChild(rrow);
+      });
+
+      // **Fuel-in-hand line: inks from fuel_in_hand_parts (rule 13).**
+      var fuelEl = el("div", "own-fuel");
+      (own.fuel_in_hand || []).forEach(function (part, i) {
+        if (i > 0) fuelEl.appendChild(document.createTextNode(" · "));
+        var sp = document.createElement("span");
+        sp.textContent = part.words || "";
+        if (part.ink) sp.style.color = part.ink;
+        fuelEl.appendChild(sp);
+      });
+
+      ownEl.replaceChildren(bigs, strip, rackEl, fuelEl);
+
+      // **George's last call in the head** (one small line, spoken anyway).
+      var callEl = $("last-call");
+      if (callEl) callEl.textContent = (own.last_call_text) || "";
     }
 
     $("foot").textContent = (d.left_off ? d.left_off + " more not shown · " : "") + (d.why || "");

@@ -168,21 +168,21 @@ def test_rival_panel_show_state_populates_driver_name(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((_row(driver="ROCKY"),))
     # Column 0 is DRIVER: first label in row 0.
-    name_label = panel._row_labels[0][0]
+    name_label = panel._row_labels[0][1]
     assert name_label.text() == "ROCKY"
 
 
 def test_rival_panel_show_state_populates_lap(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((_row(lap=17),))
-    lap_label = panel._row_labels[0][1]
+    lap_label = panel._row_labels[0][2]
     assert lap_label.text() == "L17"
 
 
 def test_rival_panel_show_state_populates_fuel_in(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((_row(fuel_in=8.0),))
-    fuel_in_label = panel._row_labels[0][2]
+    fuel_in_label = panel._row_labels[0][3]
     assert fuel_in_label.text() == "8"
 
 
@@ -196,7 +196,7 @@ def test_rival_panel_fuel_in_bound_has_le_prefix(qt_app):
     )
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    assert panel._row_labels[0][2].text() == "≤8"
+    assert panel._row_labels[0][3].text() == "≤8"
 
 
 def test_rival_panel_fuel_out_bound_has_ge_prefix(qt_app):
@@ -209,7 +209,7 @@ def test_rival_panel_fuel_out_bound_has_ge_prefix(qt_app):
     )
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    assert panel._row_labels[0][3].text() == "≥45"
+    assert panel._row_labels[0][4].text() == "≥45"
 
 
 def test_rival_panel_burn_bound_has_ge_prefix(qt_app):
@@ -221,14 +221,14 @@ def test_rival_panel_burn_bound_has_ge_prefix(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((row,))
     # Column 7 = BURN/LAP
-    assert panel._row_labels[0][7].text() == "≥5.00"
+    assert panel._row_labels[0][8].text() == "≥5.00"
 
 
 def test_rival_panel_null_burn_shows_dashes(qt_app):
     row = RivalStopRow(driver="Y", burn_per_lap_l=None)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    assert panel._row_labels[0][7].text() == "--"
+    assert panel._row_labels[0][8].text() == "--"
 
 
 def test_rival_panel_empty_table_clears_labels(qt_app):
@@ -247,7 +247,7 @@ def test_rival_panel_stop_count_column(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((_row(stop_count=2),))
     # Column 6 = #
-    assert panel._row_labels[0][6].text() == "2"
+    assert panel._row_labels[0][7].text() == "2"
 
 
 def test_rival_panel_fill_verdict_cant_tell_shows_question(qt_app):
@@ -255,26 +255,26 @@ def test_rival_panel_fill_verdict_cant_tell_shows_question(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((_row(verdict=v),))
     # Column 8 = FILL
-    assert panel._row_labels[0][8].text() == "?"
+    assert panel._row_labels[0][9].text() == "?"
 
 
 def test_rival_panel_stop_count_records_multi_stop_driver(qt_app):
-    """Multi-stop drivers show stop_count > 1 in the # column (no sub-label)."""
+    """Multi-stop drivers show stop_count > 1 in the # column."""
     row = RivalStopRow(
         driver="M", last_stop_lap=12, stop_count=2,
         earlier_stops=({"lap": 5},),
     )
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    assert panel._row_labels[0][6].text() == "2"   # column 6 = #
+    assert panel._row_labels[0][7].text() == "2"   # column 6 = #
 
 
 def test_rival_panel_second_row_populated(qt_app):
     """Two rows: both get their driver names."""
     panel = _RivalStopsPanel()
     panel.show_state((_row(driver="A"), _row(driver="B")))
-    assert panel._row_labels[0][0].text() == "A"
-    assert panel._row_labels[1][0].text() == "B"
+    assert panel._row_labels[0][1].text() == "A"
+    assert panel._row_labels[1][1].text() == "B"
 
 
 def test_rival_panel_truncates_long_psn_id(qt_app):
@@ -282,7 +282,7 @@ def test_rival_panel_truncates_long_psn_id(qt_app):
     panel = _RivalStopsPanel()
     long_name = "A" * 20
     panel.show_state((_row(driver=long_name),))
-    assert len(panel._row_labels[0][0].text()) <= 16
+    assert len(panel._row_labels[0][1].text()) <= 16
 
 
 # ============================================= C4: overflow for > MAX_RIVALS
@@ -338,7 +338,7 @@ def test_signed_in_driver_not_dimmed_has_normal_ink(qt_app):
     panel = _RivalStopsPanel()
     row = RivalStopRow(driver="BEENI", dimmed=False)
     panel.show_state((row,))
-    ss = panel._row_labels[0][0].styleSheet()
+    ss = panel._row_labels[0][1].styleSheet()
     # The stylesheet contains `color:<value>`. INK is "#E8E4DC", INK_DIM is
     # "#9A948A" — they share no common substring, so a substring check is safe.
     assert INK in ss, f"Expected INK ({INK}) in stylesheet, got: {ss!r}"
@@ -352,7 +352,7 @@ def test_dimmed_driver_has_dim_ink(qt_app):
     panel = _RivalStopsPanel()
     row = RivalStopRow(driver="GHOST", dimmed=True)
     panel.show_state((row,))
-    ss = panel._row_labels[0][0].styleSheet()
+    ss = panel._row_labels[0][1].styleSheet()
     assert INK_DIM in ss, f"Expected INK_DIM ({INK_DIM}) in stylesheet, got: {ss!r}"
 
 
@@ -366,7 +366,7 @@ def test_burn_assumed_adds_asterisk_to_burn_cell(qt_app):
     )
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    burn_text = panel._row_labels[0][7].text()
+    burn_text = panel._row_labels[0][8].text()
     assert burn_text.endswith("*"), f"Expected trailing *, got: {burn_text!r}"
     assert "7.50" in burn_text
 
@@ -374,15 +374,14 @@ def test_burn_assumed_adds_asterisk_to_burn_cell(qt_app):
 def test_burn_assumed_asterisk_is_the_only_marker(qt_app):
     """burn_assumed is flagged with '*' in the burn cell only (no sub-label row).
 
-    Sub-label rows were removed to keep the panel within the ~325 px budget it
-    shares with the tyre section on the history page.  The '*' in the burn
-    cell is the only on-screen signal.
+    Sub-labels exist for earlier-stop lines (26 Sep 2026).
+    The '*' in the burn cell remains the marker for burn_assumed.
     """
     row = RivalStopRow(driver="X", burn_per_lap_l=7.50, burn_assumed=True)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    # Confirm: no _sub_labels attribute at all.
-    assert not hasattr(panel, "_sub_labels")
+    # Sub-labels now exist (earlier-stops sub-lines, 26 Sep 2026).
+    assert hasattr(panel, "_sub_labels")
 
 
 def test_burn_not_assumed_no_asterisk(qt_app):
@@ -390,7 +389,7 @@ def test_burn_not_assumed_no_asterisk(qt_app):
     row = RivalStopRow(driver="X", burn_per_lap_l=7.50, burn_assumed=False)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    assert "*" not in panel._row_labels[0][7].text()
+    assert "*" not in panel._row_labels[0][8].text()
 
 
 # ============================================================= _fill_verdict_text "stops again"
@@ -460,7 +459,7 @@ def test_rival_panel_must_save_fill_cell_is_warning_ink(qt_app):
     row = RivalStopRow(driver="A", verdict=verdict)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    style = panel._row_labels[0][8].styleSheet()
+    style = panel._row_labels[0][9].styleSheet()
     assert NEAR in style
 
 
@@ -470,7 +469,7 @@ def test_rival_panel_stops_again_fill_cell_is_warning_ink(qt_app):
     row = RivalStopRow(driver="B", verdict=verdict)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    style = panel._row_labels[0][8].styleSheet()
+    style = panel._row_labels[0][9].styleSheet()
     assert NEAR in style
 
 
@@ -480,7 +479,7 @@ def test_rival_panel_on_the_limit_fill_cell_is_warning_ink(qt_app):
     row = RivalStopRow(driver="E", verdict=verdict)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    style = panel._row_labels[0][8].styleSheet()
+    style = panel._row_labels[0][9].styleSheet()
     assert NEAR in style
 
 
@@ -490,7 +489,7 @@ def test_rival_panel_spare_fill_cell_is_good_ink(qt_app):
     row = RivalStopRow(driver="C", verdict=verdict)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    style = panel._row_labels[0][8].styleSheet()
+    style = panel._row_labels[0][9].styleSheet()
     assert GOOD in style
 
 
@@ -501,9 +500,136 @@ def test_rival_panel_dimmed_fill_cell_is_dim_regardless_of_verdict(qt_app):
     row = RivalStopRow(driver="D", dimmed=True, verdict=verdict)
     panel = _RivalStopsPanel()
     panel.show_state((row,))
-    style = panel._row_labels[0][8].styleSheet()
+    style = panel._row_labels[0][9].styleSheet()
     assert INK_DIM in style
     assert NEAR not in style
+
+
+# ============================================================= P column (26 Sep 2026)
+
+
+def test_rival_panel_p_column_shows_fresh_position(qt_app):
+    """A fresh position (position_fresh=True) shows 'P<n>' in column 0."""
+    row = RivalStopRow(driver="ROCKY", position=3, position_fresh=True)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    p_text = panel._row_labels[0][0].text()
+    assert p_text == "P3", f"Expected 'P3' in P column, got: {p_text!r}"
+
+
+def test_rival_panel_p_column_shows_dashes_when_stale(qt_app):
+    """Stale or absent position shows '--' in column 0."""
+    row = RivalStopRow(driver="ROCKY", position=3, position_fresh=False)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    assert panel._row_labels[0][0].text() == "--"
+
+
+def test_rival_panel_p_column_absent_shows_dashes(qt_app):
+    """No position at all → '--' in P column (rule 3)."""
+    row = RivalStopRow(driver="ROCKY")
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    assert panel._row_labels[0][0].text() == "--"
+
+
+def test_rival_panel_sorted_by_position(qt_app):
+    """Rows with fresh positions are sorted ascending; stale rows follow."""
+    rows = (
+        RivalStopRow(driver="C", position=3, position_fresh=True),
+        RivalStopRow(driver="A", position=1, position_fresh=True),
+        RivalStopRow(driver="B", position=2, position_fresh=True),
+        RivalStopRow(driver="D"),  # no position
+    )
+    panel = _RivalStopsPanel()
+    panel.show_state(rows)
+    # After sorting: A(P1), B(P2), C(P3), D(--)
+    assert panel._row_labels[0][1].text() == "A"
+    assert panel._row_labels[1][1].text() == "B"
+    assert panel._row_labels[2][1].text() == "C"
+    assert panel._row_labels[3][1].text() == "D"
+
+
+def test_rival_panel_stale_position_rows_after_fresh(qt_app):
+    """Stale-position rows appear after all fresh-position rows."""
+    rows = (
+        RivalStopRow(driver="Z"),   # no position
+        RivalStopRow(driver="A", position=5, position_fresh=True),
+    )
+    panel = _RivalStopsPanel()
+    panel.show_state(rows)
+    assert panel._row_labels[0][1].text() == "A"
+    assert panel._row_labels[1][1].text() == "Z"
+
+
+# ============================================================= earlier-stop sub-lines (26 Sep 2026)
+
+
+def test_rival_panel_sub_label_visible_when_earlier_stops(qt_app):
+    """A driver with earlier_stops gets a visible sub-label below their row."""
+    row = RivalStopRow(
+        driver="ROCKY", last_stop_lap=15, stop_count=2,
+        earlier_stops=({"lap": 8, "fuel_in_l": 45.0, "fuel_out_l": 78.0,
+                        "compound_in": "RH", "compound": "RS"},),
+    )
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    sub = panel._sub_labels[0]
+    assert not sub.isHidden(), "sub-label should be visible when earlier_stops is non-empty"
+    assert "L8" in sub.text()
+    assert "45" in sub.text()
+    assert "78" in sub.text()
+
+
+def test_rival_panel_sub_label_hidden_when_no_earlier_stops(qt_app):
+    """A driver with no earlier stops has a hidden sub-label (no space wasted)."""
+    row = RivalStopRow(driver="ROCKY", last_stop_lap=10, stop_count=1)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    assert panel._sub_labels[0].isHidden()
+
+
+def test_rival_panel_sub_label_hidden_when_empty_table(qt_app):
+    """After clearing to an empty table, all sub-labels are hidden."""
+    row = RivalStopRow(
+        driver="ROCKY", stop_count=2,
+        earlier_stops=({"lap": 5},),
+    )
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    panel.show_state(())
+    assert panel._sub_labels[0].isHidden()
+
+
+# ============================================================= _HistoryPanel race mode (26 Sep 2026)
+
+
+def test_history_panel_rack_hidden_in_race_mode(qt_app):
+    """In race mode the _rack_section is hidden (only rival panel shown)."""
+    panel = _HistoryPanel()
+    panel.show_state(_ds("race"))
+    assert panel._rack_section.isHidden(), "_rack_section must be hidden in race mode"
+
+
+def test_history_panel_rack_visible_in_practice_mode(qt_app):
+    """In practice mode the _rack_section is visible."""
+    panel = _HistoryPanel()
+    panel.show_state(_ds("practice"))
+    assert not panel._rack_section.isHidden(), "_rack_section must be visible in practice mode"
+
+
+def test_history_panel_rival_panel_shown_in_race_mode(qt_app):
+    """In race mode the rival panel is always shown (even with empty table)."""
+    panel = _HistoryPanel()
+    panel.show_state(_ds("race"))
+    assert not panel.rival_panel.isHidden(), "rival_panel should be visible in race mode"
+
+
+def test_history_panel_rival_panel_hidden_in_practice_mode(qt_app):
+    """In practice mode the rival panel is hidden."""
+    panel = _HistoryPanel()
+    panel.show_state(_ds("practice"))
+    assert panel.rival_panel.isHidden(), "rival_panel should be hidden in practice mode"
 
 
 # ============================================================= _HistoryPanel sector column visibility

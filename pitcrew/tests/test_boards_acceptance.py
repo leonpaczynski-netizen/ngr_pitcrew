@@ -628,7 +628,8 @@ def test_s2_rival_panel_more_than_16_drivers_shows_overflow():
     panel.show_state(rows)
 
     # The first MAX_RIVALS rows are shown.
-    shown_names = {panel._row_labels[i][0].text() for i in range(MAX_RIVALS)}
+    # Column 0 is now P (position); column 1 is DRIVER.
+    shown_names = {panel._row_labels[i][1].text() for i in range(MAX_RIVALS)}
     for i in range(MAX_RIVALS):
         assert f"DRIVER_{i}" in shown_names, (
             f"DRIVER_{i} should be shown in the first {MAX_RIVALS} rows"

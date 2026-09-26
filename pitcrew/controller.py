@@ -8745,11 +8745,25 @@ class PitCrewController(QObject):
             # C3: pass live rivals and car capacity so first-stop burns use
             # the voice's own figure, and capacity-0 (electric) is guarded.
             capacity = getattr(state, "fuel_capacity_l", None)
+            # P column: use rival_places_fresh from the race coordinator — the
+            # SAME source as the field table (rule 13: two calls that use the
+            # same words mean the same thing).  Freshness is gated by
+            # coordinator.board_age_s, which uses the same arithmetic as
+            # field.py (packet delta / SAMPLE_HZ vs BOARD_FRESH_S), so the
+            # monitor's P column goes "--" exactly when the old field view
+            # would have refused the place.
+            _race = getattr(self, "race", None)
+            _rstate = getattr(_race, "state", None) if _race is not None else None
+            _positions = (dict(getattr(_rstate, "rival_places_fresh", {}) or {})
+                          if _rstate is not None else None)
+            _board_age_s = getattr(_race, "board_age_s", None)
             return rival_stop_rows(
                 stops, entered, own_driver, laps_remaining, own_burn,
                 rivals=rivals if rivals else None,
                 capacity_l=capacity,
                 laps_total=getattr(state, "laps_total", None),
+                positions=_positions,
+                board_age_s=_board_age_s,
             )
         except Exception:                                   # noqa: BLE001
             log("race").exception(
