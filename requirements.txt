@@ -24,6 +24,15 @@ mss>=9.0.0  # the tyre-gauge screen source (telemetry/hud.py::ScreenSource).
 #   and the OBS websocket source is unaffected. Measured 22 Aug 2026 at
 #   0.21 ms of CPU per gauge grab against the websocket path's 537 ms.
 numpy>=1.24.0  # Piper synthesis buffers (pitcrew/engineer/voice.py)
+winrt-runtime>=3.2.0         # Windows.Media.Ocr name reading from board crops
+winrt-Windows.Media.Ocr>=3.2.0
+winrt-Windows.Graphics.Imaging>=3.2.0
+winrt-Windows.Storage.Streams>=3.2.0
+winrt-Windows.Storage>=3.2.0
+winrt-Windows.Foundation>=3.2.0
+winrt-Windows.Globalization>=3.2.0
+#   All seven are optional at runtime — OCR degrades loudly to "no OCR" if
+#   unavailable; the board reader falls back to exemplar matching only.
 pyserial>=3.5  # the wind simulator's Arduino on COM5 (pitcrew/rig/wind.py).
 #   Optional at runtime: without it the wind layer reports itself unavailable
 #   and the rest of the app is unaffected. An output device must never be able

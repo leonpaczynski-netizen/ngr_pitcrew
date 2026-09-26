@@ -1,12 +1,12 @@
 """Fill verdict and rival stop rows for the race monitor (Story 2, 25 Sep 2026).
 
-`fill_verdict` answers "can this rival reach the flag on what he took?" from
-OUR remaining laps and HIS last-stop fuel.  It is **not** `fuel_shortfall` in
-`rival_calls.py`: that function uses `laps_total - rival.stop.lap` (laps from
-when he stopped) and is called by George's voice; this uses `own_laps_remaining`
-(our `RaceState.laps_remaining()`) and is for the monitor's rival table.  A rival
-a lap down is off by one, which the label records.  Do NOT fold these together -
-their named parameters differ and the existing voice callers must not change.
+`fill_verdict` answers "can this rival reach the flag on what he took?" for our
+OWN fuel planning (standalone, no laps_total needed).  The MONITOR rows use
+`_rival_verdict`, which calls `fuel_shortfall` from `rival_calls.py` — the same
+function the tablet's `predict()` and George's voice use — so the monitor and
+the voice cannot disagree about one car's fuel (rule 13).  `_rival_verdict`
+uses `laps_total - stop.lap` (laps from when HE stopped to the flag), which is
+the correct horizon for a rival's fuel, not our own laps_remaining.
 
 **The bound semantics, from schema.py line 75 and pit_wall.py line 1252.**
 
@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pitcrew.race.calls import as_his_hud_numbers_it
+
 
 @dataclass(frozen=True)
 class FillVerdictResult:
@@ -54,6 +56,16 @@ class FillVerdictResult:
 
     `saving_per_lap_l` is the save rate that would just reach the flag, or
     None when the verdict is not "must save" or when laps are zero.
+
+    **Vocabulary** (``fill_verdict`` and ``_rival_verdict``):
+      ``"spare"`` — reaches, margin > reading error (tablet: "X L to push");
+      ``"on the limit"`` — reaches, margin ≤ reading error (tablet: "on the
+        limit") — used only by ``_rival_verdict``, which aligns with the
+        tablet (rule 13);
+      ``"exact"`` — used only by standalone ``fill_verdict`` for OUR own fuel;
+      ``"must save"`` — short but saveable;
+      ``"stops again"`` — short and not saveable;
+      ``"can't tell"`` — inputs missing or bounds prevent a verdict.
     """
     verdict: str
     margin_l: float | None = None
@@ -67,6 +79,124 @@ class FillVerdictResult:
 _EXACT_TOLERANCE_L = 1.0
 
 _CANT_TELL = FillVerdictResult(verdict="can't tell")
+
+
+# ---------------------------------------------------------------------------
+# Minimal proxies for _rival_verdict — satisfy the fuel_shortfall interface
+# without importing the full Rival dataclass (which carries live-race state
+# fields not present in a stop-row dict).
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _StopSnap:
+    """The two fields fuel_shortfall reads from rival.stop."""
+    lap: int | None
+    fuel_out_l: float | None
+
+
+@dataclass(frozen=True)
+class _RivalProxy:
+    """Satisfies the Rival interface that fuel_shortfall needs."""
+    stop: _StopSnap
+    exit_is_a_bound: bool
+    burn_per_lap_l: float | None = None
+
+
+def _rival_verdict(
+    fuel_out_l: float | None,
+    burn: float | None,
+    stop_lap: int | None,
+    laps_total: int | None,
+    *,
+    partial: bool,
+    exit_is_a_bound: bool,
+) -> FillVerdictResult:
+    """Monitor fill verdict via `fuel_shortfall` — one expression (rule 13).
+
+    Uses `laps_total - stop_lap` (his horizon from the stop to the flag)
+    rather than our own `laps_remaining`.  Delegates to the same
+    `fuel_shortfall` + `must_stop_again` path the tablet uses so the monitor
+    and the voice cannot disagree about the same car (rule 13).
+
+    Verdict vocabulary: ``"spare"``, ``"on the limit"``, ``"must save"``,
+    ``"stops again"``, ``"can't tell"`` — matches the tablet (rule 13).
+
+    **Bound rules** (same semantics as `fill_verdict`):
+      * `partial and exit_is_a_bound` → can't tell.
+      * `exit_is_a_bound` only → fuel_shortfall refuses (guard); compute
+        margin manually.  "spare" still holds (bound=True); anything else
+        can't tell.
+      * `partial` only → burn is a lower bound; "must save" still holds
+        (bound=True); anything better can't tell.
+    """
+    # Import here to avoid a circular-import at module load; rival_calls imports
+    # from calls, gaps, rivals, strategy — none of which import fill_verdict.
+    from pitcrew.race.rival_calls import (       # noqa: PLC0415
+        fuel_shortfall as _fs,
+        must_stop_again as _msa,
+    )
+
+    if partial and exit_is_a_bound:
+        return _CANT_TELL
+    if fuel_out_l is None or burn is None or stop_lap is None or laps_total is None:
+        return _CANT_TELL
+
+    laps_to_flag = laps_total - stop_lap
+    if laps_to_flag <= 0:
+        return _CANT_TELL
+
+    if exit_is_a_bound:
+        # fuel_shortfall refuses an exit-is-a-bound figure (it would invent a
+        # shortfall from a lower bound — rule 9).  Compute the margin manually
+        # for the "spare still holds" case only.
+        needs = burn * laps_to_flag
+        margin = fuel_out_l - needs          # positive = spare; never clamped (rule 9)
+        if margin > _EXACT_TOLERANCE_L:
+            return FillVerdictResult(verdict="spare", margin_l=margin, bound=True)
+        return _CANT_TELL
+
+    # Build a proxy so fuel_shortfall can be called once (rule 13).
+    proxy = _RivalProxy(
+        stop=_StopSnap(lap=stop_lap, fuel_out_l=fuel_out_l),
+        exit_is_a_bound=False,   # handled above
+        burn_per_lap_l=None,     # burn is passed as the fallback parameter
+    )
+    short = _fs(proxy, burn, laps_total=laps_total)
+    if short is None:
+        return _CANT_TELL
+
+    if partial:
+        # burn is a lower bound → true margin ≤ computed.  "must save" still
+        # holds (if optimistic burn says short, real burn is worse); anything
+        # better can't tell.
+        if short.litres > 0:
+            saving = short.litres / laps_to_flag
+            return FillVerdictResult(
+                verdict="must save", margin_l=-short.litres,
+                bound=True, saving_per_lap_l=saving,
+            )
+        return _CANT_TELL
+
+    # No bounds: delegate to must_stop_again for the canonical three-way split
+    # (reaches / saves / stops again) — same path the tablet and voice use.
+    verdict = _msa(proxy, burn, laps_total=laps_total)
+    if verdict is True:
+        return FillVerdictResult(verdict="stops again", margin_l=-short.litres)
+    if verdict is None:
+        saving = short.litres / laps_to_flag
+        return FillVerdictResult(
+            verdict="must save", margin_l=-short.litres,
+            saving_per_lap_l=saving,
+        )
+    # verdict is False: spare or "on the limit" — match the tablet's vocabulary
+    # (rule 13).  The tablet uses `spare_readable = spare > short.error_l`:
+    # a margin inside the reading error is "on the limit" (the point estimate
+    # says he reaches, but the instrument cannot resolve the gap); a margin
+    # larger than the error is "spare".
+    spare = -short.litres
+    if spare > short.error_l:
+        return FillVerdictResult(verdict="spare", margin_l=spare)
+    return FillVerdictResult(verdict="on the limit", margin_l=spare)
 
 
 def fill_verdict(
@@ -207,10 +337,17 @@ class RivalStopRow:
     stop_count: int = 0
     burn_per_lap_l: float | None = None   # DERIVED
     burn_is_bound: bool = False           # burn is a lower bound (partial entry)
-    # `burn_assumed` is True when the start-fuel assumption (100 L or capacity)
-    # was used for a first-stop burn — the 100 L figure is a model, not a
-    # reading (rule 5 and CLAUDE.md §3.4).
+    # `burn_assumed` is True when the start-fuel figure was NOT a direct
+    # measurement (rule 5).  Starting on a full tank is an assumption about the
+    # start, not a reading — flagged regardless of whether the source is
+    # `assumed_start_l`, `capacity_l`, or the 100 L default.
     burn_assumed: bool = False
+    # `start_basis` names the source used for the start-fuel figure:
+    # "assumed_start_l" — the wall recorded a per-stop assumed start;
+    # "capacity"        — `capacity_l` was used (we know the tank size);
+    # "100 L assumed"   — neither was available, 100 L is the fallback.
+    # None when burn came from consecutive stop figures (measured).
+    start_basis: str | None = None
     verdict: "FillVerdictResult | None" = None
     earlier_stops: tuple = ()             # raw stop dicts, oldest first
 
@@ -224,14 +361,18 @@ def rival_stop_rows(
     *,
     rivals: dict | None = None,
     capacity_l: float | None = None,
+    laps_total: int | None = None,
 ) -> tuple[RivalStopRow, ...]:
     """Grouped per driver, latest stop first, with fill verdict.
 
     `stops` is the flat list from `db.rival_stops(session_id=...)`, newest
     last.  `entered` is `LeagueRace.entered` — who declared for this round.
-    `own_driver` is excluded.  `laps_remaining` is `RaceState.laps_remaining()`
-    — OUR proxy for everyone's remaining laps.  `own_burn_l` is used when
-    a rival's burn cannot be derived from his stop figures.
+    `own_driver` is excluded.  `laps_remaining` is kept for API compat but
+    the verdict now uses `laps_total - stop.lap` (his horizon from the stop),
+    not our remaining laps.  `laps_total` is `RaceState.laps_total`.  When
+    `laps_total` is absent the verdict falls back to `laps_remaining` for
+    backwards compat.  `own_burn_l` is used when a rival's burn cannot be
+    derived from his stop figures.
 
     `rivals` is the live `state.rivals` dict; when present, the latest stop's
     `burn_per_lap_l` is read from the matching `Rival` object so the monitor
@@ -327,6 +468,7 @@ def rival_stop_rows(
 
         burn_is_bound = bool(latest.get("partial"))
         burn_assumed = False
+        start_basis_val: str | None = None
 
         # **Rule 13: use the live rival burn where the voice does.** The
         # coordinator files `burn_per_lap_l` on `state.rivals[name]` via
@@ -385,13 +527,16 @@ def rival_stop_rows(
             else:
                 if assumed_start is not None:
                     start_fuel = float(assumed_start)
-                    burn_assumed = False   # per-stop datum, not assumed
+                    burn_assumed = True    # the assumed_start is itself an assumption
+                    start_basis_val = "assumed_start_l"
                 elif capacity_l is not None and capacity_l > 0:
                     start_fuel = float(capacity_l)
-                    burn_assumed = False   # capacity is known
+                    burn_assumed = True    # starting on a full tank is assumed
+                    start_basis_val = "capacity"
                 else:
                     start_fuel = 100.0
                     burn_assumed = True    # neither capacity nor per-stop datum
+                    start_basis_val = "100 L assumed"
 
                 if (cur_in is not None and cur_lap is not None
                         and cur_lap > 0):
@@ -407,18 +552,39 @@ def rival_stop_rows(
         # Compound: `compound_in` is the set he ARRIVED on (confirmed via disc
         # vote).  `compound` is the set he LEFT on (last disc read at exit,
         # schema.py lines 1003-1009).  `compound_in` may be None on old rows.
-        verdict = fill_verdict(
-            latest.get("fuel_out_l"),
-            burn,
-            laps_remaining,
-            partial=bool(latest.get("partial")),
-            exit_is_a_bound=bool(latest.get("exit_is_a_bound", False)),
+        stop_lap_raw = latest.get("lap")
+        # Fix 1 (25 Sep 2026): use _rival_verdict (fuel_shortfall-based, rule 13)
+        # with laps_total - stop.lap rather than our own laps_remaining.
+        if laps_total is not None:
+            verdict = _rival_verdict(
+                latest.get("fuel_out_l"),
+                burn,
+                stop_lap_raw,
+                laps_total,
+                partial=bool(latest.get("partial")),
+                exit_is_a_bound=bool(latest.get("exit_is_a_bound", False)),
+            )
+        else:
+            # No laps_total: own-laps proxy gives the wrong horizon (a rival
+            # who stopped on lap 15 of 30 has 15 laps to the flag, not
+            # whatever we have left — using our number produced a false
+            # "SPARE +54 L" at Sardegna Rd9 lap 25).  Say so rather than
+            # asserting a wrong answer (rule 9).
+            verdict = _CANT_TELL
+
+        # Fix 2 (25 Sep 2026): stop laps are in the completed-lap domain; convert
+        # to HUD domain so the monitor and the voice name the same lap (rule 13).
+        # as_his_hud_numbers_it adds 1 (the lap in progress when he stopped).
+        stop_lap_hud = as_his_hud_numbers_it(stop_lap_raw)
+        earlier_hud = tuple(
+            dict(s, lap=as_his_hud_numbers_it(s.get("lap")))
+            for s in earlier
         )
 
         rows.append(RivalStopRow(
             driver=driver_name,
             dimmed=dimmed,
-            last_stop_lap=latest.get("lap"),
+            last_stop_lap=stop_lap_hud,
             fuel_in_l=latest.get("fuel_in_l"),
             fuel_in_is_bound=bool(latest.get("partial")),
             fuel_out_l=latest.get("fuel_out_l"),
@@ -429,8 +595,9 @@ def rival_stop_rows(
             burn_per_lap_l=burn,
             burn_is_bound=burn_is_bound,
             burn_assumed=burn_assumed,
+            start_basis=start_basis_val,
             verdict=verdict,
-            earlier_stops=tuple(earlier),
+            earlier_stops=earlier_hud,
         ))
 
     return tuple(rows)

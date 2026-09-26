@@ -143,6 +143,20 @@ Versions, and what upgrading means here:
   column added to it later needs an `ADDED_COLUMNS` entry as well as the DDL
   line.**
 
+**v21 adds `board_reads` and `name_resolutions`** (26 Sep 2026,
+  brief_names_stops.md part E).  Two new tables - one row per board position
+  per grab (~1 s cadence), and one row per OCR name resolution.  Both are
+  pure new tables, so like v12, v16, v18, v19 and v20 there is no migration
+  function and the version moves only so `Store._init_schema` still refuses a
+  file this build predates.  **A column added to either later needs an
+  `ADDED_COLUMNS` entry as well as the DDL line.**
+
+  Row-count estimate per race: at a 1 s grab cadence, a 30-lap race at Monza
+  (~90 s/lap) = ~2,700 s.  8 board rows per frame = ~21,600 rows in
+  `board_reads`.  `name_resolutions` accumulates one row per resolved cluster
+  per session — at most 20 cars, O(20) rows.  At ~100 bytes/row the total
+  per-race write load is ~2 MB; negligible.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -154,7 +168,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -1018,6 +1032,11 @@ CREATE TABLE IF NOT EXISTS rival_stops (
     -- 1 = the watcher joined after the fill had begun, so `fuel_in_l` is an
     -- upper bound on what he came in with and the litres taken are a floor.
     partial         INTEGER NOT NULL DEFAULT 0,
+    -- Monotonic clock seconds: when the visit started and when the last read
+    -- was taken. NULL on rows filed before this column was added (26 Sep 2026).
+    -- Used by the duplicate-fold guard; see ADDED_COLUMNS + db._FOLD_MAX_GAP_S.
+    visit_start_s   REAL,
+    visit_end_s     REAL,
     recorded_at     TEXT    NOT NULL
 );
 
@@ -1221,6 +1240,68 @@ CREATE TABLE IF NOT EXISTS straight_models (
     created_at    TEXT    NOT NULL,
     updated_at    TEXT    NOT NULL
 );
+
+-- ----------------------------------------------------------------- v21
+-- **One row per car per board read** (~1 s cadence during a race session).
+--
+-- The driver asked for names and stops to be logged and persisted.  Before
+-- this table, every board read was computed and discarded: the only survivor
+-- was `board_positions` (one row per named car per LAP crossing) and
+-- `rival_stops` (one row per filed stop).  Between crossings and between
+-- stops the board was a stream of frames that left no trace.
+--
+-- `cluster_id` is the roster's integer cluster id as a TEXT string.  It is
+-- not a foreign key: the cluster only lives for the session and carries no
+-- row in any other table.  NULL where the row could not be matched to any
+-- cluster (e.g., own row excluded, or board row unreadable).
+--
+-- `name_source` is 'ocr' | 'exemplar' | 'handle' | NULL.  NULL where no
+-- name has been resolved yet; never 'unknown', which would read as a name.
+--
+-- Written batched from a queue off the capture thread.  CLAUDE.md rule 3:
+-- NULL is not-read, never 0.
+CREATE TABLE IF NOT EXISTS board_reads (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    at_s        REAL    NOT NULL,   -- monotonic clock at the grab
+    lap         INTEGER,            -- OUR lap at that moment, NULL if unknown
+    position    INTEGER NOT NULL,   -- 1-based board position (row number)
+    cluster_id  TEXT,               -- roster cluster id as text; NULL = unmatched
+    name        TEXT,               -- resolved name, NULL if not yet known
+    name_source TEXT,               -- 'ocr' | 'exemplar' | 'handle' | NULL
+    pit_columns INTEGER NOT NULL DEFAULT 0,   -- 1 if this row showed pit columns
+    fuel_l      REAL,               -- fuel figure read on this frame; NULL = unread
+    compound    TEXT,               -- compound from disc, NULL = unread
+    recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_board_reads_session
+    ON board_reads(session_id, at_s);
+
+-- **One row per name resolution event.**
+--
+-- Logged when the roster assigns a name to a cluster — whether by exemplar
+-- bitmap match, by OCR, or by a provisional handle.  Each row carries enough
+-- to reconstruct what happened and why: the source, the match score, and how
+-- many frames voted for this name.
+--
+-- Duplicates are expected: an OCR resolution that fires on every pit-row crop
+-- would accumulate many rows.  The consumer groups by cluster_id and name and
+-- takes the row with the most votes.
+CREATE TABLE IF NOT EXISTS name_resolutions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL,
+    cluster_id  TEXT    NOT NULL,   -- roster cluster id as text
+    name        TEXT    NOT NULL,
+    source      TEXT    NOT NULL,   -- 'ocr' | 'exemplar' | 'handle'
+    score       REAL,               -- match score; NULL for 'handle' (no score)
+    votes       INTEGER NOT NULL DEFAULT 1,
+    at_s        REAL,               -- when the resolution was made
+    recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_name_resolutions_session
+    ON name_resolutions(session_id, cluster_id);
 """
 
 # Columns added to tables that already existed in an earlier version.
@@ -1253,6 +1334,22 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # exits the lane. `compound` is now the tyre he left on; this is the
         # one he came in on. NULL on older rows, whose `compound` is arrival.
         ("compound_in", "TEXT"),
+        # 26 Sep 2026 (brief_names_stops.md part B): the car left the visible
+        # rows during its stop before MIN_WATCHED_S was reached.  The stop is
+        # still filed - with what was read - but fuel_out_l is a lower bound
+        # rather than the measured fill, because the fill may not have
+        # completed when visibility was lost.  0 on all rows filed before this
+        # column existed, which is the false answer; a reader that needs the
+        # distinction filters on `recorded_at > '2026-09-26'`.
+        ("left_view", "INTEGER NOT NULL DEFAULT 0"),
+        # 26 Sep 2026 (P3-1): monotonic clock seconds when the visit started
+        # and when the last read was taken.  Used by the duplicate-fold guard
+        # in record_rival_stop: fold only when the time windows overlap or are
+        # within FOLD_MAX_GAP_S (20 s), which a GT7 stop cannot span twice
+        # within.  NULL on all rows filed before this column existed; the fold
+        # guard refuses to fold when either side's times are unavailable.
+        ("visit_start_s", "REAL"),
+        ("visit_end_s", "REAL"),
     ),
     # **What became of the call** (7 Sep 2026, plan 1.6): `race/call_outcome`
     # judged against the laps that followed, written as they came in. NULL

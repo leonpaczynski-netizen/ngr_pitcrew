@@ -910,7 +910,7 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
         # burn_assumed asterisk, and multi-stop data (earlier_stops).
         from pitcrew.race.fill_verdict import FillVerdictResult, RivalStopRow
         long = "AVeryLongPSN16"   # exactly 14 chars — stays inside 16-char cap
-        def _row(i, *, dimmed=False, burn_assumed=False,
+        def _row(i, *, dimmed=False, burn_assumed=False, start_basis=None,
                  fuel_in_is_bound=False, fuel_out_is_bound=False,
                  earlier_stops=()):
             return RivalStopRow(
@@ -924,19 +924,24 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
                 stop_count=1 + len(earlier_stops),
                 burn_per_lap_l=7.5 + i * 0.05,
                 burn_assumed=burn_assumed,
+                start_basis=start_basis,
                 dimmed=dimmed,
                 earlier_stops=earlier_stops,
                 verdict=FillVerdictResult(
                     verdict="spare", margin_l=4.5, bound=False),
             )
+        # Realistic start_basis values as the backend produces them.
+        # Row 0: first stop, capacity known → "capacity".
+        # Row 5: first stop, capacity unknown → "100 L assumed".
         rival_15 = tuple([
-            _row(0, burn_assumed=True),
+            _row(0, burn_assumed=True, start_basis="capacity"),
             _row(1, fuel_in_is_bound=True,
                  earlier_stops=({"lap": 3},)),
             _row(2, fuel_out_is_bound=True),
             _row(3, dimmed=True),
             _row(4, earlier_stops=({"lap": 2}, {"lap": 7})),
-            _row(5, burn_assumed=True, fuel_in_is_bound=True),
+            _row(5, burn_assumed=True, fuel_in_is_bound=True,
+                 start_basis="100 L assumed"),
             _row(6),
             _row(7),
             _row(8),
@@ -957,8 +962,12 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
         race_hist_base = replace(
             states[0], show_history=True, laps_of_fuel=99.9,
             fuel_to_stop=-99.9, fuel_to_flag=-99.9, history=history_12)
+        # Three rival-panel probe states: 15 rows, 16 rows, and 15 rows with
+        # rival_all_divisions=True (the longest caption variant).
         states.append(replace(race_hist_base, rival_table=rival_15))
         states.append(replace(race_hist_base, rival_table=rival_16))
+        states.append(replace(race_hist_base, rival_table=rival_15,
+                               rival_all_divisions=True))
         for state in states:
             view.update_state(state)
             app.processEvents()

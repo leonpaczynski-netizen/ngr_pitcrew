@@ -90,9 +90,9 @@ def test_a_round_that_ran_earlier_today_is_not_the_next_round(tmp_path):
     """
     hub = a_hub(tmp_path, rounds=ROUNDS, signins=SIGNINS)
     evening = datetime.datetime(2026, 8, 31, 22, 0)
-    assert sorted(hub.signed_in("s1", on_or_after=evening)) == \
+    assert sorted(hub.signed_in("s1", on_or_after=evening)[0]) == \
         ["Beeni", "Rocky"]                       # the race just run
-    assert hub.signed_in("s1", on_or_after=evening, already_run={"r1"}) == \
+    assert hub.signed_in("s1", on_or_after=evening, already_run={"r1"})[0] == \
         ["Beeni"]                                # the one still to come
 
 
@@ -107,7 +107,7 @@ def test_two_rounds_on_one_day_are_taken_in_the_leagues_own_order(tmp_path):
     hub = a_hub(tmp_path, rounds=same_day,
                 signins=(("round-one", "Beeni", "CONFIRMED"),
                          ("round-two", "Rocky", "CONFIRMED")))
-    assert hub.signed_in("s1", on_or_after=datetime.datetime(2026, 9, 1)) \
+    assert hub.signed_in("s1", on_or_after=datetime.datetime(2026, 9, 1))[0] \
         == ["Beeni"]
 
 
@@ -117,13 +117,13 @@ def test_only_confirmed_entries_count(tmp_path):
     is what the caller is told to present it as."""
     hub = a_hub(tmp_path, rounds=ROUNDS, signins=SIGNINS)
     assert "Pooy01" not in hub.signed_in(
-        "s1", on_or_after=datetime.datetime(2026, 8, 31, 22, 0))
+        "s1", on_or_after=datetime.datetime(2026, 8, 31, 22, 0))[0]
 
 
 def test_a_league_with_no_signed_in_round_says_so_rather_than_guessing(
         tmp_path):
     hub = a_hub(tmp_path, rounds=ROUNDS)
-    assert hub.signed_in("s1") == []
+    assert hub.signed_in("s1")[0] == []
 
 
 # --- who is hidden ----------------------------------------------------------
@@ -192,4 +192,4 @@ def test_a_hub_that_is_not_there_answers_everything_emptily(tmp_path):
     hub = Hub(tmp_path / "nothing.db")
     assert not hub.available
     assert hub.series() == [] and hub.hidden_drivers() == set()
-    assert hub.signed_in("s1") == []
+    assert hub.signed_in("s1")[0] == []

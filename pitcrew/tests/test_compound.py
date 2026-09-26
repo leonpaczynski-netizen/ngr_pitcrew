@@ -135,14 +135,44 @@ def test_rubbish_never_raises():
     assert glyph(None) is None
 
 
-def test_the_floor_leaves_room_for_a_real_s_and_none_for_a_digit():
-    """**The argument is what the OTHER compounds measure**, not that the floor
-    sits inside the S population.
+def test_the_floor_reads_av1_s_discs_and_respects_live_feed():
+    """MATCH_FLOOR must cover AV1-compressed S discs and not clobber the live feed.
 
-    With a bank of one class, `read` answers "S" for anything inside the floor.
-    Measured through this module's own normalisation: M is 0.455 away and H is
-    0.500 - 2.5x the floor - so a medium can never read as a soft. The binding
-    constraint in the other direction is a digit: a "5" lands at 0.202, so a
-    floor of 0.30 would classify 5, 6, 3, 8 and G as S.
+    `letter()` is called ONLY for S compounds: M and H short-circuit in `read()`
+    before letter() is consulted, so their template distances (0.411-0.520 for M,
+    0.335-0.524 for H) carry no false-positive risk.
+
+    Measured on actual disc sub-crops from s213 and s188 groundtruth video at
+    LETTER_MAX=160:
+      - S discs:        0.397-0.453  (must be ≤ MATCH_FLOOR to pass)
+      - live-feed S:    0.046-0.064  (well inside; unchanged)
+
+    The floor must be ≥ 0.453 (worst observed AV1 S crop).  A prior value of
+    0.35 was based on a measurement error (distances from the full 32×440 pitcrop
+    strip rather than the disc sub-crop).  0.455 covers all 13 observed S crops.
+    The upper bound is 0.50 — the live-feed S population is 0.046-0.064 and any
+    value up to 0.50 reads them all; the M/H paths don't use letter() so they
+    don't constrain it.
     """
-    assert 0.064 < MATCH_FLOOR < 0.202
+    assert 0.064 < MATCH_FLOOR <= 0.50
+
+
+@pytest.mark.parametrize("fixture", [
+    "disc_S_s213_punished.png",
+    "disc_S_s213_rocky_l10.png",
+    "disc_S_s188_jubby.png",
+])
+def test_av1_s_disc_reads_as_soft(fixture):
+    """Real disc sub-crops from AV1-compressed recordings decode as S.
+
+    These crops were extracted from the s213 (Monza) and s188 (Sardegna)
+    groundtruth video frames using the stored disc bounding boxes.  With
+    LETTER_MAX=160, each crop returns a glyph; with MATCH_FLOOR=0.455 the
+    glyph scores inside the floor.  Colour_of reads S on all three.
+    """
+    from pathlib import Path
+    from PIL import Image
+    p = Path(__file__).parent / "fixtures" / fixture
+    img = np.array(Image.open(p).convert("RGB"))
+    assert colour_of(img) == "S", "disc body should read as red (S)"
+    assert read(img) == "S", "full read should return S"

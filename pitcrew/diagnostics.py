@@ -336,6 +336,60 @@ def launch_drawn() -> None:
         _WATCHDOG.disarm()
 
 
+def attach_race_log(session_id: int | None,
+                    date_str: str | None = None,
+                    log_dir: Path | None = None) -> logging.FileHandler | None:
+    """Open a per-race log file and attach it to the `pitcrew` logger.
+
+    Returns the handler so the caller can hand it to `detach_race_log` at the
+    end of the session. Returns `None` where the log directory cannot be
+    created (reported, never raises).
+
+    The file is named `race-<session_id>-<date>.log` and lives in the same
+    directory as `pitcrew.log`. It receives every log record the main logger
+    receives and uses the same format, but it is a plain FileHandler - not
+    rotating - so the whole race stays in one file. The main rotating log is
+    untouched.
+    """
+    import datetime
+    directory = _resolve(log_dir) if log_dir is not None else (_ACTIVE_DIR or LOG_DIR)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log().warning("pit-wall: could not create log directory %s", directory)
+        return None
+    tag = date_str or datetime.date.today().isoformat()
+    sid = session_id if session_id is not None else "unknown"
+    path = directory / f"race-{sid}-{tag}.log"
+    try:
+        handler = logging.FileHandler(path, encoding="utf-8")
+    except OSError:
+        log().warning("pit-wall: could not open race log %s", path)
+        return None
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(threadName)-14s %(name)-24s %(message)s"))
+    logging.getLogger(LOGGER_NAME).addHandler(handler)
+    log().info("pit-wall: race log opened at %s", path)
+    return handler
+
+
+def detach_race_log(handler: logging.FileHandler | None) -> None:
+    """Remove a handler returned by `attach_race_log` and close the file.
+
+    Safe to call with `None` (no-op). Safe to call more than once on the same
+    handler (the logging module tolerates removing a handler that is not
+    attached).
+    """
+    if handler is None:
+        return
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.removeHandler(handler)
+    try:
+        handler.close()
+    except Exception:                   # pragma: no cover - belt
+        pass
+
+
 def banner(**facts) -> None:
     """One line per run, so a log covering three sessions can be told apart."""
     logger = log()

@@ -17,13 +17,16 @@ board about every two seconds, and only the rows GT7 draws (about eight). So:
   merging it under one age put a name read twenty laps ago beside a live one,
   two cars at the same place, and a retired car still holding P7;
 * **a gap exists only for the two cars either side of us**, because only they
-  have an interval box on his screen - and it is attached by the trend's own
-  `subject`, never by "whoever the board last put at `ours ± 1`". It expires
-  - `gap_still_stands`, on the lap it was read and on whether the board
-  reader is still reading - because a reading that cannot go stale is one
-  that sits on screen after the reader has stopped, and a gap he has already
-  driven past is worse than no gap. A gap that has expired is drawn as
-  MISSING, not as an empty cell;
+  have an interval box on his screen.  Attribution rule (26 Sep 2026):
+  **(a)** primary source is the trend's own `gap_{side}_name` — the car the
+  signal was tracking; **(b)** a car can never hold both sides; when both
+  sides name the same car (a crossing, before the trend subject updates) the
+  side whose reads MOST RECENTLY came from that car keeps it, and the other
+  side falls back to the board's car at `ours±1` if the board is fresh and
+  that car is not already claimed; **(c)** a gap VALUE is never blanked —
+  OwnGap always carries it even when no row attribution is possible.  It
+  expires — `gap_still_stands` — on the lap it was read and on whether the
+  board reader is still reading; an expired gap is MISSING, not empty;
 * a fuel figure is the pit column's, and **an exit figure is often a lower
   bound** - a car drops off the visible board while it stands, and the visit
   is closed on the clock with the highest reading anyone got. Marked, never
@@ -61,7 +64,7 @@ from pitcrew.race.rival_calls import (
     fuel_shortfall,
     must_stop_again,
 )
-from pitcrew.race.gaps import trend_words
+from pitcrew.race.gaps import MIN_LAPS_FOR_TREND, trend_words
 from pitcrew.race.stint_averages import stint_plan_averages
 
 # The prediction, as the tablet words it. Each is a claim of a different
@@ -470,74 +473,113 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
                         laps_total=laps_total))))
     if ours:
         # **A gap belongs to the car it was read against, by NAME.**
-        # This used to pin it to whoever the board last put at `ours ± 1`,
-        # discarding `GapTrend.subject` - which exists because the trend was
-        # on file reporting confident numbers about a car that was no longer
-        # there, and which every other reader carries (`_gap_view` prints the
-        # name with the figure; `closing_call` tags per driver). Pass a car
-        # into the last corner and the board is a few seconds behind: the row
-        # for the car you just passed took the gap to the car you are now
-        # chasing.
+        # The trend's own `subject` is the primary source — it names the car
+        # the gap signal was tracking.  The board's P±1 is a fallback used
+        # only when two sides name the same car (which happens mid-crossing,
+        # before the trend subject updates).
+        #
+        # ### The combined rule (26 Sep 2026)
+        # (a) *Primary:* `gap_{side}_name` — the roster's name for the trend
+        #     subject.  Every other reader (`_gap_view`, `closing_call`) keys
+        #     on this; the tablet must agree (rule 13).
+        # (b) *Conflict:* a car can never hold both sides.  When both sides
+        #     name the same car, keep it on the side whose reads MOST RECENTLY
+        #     came from that car — compare `max(trend.seen)` per side.  Re-
+        #     attribute the losing side to the board's car at `ours±1` ONLY if
+        #     the board is fresh AND that car is not the one already claimed;
+        #     otherwise show the gap value with no row name attached.
+        # (c) *Never blank a gap VALUE* — OwnGap always carries it.  A gap
+        #     without a row attribution is not drawn on the field, but it is
+        #     not dropped from the driver's own view.
         by_name: dict[str, float] = {}
         # The cars a gap was read against and is no longer current for - see
         # `Car.gap_unread`. Kept apart from `by_name` so a car both sides
         # somehow name keeps the reading that still stands.
         unread: set[str] = set()
+        place_to_name: dict[int, str] = {int(v): str(k)
+                                         for k, v in places.items()
+                                         if v is not None}
+        # Snapshot both trends before resolution so the per-side comparison
+        # uses consistent state.
+        _trends: dict[str, object] = {}
+        _seconds: dict[str, float | None] = {}
+        for side in ("ahead", "behind"):
+            t = _snapshot(getattr(state, f"gap_{side}", None))
+            _trends[side] = t
+            _seconds[side] = t.latest() if t is not None else None
+
+        # Primary attribution: trend subject for each side.
+        ahead_name = getattr(state, "gap_ahead_name", None)
+        behind_name = getattr(state, "gap_behind_name", None)
+        resolved: dict[str, str | None] = {"ahead": ahead_name,
+                                            "behind": behind_name}
+
+        # Conflict resolution: both sides claim the same car.
+        if (_seconds["ahead"] is not None and _seconds["behind"] is not None
+                and ahead_name is not None and behind_name is not None
+                and ahead_name.lower() == behind_name.lower()):
+            ahead_t = _trends["ahead"]
+            behind_t = _trends["behind"]
+            ahead_latest = (max(getattr(ahead_t, "seen", {}) or {})
+                            if ahead_t is not None else -1)
+            behind_latest = (max(getattr(behind_t, "seen", {}) or {})
+                             if behind_t is not None else -1)
+            # The side with the more recent reads keeps the shared car.
+            if ahead_latest >= behind_latest:
+                # Ahead has newer reads — ahead keeps the car, re-attribute behind.
+                fallback = place_to_name.get(int(ours) + 1) if ours else None
+                if fallback is not None and fallback.lower() != ahead_name.lower():
+                    resolved["behind"] = fallback
+                else:
+                    # Cannot re-attribute safely — behind gap has no row name.
+                    resolved["behind"] = None
+                    log("race").debug(
+                        "gap behind: both sides named %r and board has no safe "
+                        "fallback at P+1 — value kept in OwnGap only", ahead_name)
+            else:
+                # Behind has newer reads — behind keeps the car, re-attribute ahead.
+                fallback = place_to_name.get(int(ours) - 1) if ours else None
+                if fallback is not None and fallback.lower() != behind_name.lower():
+                    resolved["ahead"] = fallback
+                else:
+                    resolved["ahead"] = None
+                    log("race").debug(
+                        "gap ahead: both sides named %r and board has no safe "
+                        "fallback at P-1 — value kept in OwnGap only", behind_name)
+
         for side, step in (("ahead", -1), ("behind", 1)):
             # **Snapshotted, because the wall's thread rebinds it.**
             # `GapTrend.latest` loads `seen` twice and `_rederive` rebinds it
             # between the two - `rival_calls._snapshot` exists for this and
             # says "Reproduced.", and `controller._gap_view` takes one. This
             # was the only reader that did not.
-            trend = _snapshot(getattr(state, f"gap_{side}", None))
-            seconds = trend.latest() if trend is not None else None
+            trend = _trends[side]
+            seconds = _seconds[side]
             if seconds is None:
                 continue
-            # **The roster's NAME for the trend's subject, because the rows
-            # are named.** `GapTrend.subject` is a roster CLUSTER ID - an
-            # int, straight out of `Roster.see_frame` via `pit_wall._neighbour`
-            # - and it was compared against `row.name`, so `str(277).lower()`
-            # matched no row, ever, and the tablet drew no gap for a whole
-            # race (20 Sep, Bathurst Rd8). `gap_{side}_name` is
-            # `roster.name_of(trend.subject)`, set in the same call as the
-            # trend itself (`controller.note_gaps`), so this is the SAME
-            # subject spelled the way the rows are - not "whoever the board
-            # put at ours ± 1", which is the defect the comment above
-            # describes. `controller._gap_view` asks the question this way
-            # too, and rule 13 says the two surfaces may not have two
-            # expressions for "whose gap is this".
-            who = getattr(state, f"gap_{side}_name", None)
-            # **No name, no gap.** The figure is real but the app cannot say
-            # whose it is, and a number against the wrong row is worse than
-            # no number - it is the shape of the mistake, not its size. An
-            # unlabelled cluster has no name, so a gap read against one is
-            # not drawn: on the Bathurst race that is about a third of the
-            # readings, and drawing them would mean inventing a row for them.
+            who = resolved[side]
+            # **No name, no gap on any row.** The figure is real but the app
+            # cannot say whose row it belongs to.  An unlabelled gap is not
+            # drawn: better an empty cell than a confident gap against the
+            # wrong driver (value is still in OwnGap, rule (c) above).
             if who is None:
-                # **`debug`, because this fires on about a third of the
-                # readings and this function runs four times a second.** At
-                # `info` that is up to eight lines a second for a whole race
-                # - roughly thirty thousand of them - in the log the race is
-                # read back from. It was harmless while `who` was a cluster
-                # id and could never be None; it is not now. The screen is
-                # where this refusal has to show, and it does: the row keeps
-                # its place, its stop and its fuel, and draws no gap.
                 log("race").debug(
                     "the tablet has a gap %s the roster has not named - not "
                     "drawn against a row", side)
                 continue
+            name_lower = str(who).lower()
             # **And it goes stale like every other reading** -
             # `gap_still_stands` is the whole of that judgement, and it is
             # one expression so the bound cannot be stated twice.
             read_on = max(trend.seen) if getattr(trend, "seen", None) else None
             if gap_still_stands(read_on, lap_now, age):
-                by_name[str(who).lower()] = seconds
+                by_name[name_lower] = seconds
             else:
                 # **Refused, and the row says so.** Dropping it silently left
                 # an empty cell, which is what a car with no interval box at
                 # all draws - so "the reader has lost the number" and "there
                 # is no number to have" were one appearance.
-                unread.add(str(who).lower())
+                unread.add(name_lower)
         unread -= set(by_name)
         rows = [replace(row, gap_s=by_name[str(row.name).lower()])
                 if str(row.name).lower() in by_name
@@ -567,16 +609,38 @@ def field_view(state, board, *, packet: int | None) -> FieldView:
             stands = gap_still_stands(read_on, lap_now, age)
             rate, laps_for_trend = trend.closing_s_per_lap()
             words = trend_words(side, rate, laps_for_trend)
+            # Fix 4 (25 Sep 2026): "steady" when the rate is inside the noise
+            # floor (laps sufficient but abs(rate) < TREND_WORTH_SAYING_S).
+            # None only when there are too few laps to say anything — those are
+            # two different silences and the screen must tell them apart (rule 3).
+            if words is not None:
+                trend_word = words.board
+                trend_rate = rate
+            elif (rate is not None and laps_for_trend is not None
+                  and laps_for_trend >= MIN_LAPS_FOR_TREND):
+                # Enough laps, rate inside noise: gap is steady.
+                trend_word = "steady"
+                trend_rate = None
+            else:
+                trend_word = None
+                trend_rate = None
             own_gap = OwnGap(
                 gap_s=seconds if stands else None,
                 unread=not stands and seconds is not None,
-                trend=words.board if words is not None else None,
-                rate_s_per_lap=rate if words is not None else None,
+                trend=trend_word,
+                rate_s_per_lap=trend_rate,
             )
             if side == "ahead":
                 own_ahead = own_gap
             else:
                 own_behind = own_gap
+
+        # **The gap VALUE for OwnGap is always kept across a crossing.**
+        # The gap signal is a per-side measurement (ahead signal / behind
+        # signal), not per-car, so the value is valid even when the subject
+        # name is stale.  The own block shows the value on every tick;
+        # attribution to a named car is a separate concern handled in the
+        # rival rows above via `place_to_name`.  Never blank the value here.
 
     # Stint averages: DERIVED from the plan's per-lap targets.  None when fewer
     # than 2 qualifying laps exist (rule 4 and rule 5).

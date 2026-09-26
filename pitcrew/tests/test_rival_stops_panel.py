@@ -24,7 +24,13 @@ pytest.importorskip("PyQt6.QtWidgets")
 
 from pitcrew.race.fill_verdict import FillVerdictResult, RivalStopRow  # noqa: E402
 from pitcrew.ui.driver_view import (  # noqa: E402
+    GOOD,
+    INK,
+    INK_DIM,
+    NEAR,
+    _HistoryPanel,
     _RivalStopsPanel,
+    _fill_verdict_ink,
     _fill_verdict_text,
     _fmt_sector_rack,
 )
@@ -115,6 +121,21 @@ def test_fill_verdict_exact():
     v = FillVerdictResult(verdict="exact", margin_l=0.3, bound=False)
     result = _fill_verdict_text(v)
     assert "EXACT" in result
+
+
+def test_fill_verdict_on_the_limit_with_margin():
+    """'on the limit' verdict shows 'ON LIMIT' with signed margin."""
+    v = FillVerdictResult(verdict="on the limit", margin_l=0.4, bound=False)
+    result = _fill_verdict_text(v)
+    assert "ON LIMIT" in result
+    assert "+0" in result
+
+
+def test_fill_verdict_on_the_limit_bound():
+    """'on the limit' with bound=True carries the '~' prefix."""
+    v = FillVerdictResult(verdict="on the limit", margin_l=0.3, bound=True)
+    result = _fill_verdict_text(v)
+    assert "~" in result
 
 
 # ===================================================== _RivalStopsPanel offscreen
@@ -370,3 +391,306 @@ def test_burn_not_assumed_no_asterisk(qt_app):
     panel = _RivalStopsPanel()
     panel.show_state((row,))
     assert "*" not in panel._row_labels[0][7].text()
+
+
+# ============================================================= _fill_verdict_text "stops again"
+
+
+def test_fill_verdict_stops_again_with_margin():
+    """'stops again' verdict shows 'STOP AGAIN' with signed margin."""
+    v = FillVerdictResult(verdict="stops again", margin_l=-4.0, bound=False)
+    result = _fill_verdict_text(v)
+    assert "STOP AGAIN" in result
+    assert "-4" in result
+
+
+def test_fill_verdict_stops_again_no_margin():
+    """'stops again' with no margin falls back to the raw verdict string."""
+    v = FillVerdictResult(verdict="stops again", margin_l=None, bound=False)
+    result = _fill_verdict_text(v)
+    # margin_l is None → returns the raw verdict word (pre-existing behaviour)
+    assert result == "stops again"
+
+
+# ============================================================= _fill_verdict_ink
+
+
+def test_fill_verdict_ink_none_is_dim():
+    assert _fill_verdict_ink(None) == INK_DIM
+
+
+def test_fill_verdict_ink_cant_tell_is_dim():
+    v = FillVerdictResult(verdict="can't tell", margin_l=None, bound=False)
+    assert _fill_verdict_ink(v) == INK_DIM
+
+
+def test_fill_verdict_ink_must_save_is_warning():
+    v = FillVerdictResult(verdict="must save", margin_l=-3.0, bound=False)
+    assert _fill_verdict_ink(v) == NEAR
+
+
+def test_fill_verdict_ink_stops_again_is_warning():
+    v = FillVerdictResult(verdict="stops again", margin_l=-5.0, bound=False)
+    assert _fill_verdict_ink(v) == NEAR
+
+
+def test_fill_verdict_ink_spare_is_good():
+    v = FillVerdictResult(verdict="spare", margin_l=8.0, bound=False)
+    assert _fill_verdict_ink(v) == GOOD
+
+
+def test_fill_verdict_ink_exact_is_plain():
+    v = FillVerdictResult(verdict="exact", margin_l=0.2, bound=False)
+    assert _fill_verdict_ink(v) == INK
+
+
+def test_fill_verdict_ink_on_the_limit_is_warning():
+    """'on the limit' is the marginal case — warning ink, same as must-save."""
+    v = FillVerdictResult(verdict="on the limit", margin_l=0.4, bound=False)
+    assert _fill_verdict_ink(v) == NEAR
+
+
+# ============================================================= rival panel fill ink via show_state
+
+
+def test_rival_panel_must_save_fill_cell_is_warning_ink(qt_app):
+    """The FILL cell (column 8) is rendered in warning ink for must-save."""
+    verdict = FillVerdictResult(verdict="must save", margin_l=-3.0, bound=False,
+                                saving_per_lap_l=0.5)
+    row = RivalStopRow(driver="A", verdict=verdict)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    style = panel._row_labels[0][8].styleSheet()
+    assert NEAR in style
+
+
+def test_rival_panel_stops_again_fill_cell_is_warning_ink(qt_app):
+    """The FILL cell is in warning ink for 'stops again'."""
+    verdict = FillVerdictResult(verdict="stops again", margin_l=-2.0, bound=False)
+    row = RivalStopRow(driver="B", verdict=verdict)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    style = panel._row_labels[0][8].styleSheet()
+    assert NEAR in style
+
+
+def test_rival_panel_on_the_limit_fill_cell_is_warning_ink(qt_app):
+    """The FILL cell is in warning ink for 'on the limit'."""
+    verdict = FillVerdictResult(verdict="on the limit", margin_l=0.3, bound=False)
+    row = RivalStopRow(driver="E", verdict=verdict)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    style = panel._row_labels[0][8].styleSheet()
+    assert NEAR in style
+
+
+def test_rival_panel_spare_fill_cell_is_good_ink(qt_app):
+    """The FILL cell is in good (green) ink for 'spare'."""
+    verdict = FillVerdictResult(verdict="spare", margin_l=10.0, bound=False)
+    row = RivalStopRow(driver="C", verdict=verdict)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    style = panel._row_labels[0][8].styleSheet()
+    assert GOOD in style
+
+
+def test_rival_panel_dimmed_fill_cell_is_dim_regardless_of_verdict(qt_app):
+    """A dimmed row keeps dim ink even for a warning verdict (the driver is not
+    in this round, so the verdict about him is also contextually absent)."""
+    verdict = FillVerdictResult(verdict="must save", margin_l=-3.0, bound=False)
+    row = RivalStopRow(driver="D", dimmed=True, verdict=verdict)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    style = panel._row_labels[0][8].styleSheet()
+    assert INK_DIM in style
+    assert NEAR not in style
+
+
+# ============================================================= _HistoryPanel sector column visibility
+
+
+def _ds(session_kind="race"):
+    """Minimal DriverState for _HistoryPanel.show_state tests."""
+    from pitcrew.ui.driver_view import DriverState
+    return DriverState(session_kind=session_kind)
+
+
+def test_history_panel_race_mode_hides_sector_heads(qt_app):
+    """In race mode the S1/S2/S3 column heads are hidden."""
+    panel = _HistoryPanel()
+    panel.show_state(_ds("race"))
+    # Head indices 6/7/8 are S1/S2/S3 stored in _sector_head_labels.
+    for lbl in panel._sector_head_labels:
+        assert lbl.isHidden(), f"sector head should be hidden in race mode: {lbl.text()}"
+
+
+def test_history_panel_practice_mode_shows_sector_heads(qt_app):
+    """In practice mode the S1/S2/S3 column heads are visible."""
+    panel = _HistoryPanel()
+    panel.show_state(_ds("practice"))
+    for lbl in panel._sector_head_labels:
+        assert not lbl.isHidden(), (
+            f"sector head should be visible in practice: {lbl.text()}")
+
+
+def test_history_panel_sector_visibility_toggles_correctly(qt_app):
+    """Switching session kind toggles the sector columns without error."""
+    panel = _HistoryPanel()
+
+    panel.show_state(_ds("race"))
+    for lbl in panel._sector_head_labels:
+        assert lbl.isHidden()
+
+    panel.show_state(_ds("practice"))
+    for lbl in panel._sector_head_labels:
+        assert not lbl.isHidden()
+
+    # Toggle back.
+    panel.show_state(_ds("race"))
+    for lbl in panel._sector_head_labels:
+        assert lbl.isHidden()
+
+
+# ============================================================= Round 8: caption + legend
+
+def test_rival_panel_caption_default(qt_app):
+    """Caption reads 'RIVAL STOPS' when rival_all_divisions is False."""
+    panel = _RivalStopsPanel()
+    panel.show_state((), rival_all_divisions=False)
+    assert panel._caption.text() == "RIVAL STOPS"
+
+
+def test_rival_panel_caption_all_divisions(qt_app):
+    """Caption names all-divisions when rival_all_divisions=True."""
+    panel = _RivalStopsPanel()
+    panel.show_state((), rival_all_divisions=True)
+    caption_text = panel._caption.text()
+    assert "all divisions" in caption_text.lower()
+    assert "not found" in caption_text.lower()
+
+
+def test_rival_panel_caption_resets_to_default(qt_app):
+    """After an all-divisions call, a subsequent normal call resets the caption."""
+    panel = _RivalStopsPanel()
+    panel.show_state((), rival_all_divisions=True)
+    panel.show_state((), rival_all_divisions=False)
+    assert panel._caption.text() == "RIVAL STOPS"
+
+
+def test_rival_panel_legend_absent_when_no_assumed_rows(qt_app):
+    """No legend in caption when all rows have burn_assumed=False."""
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=False)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    assert panel._caption.text() == "RIVAL STOPS"
+    # Overflow slot must stay hidden — legend is not a substitute for it.
+    assert panel._overflow_label.isHidden()
+
+
+def test_rival_panel_legend_in_caption_for_capacity_basis(qt_app):
+    """Legend is appended to caption when start_basis='capacity'."""
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                       start_basis="capacity")
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    caption = panel._caption.text()
+    assert caption.startswith("RIVAL STOPS")
+    assert "full tank" in caption.lower()
+    # Legend is in caption, not in the overflow slot.
+    assert panel._overflow_label.isHidden()
+
+
+def test_rival_panel_legend_in_caption_for_100_L_assumed_basis(qt_app):
+    """Legend is appended to caption when start_basis='100 L assumed'."""
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                       start_basis="100 L assumed")
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    caption = panel._caption.text()
+    assert caption.startswith("RIVAL STOPS")
+    assert "full tank" in caption.lower()
+    assert panel._overflow_label.isHidden()
+
+
+def test_rival_panel_legend_in_caption_for_assumed_start_l_basis(qt_app):
+    """Legend is appended to caption when start_basis='assumed_start_l'."""
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                       start_basis="assumed_start_l")
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    caption = panel._caption.text()
+    assert caption.startswith("RIVAL STOPS")
+    assert "estimated" in caption.lower()
+    assert panel._overflow_label.isHidden()
+
+
+def test_rival_panel_legend_generic_in_caption_for_unknown_basis(qt_app):
+    """Generic legend in caption for an unrecognised non-None start_basis."""
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                       start_basis="some_future_basis")
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    caption = panel._caption.text()
+    assert caption.startswith("RIVAL STOPS")
+    assert "*" in caption
+    assert panel._overflow_label.isHidden()
+
+
+def test_rival_panel_legend_generic_in_caption_for_none_basis(qt_app):
+    """Generic legend in caption when burn_assumed=True but start_basis=None.
+
+    In production start_basis is always set when burn_assumed=True (the backend
+    sets one of three known values).  Should the combination occur anyway, the
+    generic legend is shown — the '*' in the burn cell is still explained.
+    """
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                       start_basis=None)
+    panel = _RivalStopsPanel()
+    panel.show_state((row,))
+    caption = panel._caption.text()
+    assert caption.startswith("RIVAL STOPS")
+    assert "*" in caption
+
+
+def test_rival_panel_legend_combined_with_all_divisions(qt_app):
+    """Legend and all-divisions note both appear in caption on one line."""
+    row = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                       start_basis="capacity")
+    panel = _RivalStopsPanel()
+    panel.show_state((row,), rival_all_divisions=True)
+    caption = panel._caption.text()
+    assert "all divisions" in caption.lower()
+    assert "full tank" in caption.lower()
+    # Only one QLabel line — confirmed by checking the caption starts with RIVAL STOPS.
+    assert caption.startswith("RIVAL STOPS")
+
+
+def test_rival_panel_overflow_slot_shows_count_not_legend(qt_app):
+    """When overflow > 0 the overflow slot shows the count; legend is in caption."""
+    from pitcrew.ui.driver_view import MAX_RIVALS
+
+    rows = tuple(
+        RivalStopRow(driver=f"D{i}", burn_assumed=True, start_basis="capacity",
+                     burn_per_lap_l=7.0)
+        for i in range(MAX_RIVALS + 2)
+    )
+    panel = _RivalStopsPanel()
+    panel.show_state(rows)
+    # Overflow slot: count.
+    assert not panel._overflow_label.isHidden()
+    assert "+2" in panel._overflow_label.text()
+    assert "tank" not in panel._overflow_label.text().lower()
+    # Caption: legend (both can be shown simultaneously).
+    assert "full tank" in panel._caption.text().lower()
+
+
+def test_rival_panel_legend_clears_from_caption_when_assumed_rows_removed(qt_app):
+    """After a table with assumed rows, a clean table removes the legend from caption."""
+    row_assumed = RivalStopRow(driver="X", burn_per_lap_l=7.0, burn_assumed=True,
+                               start_basis="capacity")
+    row_clean = RivalStopRow(driver="Y", burn_per_lap_l=6.0, burn_assumed=False)
+    panel = _RivalStopsPanel()
+    panel.show_state((row_assumed,))
+    assert "full tank" in panel._caption.text().lower()
+    panel.show_state((row_clean,))
+    assert panel._caption.text() == "RIVAL STOPS"

@@ -210,6 +210,54 @@ class Rival:
     burn_stops: int = 0
 
 
+def merge_rivals(a: "Rival", b: "Rival") -> "Rival":
+    """Merge two Rival records for the same driver into one canonical record.
+
+    **WARNING — burn fields are NOT combined.**  ``burn_per_lap_l`` and
+    ``burn_stops`` are CUMULATIVE figures produced by
+    ``rival_book.profile_of(...).burn_per_lap_l(car, circuit)``: they already
+    include every stop the DB has on file for that driver.  Averaging them
+    would re-weight history that has already been counted (rules 4 and 13).
+    The caller is responsible for rebuilding burn from the DB after any merge
+    that affects which rows are attributed to which name.  This function takes
+    burn from the winning stop's record unchanged.
+
+    Rules:
+    - ``stop``: the more recently filed one (higher lap number); ties keep
+      ``a``'s (``a`` is the existing coordinator record).
+    - ``burn_per_lap_l`` / ``burn_stops``: taken from the chosen stop's record
+      — NOT averaged.  Callers that need a fresh figure must query the DB.
+    - ``pitted``: True if either is pitted.
+    - ``position``: prefer ``a``'s, else ``b``'s.
+    - ``exit_is_a_bound``, ``entry_is_a_bound``: from the chosen stop's record.
+    """
+    from dataclasses import replace as _replace
+
+    # Choose the more recent stop.
+    def _lap(r: "Rival") -> int:
+        try:
+            return int(r.stop.lap) if (r.stop and r.stop.lap is not None) else -1
+        except (TypeError, ValueError):
+            return -1
+
+    if _lap(b) > _lap(a):
+        stop_src = b
+    else:
+        stop_src = a
+
+    return _replace(
+        stop_src,
+        name=a.name,            # canonical name is always the survivor (a)
+        stop=stop_src.stop,
+        pitted=(a.pitted or b.pitted),
+        position=(a.position if a.position is not None else b.position),
+        burn_per_lap_l=stop_src.burn_per_lap_l,
+        burn_stops=stop_src.burn_stops,
+        exit_is_a_bound=stop_src.exit_is_a_bound,
+        entry_is_a_bound=stop_src.entry_is_a_bound,
+    )
+
+
 def _fill_to_the_flag(laps_left: int | None,
                       burn_per_lap_l: float | None) -> float | None:
     """The litres a car needs to reach the flag from here.

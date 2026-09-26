@@ -494,42 +494,42 @@ def test_s2c_negative_burn_returns_none_not_clamped():
 # ===========================================================================
 
 
-def test_s2d_fill_verdict_uses_laps_remaining_not_laps_to_stop():
-    """Rule 13 probe: the fill verdict uses laps_remaining (to the flag), while
-    the tablet box shows laps_to_box (to the next pit stop).  These are
-    different quantities, correctly labelled differently.  Neither figure
-    appears under the other's label in the payload — no rule 13 violation.
+def test_s2d_fill_verdict_uses_rival_horizon_not_laps_to_stop():
+    """Rule 13 probe: the fill verdict uses laps_total - stop_lap (the rival's
+    own horizon to the flag), not our laps_remaining and not laps_to_stop.
 
-    This test verifies the seam: rival_stop_rows passes laps_remaining to
-    fill_verdict, not laps_to_box.
+    Three quantities, three different values:
+      laps_total - stop_lap = 20 - 10 = 10  (rival's horizon — correct)
+      laps_remaining        = 6             (our laps — wrong proxy)
+      laps_to_stop          = 3             (laps to next pit — wrong quantity)
+
+    Hand-computed (burn = (100-8)/10 = 9.2 L/lap, fuel_out = 50 L):
+      horizon=10 → needs 92 L, has 50 → short 42 → "stops again"
+      horizon=6  → needs 55.2, has 50 → short 5.2 → "stops again" or "spare"
+      horizon=3  → needs 27.6, has 50 → surplus 22.4 → "spare"
+
+    Using laps_total=20 ensures the verdict is unambiguously from the correct
+    horizon — laps_to_stop=3 would produce "spare", which is the wrong call.
     """
-    from pitcrew.race.fill_verdict import fill_verdict, rival_stop_rows
+    from pitcrew.race.fill_verdict import rival_stop_rows
 
-    laps_remaining = 8      # laps to the flag
-    laps_to_stop = 3        # laps to next pit (a different number)
+    laps_remaining = 6      # OUR laps to the flag
+    laps_to_stop = 3        # laps to next pit (different quantity)
+    laps_total = 20         # total race laps
 
     stops = [{"id": 1, "driver": "A", "lap": 10, "fuel_in_l": 8.0,
-              "fuel_out_l": 40.0, "partial": 0, "exit_is_a_bound": 0,
+              "fuel_out_l": 50.0, "partial": 0, "exit_is_a_bound": 0,
               "compound": "RS", "compound_in": "RH"}]
     rows = rival_stop_rows(stops, entered=["A"], own_driver=None,
-                           laps_remaining=laps_remaining, own_burn_l=8.0)
+                           laps_remaining=laps_remaining, own_burn_l=8.0,
+                           laps_total=laps_total)
     row = rows[0]
 
-    # C3: burn is now derived from (100 - fuel_in) / stop_lap = (100-8)/10 = 9.2.
-    derived_burn = (100.0 - 8.0) / 10
-    # Fill verdict built with laps_remaining=8 directly (the correct figure).
-    expected = fill_verdict(40.0, derived_burn, laps_remaining,
-                            partial=False, exit_is_a_bound=False)
-    # NOT built with laps_to_stop=3.
-    wrong = fill_verdict(40.0, derived_burn, laps_to_stop,
-                         partial=False, exit_is_a_bound=False)
-
-    assert row.verdict.verdict == expected.verdict
-    assert row.verdict.margin_l == pytest.approx(expected.margin_l)
-    # The margin with laps_to_stop would be different.
-    assert expected.margin_l != pytest.approx(wrong.margin_l), (
-        "laps_remaining and laps_to_stop must produce different margins "
-        "for this test to be meaningful"
+    # Correct horizon: 20 - 10 = 10 laps; needs 92 L, has 50 → stops again.
+    assert row.verdict is not None
+    assert row.verdict.verdict == "stops again", (
+        f"expected 'stops again' (horizon 10 laps), got {row.verdict.verdict!r}; "
+        "using laps_to_stop=3 would give 'spare' — wrong call"
     )
 
 
@@ -900,10 +900,10 @@ def test_s2_exit_bound_spare_still_holds():
     """
     from pitcrew.race.fill_verdict import rival_stop_rows
 
-    # fuel_out=70, burn=8, laps_remaining=6 → needs 48, margin +22 → spare.
+    # fuel_out=70, burn=(100-8)/10=9.2, laps=16-10=6 → needs 55.2, spare 14.8
     stops = [_stop("X", 10, 70.0, exit_bound=True)]
     rows = rival_stop_rows(stops, entered=["X"], own_driver=None,
-                           laps_remaining=6, own_burn_l=8.0)
+                           laps_remaining=6, own_burn_l=8.0, laps_total=16)
     assert rows[0].verdict.verdict == "spare"
     assert rows[0].verdict.bound is True, (
         "bound must be True when exit_is_a_bound=True and verdict is spare"
@@ -919,11 +919,11 @@ def test_s2_exit_bound_must_save_becomes_cant_tell():
     """
     from pitcrew.race.fill_verdict import rival_stop_rows
 
-    # fuel_out=40, burn=8, laps_remaining=6 → needs 48, margin -8 → short.
-    # But exit_is_a_bound=True: could be fine with higher actual exit fuel.
+    # fuel_out=40, burn=9.2, laps=16-10=6 → needs 55.2, margin -15.2 < 1.0
+    # → "can't tell": exit_is_a_bound means true fuel could be higher.
     stops = [_stop("X", 10, 40.0, exit_bound=True)]
     rows = rival_stop_rows(stops, entered=["X"], own_driver=None,
-                           laps_remaining=6, own_burn_l=8.0)
+                           laps_remaining=6, own_burn_l=8.0, laps_total=16)
     assert rows[0].verdict.verdict == "can't tell", (
         "with exit_is_a_bound=True and apparent shortfall, verdict must be "
         "'can't tell' not 'must save' — the true exit fuel could be higher"
@@ -939,11 +939,11 @@ def test_s2_partial_entry_bound_must_save_holds():
     """
     from pitcrew.race.fill_verdict import rival_stop_rows
 
-    # fuel_out=40, burn=8 (from own), laps_remaining=6 → margin -8 → short.
-    # partial=True makes it a lower-bound burn.
+    # fuel_out=40, burn=9.2, laps=16-10=6 → needs 55.2, short 15.2 > 0
+    # partial=True makes burn a lower bound → "must save" holds, bound=True.
     stops = [_stop("X", 10, 40.0, partial=True)]
     rows = rival_stop_rows(stops, entered=["X"], own_driver=None,
-                           laps_remaining=6, own_burn_l=8.0)
+                           laps_remaining=6, own_burn_l=8.0, laps_total=16)
     assert rows[0].verdict.verdict == "must save"
     assert rows[0].verdict.bound is True
 
@@ -952,11 +952,11 @@ def test_s2_partial_entry_bound_looks_spare_cant_tell():
     """partial=True with apparent surplus → 'can't tell' (real burn may be higher)."""
     from pitcrew.race.fill_verdict import rival_stop_rows
 
-    # fuel_out=80, burn=8 (from own), laps_remaining=6 → margin +32 → spare.
-    # partial=True: real burn could be higher, eliminating the margin.
+    # fuel_out=80, burn=9.2, laps=16-10=6 → needs 55.2, margin 24.8 (surplus)
+    # partial=True: real burn could be higher, eliminating the margin → "can't tell"
     stops = [_stop("X", 10, 80.0, partial=True)]
     rows = rival_stop_rows(stops, entered=["X"], own_driver=None,
-                           laps_remaining=6, own_burn_l=8.0)
+                           laps_remaining=6, own_burn_l=8.0, laps_total=16)
     assert rows[0].verdict.verdict == "can't tell"
 
 
@@ -966,7 +966,7 @@ def test_s2_both_bounds_cant_tell():
 
     stops = [_stop("X", 10, 40.0, partial=True, exit_bound=True)]
     rows = rival_stop_rows(stops, entered=["X"], own_driver=None,
-                           laps_remaining=6, own_burn_l=8.0)
+                           laps_remaining=6, own_burn_l=8.0, laps_total=16)
     assert rows[0].verdict.verdict == "can't tell"
 
 
@@ -1035,4 +1035,151 @@ def test_s1d_laps_two_labels_are_distinct():
 
     assert stop_label != flag_label, (
         f"labels must differ: stop={stop_label!r}, flag={flag_label!r}"
+    )
+
+
+# ===========================================================================
+# s188 regression tests — defects found at lap 25, Sardegna Rd 9 (25 Sep 2026)
+# ===========================================================================
+
+
+def test_s188_fix4_gap_steady_inside_noise():
+    """Fix 4: OwnGap.trend is 'steady' when rate is inside TREND_WORTH_SAYING_S.
+
+    None is only for "too few laps to say anything" — the two silences must be
+    distinguishable (rule 3).
+    """
+    from pitcrew.race.field import OwnGap
+
+    steady_gap = OwnGap(gap_s=4.2, unread=False, trend="steady",
+                        rate_s_per_lap=None)
+    view = _view(own_gap_ahead=steady_gap)
+    body = compose(view, _state())
+    ahead = body["own"]["gap_ahead"]
+    assert ahead is not None
+    assert ahead["trend"] == "steady", (
+        f"inside-noise gap should show trend='steady', got {ahead['trend']!r}"
+    )
+    assert ahead["rate_s_per_lap"] is None, (
+        "rate_s_per_lap is None on 'steady' (no single figure to cite)"
+    )
+
+
+def test_s188_fix4_gap_none_trend_when_too_few_laps():
+    """Fix 4: OwnGap.trend is None when there are fewer than MIN_LAPS_FOR_TREND.
+
+    Too few laps is distinct from inside noise — neither "steady" nor a rate.
+    """
+    from pitcrew.race.field import OwnGap
+
+    new_gap = OwnGap(gap_s=3.1, unread=False, trend=None, rate_s_per_lap=None)
+    view = _view(own_gap_ahead=new_gap)
+    body = compose(view, _state())
+    ahead = body["own"]["gap_ahead"]
+    assert ahead is not None
+    assert ahead["trend"] is None, (
+        f"too-few-laps gap should have trend=null, got {ahead['trend']!r}"
+    )
+
+
+def test_s188_fix5_crossing_attributes_by_board_position():
+    """Fix 5 (26 Sep 2026): both-sides conflict resolved by most-recent reads.
+
+    At s188 lap 25 the trend subject for BOTH sides was "CruisingChaos" (stale
+    after the crossing).  The combined rule:
+      - primary: trend subject (same car both sides → conflict)
+      - both trends read on lap 10 → ahead wins the tie (>= comparison)
+      - CruisingChaos stays on the ahead row; Rocky (board P3) gets behind
+      - gap VALUES are never blanked (rule c) — OwnGap keeps both.
+
+    With GAP_STALE_LAPS=0 the read must be from the current lap (state.lap=10,
+    lap_on_screen=11 → as_his_hud_numbers_it(10)=11 → 11-11=0 ≤ 0 → fresh).
+    """
+    from pitcrew.race.field import field_view
+
+    from dataclasses import dataclass as _dc
+
+    @_dc
+    class _FakeTrend:
+        # Must be a dataclass so `_snapshot` can `replace()` it.
+        seen: dict
+        def latest(self): return max(self.seen.values()) if self.seen else None
+        def closing_s_per_lap(self): return (0.0, 5)
+
+    # Both trends named CruisingChaos on the same lap (a crossing in progress).
+    # Ahead wins the tie (ahead_latest >= behind_latest).
+    _ahead_trend = _FakeTrend(seen={10: 0.494})
+    _behind_trend = _FakeTrend(seen={10: 0.355})
+
+    class _FakeBoard:
+        packet = 1000
+        places = {"CruisingChaos": 1, "Rocky": 3}
+
+    class _FakeState:
+        position = 2
+        lap = 10
+        laps_total = 29
+        laps_count_hedged = False
+        lap_history = None
+        fuel_per_lap_l = None
+        rivals = {}
+        lane = None
+        fuel_capacity_l = 100.0
+        # Both trend subjects name the same car (stale after the crossing).
+        gap_ahead_name = "CruisingChaos"
+        gap_behind_name = "CruisingChaos"
+        gap_ahead = _ahead_trend
+        gap_behind = _behind_trend
+        def lap_on_screen(self): return 11
+
+    fv = field_view(_FakeState(), board=_FakeBoard(), packet=1010)
+
+    # OwnGap values must be kept (gap signal is per-side, not per-car — rule c).
+    assert fv.own_gap_ahead is not None, "ahead gap must not be blanked"
+    assert fv.own_gap_behind is not None, "behind gap must not be blanked"
+
+    # Conflict resolution: ahead wins tie → CruisingChaos keeps ahead.
+    # Behind loses → board P3=Rocky gets the behind gap 0.355.
+    rows_by_name = {str(r.name).lower(): r for r in fv.rows if r.name}
+    cruising = rows_by_name.get("cruisingchaos")
+    rocky = rows_by_name.get("rocky")
+    assert cruising is not None, "CruisingChaos must have a row"
+    assert cruising.gap_s == pytest.approx(0.494, abs=0.01), (
+        f"CruisingChaos (P1, ahead winner) should get 0.494; got {cruising.gap_s}"
+    )
+    assert rocky is not None, "Rocky must have a row (board fallback for behind)"
+    assert rocky.gap_s == pytest.approx(0.355, abs=0.01), (
+        f"Rocky (P3, board fallback) should get 0.355; got {rocky.gap_s}"
+    )
+
+
+def test_s188_fix6_race_mode_sectors_is_none():
+    """Fix 6: in race mode HistoryRow.sectors is None, not (None, None, None).
+
+    The frontend hides the sector columns when sectors is None.  A tuple of
+    Nones would render '--' in three cells that should not appear at all.
+    """
+    from pitcrew.ui.driver_view import history_rows
+
+    # Minimal lap history: one lap, no plan deltas.
+    lap_history = [{"lap": 1, "lap_ms": 95000, "fuel_used_l": 8.5,
+                    "pit": False, "counted": True}]
+    rows = history_rows(lap_history, kind="race")
+    assert len(rows) == 1
+    assert rows[0].sectors is None, (
+        f"race mode sectors must be None, got {rows[0].sectors!r}"
+    )
+
+
+def test_s188_fix6_practice_mode_sectors_tuple():
+    """Fix 6 inverse: practice mode still produces a sectors tuple."""
+    from pitcrew.ui.driver_view import history_rows
+
+    lap_history = [{"lap": 1, "lap_ms": 95000, "fuel_used_l": 8.5,
+                    "pit": False, "counted": True,
+                    "sectors_ms": [31000, 32000, 32000], "compound": "RH"}]
+    rows = history_rows(lap_history, kind="practice")
+    assert len(rows) == 1
+    assert isinstance(rows[0].sectors, tuple), (
+        f"practice mode sectors must be a tuple, got {rows[0].sectors!r}"
     )

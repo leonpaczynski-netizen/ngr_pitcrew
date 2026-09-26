@@ -103,25 +103,46 @@ def test_burn_per_lap_derived_from_consecutive_stops():
 # ----------------------------------------- fill verdict end-to-end
 
 
-def test_rival_stop_rows_fill_verdict_end_to_end():
-    """A single stop with known burn and laps → verdict matches fill_verdict.
+def test_rival_stop_rows_fill_verdict_with_laps_total():
+    """A single stop with laps_total supplied → verdict uses the RIVAL's horizon.
 
-    C3: burn is now derived from (100 - fuel_in) / stop_lap for a first stop
-    with no capacity supplied.  fuel_in defaults to 8.0, stop_lap=10 →
-    burn = (100 - 8) / 10 = 9.2 L/lap.
+    Hand-computed:
+      stop_lap=10, laps_total=30, fuel_out=40 L, burn = (100-8)/10 = 9.2 L/lap
+      rival's laps remaining = 30 - 10 = 20
+      needs = 20 × 9.2 = 184 L → short by 184 - 40 = 144 L → "stops again"
+
+    Previously the fallback used OUR laps_remaining=6 instead of 20, giving a
+    false "spare +54 L" (40 - 6×9.2 = -15.2 clamped — or computed differently —
+    and claiming the rival had fuel to spare when he did not).
     """
-    from pitcrew.race.fill_verdict import fill_verdict
+    stops = [_stop("Z", 10, fuel_out=40.0, partial=False, stop_id=1)]
+    rows = rival_stop_rows(stops, entered=["Z"], own_driver=None,
+                           laps_remaining=6, own_burn_l=8.0,
+                           laps_total=30)
+    assert len(rows) == 1
+    row = rows[0]
+    # Burn derived: (100 - 8) / 10 = 9.2 L/lap; rival needs 20×9.2=184 L,
+    # has 40 L → 144 L short → must stop again.
+    assert row.verdict is not None
+    assert row.verdict.verdict == "stops again"
+    assert row.verdict.margin_l == pytest.approx(-(184.0 - 40.0), abs=1.0)
 
+
+def test_rival_stop_rows_no_laps_total_returns_cant_tell():
+    """When laps_total is unknown the verdict is "can't tell", never a proxy.
+
+    Before the fix, `rival_stop_rows` fell back to `fill_verdict(laps_remaining)`
+    which used OUR remaining laps as the rival's horizon — wrong by definition
+    (the rival stopped on a different lap) and the defect that produced "SPARE +54 L"
+    at Sardegna Rd9 lap 25 (see s188 replay debrief 2026-09-26).
+    """
     stops = [_stop("Z", 10, fuel_out=40.0, partial=False, stop_id=1)]
     rows = rival_stop_rows(stops, entered=["Z"], own_driver=None,
                            laps_remaining=6, own_burn_l=8.0)
     assert len(rows) == 1
     row = rows[0]
-    # Burn derived: (100 - 8) / 10 = 9.2 L/lap (not own_burn_l=8.0).
-    derived_burn = (100.0 - 8.0) / 10
-    expected = fill_verdict(40.0, derived_burn, 6, partial=False, exit_is_a_bound=False)
-    assert row.verdict.verdict == expected.verdict
-    assert row.verdict.margin_l == pytest.approx(expected.margin_l)
+    assert row.verdict is not None
+    assert row.verdict.verdict == "can't tell"
 
 
 # ----------------------------------------- multi-stop grouping
@@ -199,4 +220,102 @@ def test_field_view_own_gap_staleness_old_lap():
     result = gap_still_stands(read_key, lap_on_screen, board_age)
     assert result is False, (
         "gap from an earlier lap must not stand (GAP_STALE_LAPS=0)"
+    )
+
+
+# ----------------------------------------- s188 regression (25 Sep 2026)
+# Sardegna Rd 9, session 188, lap 25 replay numbers.
+# laps_total=29, own laps_remaining=4 at the time of the replay.
+# The monitor was showing OUR remaining laps (4) instead of the rival's
+# laps from his stop to the flag — causing large spurious spare margins.
+
+
+def test_s188_magical_daddy_spare_on_limit():
+    """Magical daddy: fuel_out=73, burn=4.857, stop_lap=14, laps_total=29.
+
+    laps_to_flag = 29 - 14 = 15; need = 4.857 * 15 = 72.86; margin = 0.14 L.
+    Within _EXACT_TOLERANCE_L=1.0 → verdict "exact".
+    (The tablet shows "1 STOP? on the limit".)
+    """
+    from pitcrew.race.fill_verdict import _EXACT_TOLERANCE_L
+    stops = [_stop("Magical daddy", lap=14, fuel_in=32, fuel_out=73)]
+    rows = rival_stop_rows(
+        stops, entered=["Magical daddy"], own_driver="BEENI",
+        laps_remaining=4, own_burn_l=None,
+        laps_total=29,
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    # Burn derived from first stop: (100 - 32) / 14 = 4.857
+    assert row.burn_per_lap_l == pytest.approx((100.0 - 32.0) / 14, abs=0.01)
+    verdict = row.verdict
+    assert verdict is not None
+    # margin = 73 - 4.857*15 = 0.14, within reading error → "on the limit"
+    # (matches the tablet's "on the limit" vocabulary, rule 13)
+    assert verdict.verdict in ("on the limit", "spare"), (
+        f"expected 'on the limit' or 'spare', got {verdict.verdict!r}; "
+        f"margin={verdict.margin_l}"
+    )
+    assert verdict.margin_l == pytest.approx(73.0 - (100.0 - 32.0) / 14 * 15,
+                                              abs=0.1)
+
+
+def test_s188_car_153_stops_again():
+    """Car #153: fuel_out=48, burn=5.917, stop_lap=12, laps_total=29.
+
+    laps_to_flag = 29 - 12 = 17; need = 5.917 * 17 = 100.6; short = 52.6 L.
+    Not saveable (> 25% of needs) → verdict "stops again".
+    (The tablet shows "2 STOPS in by L21".)
+    """
+    stops = [_stop("Car #153", lap=12, fuel_in=29, fuel_out=48)]
+    rows = rival_stop_rows(
+        stops, entered=["Car #153"], own_driver="BEENI",
+        laps_remaining=4, own_burn_l=None,
+        laps_total=29,
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    verdict = row.verdict
+    assert verdict is not None
+    assert verdict.verdict == "stops again", (
+        f"expected 'stops again', got {verdict.verdict!r}; "
+        f"margin={verdict.margin_l}"
+    )
+
+
+def test_s188_stop_lap_converted_to_hud_domain():
+    """Stop lap from the DB is in completed-lap domain; must be shown as HUD lap.
+
+    DB stop_lap=14 → HUD lap 15 (as_his_hud_numbers_it adds 1).
+    """
+    stops = [_stop("Magical daddy", lap=14, fuel_in=32, fuel_out=73)]
+    rows = rival_stop_rows(
+        stops, entered=["Magical daddy"], own_driver=None,
+        laps_remaining=4, own_burn_l=None,
+        laps_total=29,
+    )
+    assert rows[0].last_stop_lap == 15, (
+        f"DB lap 14 should show as HUD lap 15; got {rows[0].last_stop_lap}"
+    )
+
+
+def test_s188_own_laps_remaining_not_used_as_rival_horizon():
+    """The rival's verdict must use laps_total - stop_lap, not own laps_remaining.
+
+    If own_laps_remaining (4) were used for Car #153 (fuel_out=48, burn=5.92):
+      need = 5.92 * 4 = 23.68; margin = +24.32 → "spare" (wrong).
+    With laps_total - stop_lap = 17:
+      need = 100.6; margin = -52.6 → "stops again" (correct).
+    """
+    stops = [_stop("Car #153", lap=12, fuel_in=29, fuel_out=48)]
+    rows = rival_stop_rows(
+        stops, entered=["Car #153"], own_driver="BEENI",
+        laps_remaining=4, own_burn_l=None,
+        laps_total=29,
+    )
+    verdict = rows[0].verdict
+    assert verdict is not None
+    assert verdict.verdict != "spare", (
+        "verdict must not use our laps_remaining (4) — that gives a wrong "
+        f"spare of ~24 L; got {verdict.verdict!r} margin={verdict.margin_l}"
     )

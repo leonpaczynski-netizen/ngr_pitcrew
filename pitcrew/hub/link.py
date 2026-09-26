@@ -91,6 +91,11 @@ class LeagueRace:
     # `Hub.signed_in`. Used only when nothing has actually been seen on the
     # board, which on the grid is always.
     entered: list = field(default_factory=list)
+    # True when `signed_in` found our driver but could not determine his
+    # division, so `entered` contains all confirmed entries across every
+    # division.  The monitor should caption "all divisions — yours not found"
+    # so the driver knows the list is wider than his own grid.
+    division_unknown: bool = False
     # **The most one round can pay in THIS league.** For a multi-class round
     # that is an overall finish PLUS a class finish plus both class bonuses -
     # measured at 47 in the Enduro against the 22 an outright table assumes.
@@ -196,8 +201,12 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
     # The same set that decides `rounds_left`, so the entry list and the
     # round count cannot disagree about which round is next.
     try:
-        out.entered = [n for n in hub.signed_in(found.id, already_run=done)
+        _signed_in_names, _div_unknown = hub.signed_in(
+            found.id, already_run=done,
+            division_for_driver_id=driver.id)
+        out.entered = [n for n in _signed_in_names
                        if n.strip().lower() not in barred]
+        out.division_unknown = _div_unknown
     except Exception:
         # Logged, not swallowed. A bare `except` here already cost one silent
         # regression: `barred` was read a few lines before it was assigned, and

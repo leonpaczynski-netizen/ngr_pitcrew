@@ -1209,6 +1209,13 @@ class RaceCoordinator:
         if self.state.lane.left(name, lap=self.state.lap) is not None:
             log("race").info("rival out of the lane: %s, after our lap %s",
                              name, self.state.lap)
+        # **REPLACE, do not merge burn** (rule 13, critic 26 Sep 2026).
+        # burn_per_lap_l and burn_stops are already the CUMULATIVE figure from
+        # rival_book.profile_of(...).burn_per_lap_l(car, circuit): they include
+        # every stop the DB has on file for this driver right now. Merging them
+        # with an existing Rival record would re-weight history already counted.
+        # The OCR rename path (controller._rename_race_rival) handles ordering
+        # independence by rebuilding from the DB after rename_driver_session.
         self.state.rivals[name] = Rival(
             name=name, stop=seen.stop, pitted=True,
             burn_per_lap_l=burn_per_lap_l, burn_stops=burn_stops,
