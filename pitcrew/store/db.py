@@ -1241,6 +1241,38 @@ class Store:
             conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?",
                          (at or _now(), session_id))
 
+    def mark_session_debriefed(self, session_id: int,
+                               note: str | None = None) -> bool:
+        """Set `sessions.debriefed_at` and record an `engineer_writes` row.
+
+        Idempotent: calling it a second time is a no-op and returns False.
+        Returns True on the first marking, False on every subsequent one.
+
+        A race is due for cleanup once it has ended AND either this has been
+        set OR 14 days have elapsed since it ended (see
+        `rival_history.is_race_session_due`).
+        """
+        row = self.get_session(session_id)
+        if row is None:
+            return False
+        if row.get("debriefed_at") is not None:
+            return False        # already marked — idempotent, no write
+        now = _now()
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET debriefed_at = ? WHERE id = ?",
+                (now, session_id))
+        self.note_engineer_write(
+            "session_debrief",
+            target_id=session_id,
+            event_id=row.get("event_id"),
+            author="race engineer (MCP)",
+            summary=(f"session {session_id} marked debriefed"
+                     + (f": {note}" if note else "")),
+            before=None,
+            after={"debriefed_at": now, "note": note})
+        return True
+
     def open_sessions(self) -> list[dict]:
         """Sessions with no end, newest first, each with its last sign of life.
 
@@ -1853,7 +1885,9 @@ class Store:
                      ("board_sightings", "driver"),
                      ("traffic", "rival"),
                      ("gap_reads", "subject"),
-                     ("series_teammates", "driver"))
+                     ("series_teammates", "driver"),
+                     # v22: the normalised history carries the driver name too.
+                     ("rival_race_history", "driver"))
 
     def rename_driver(self, old: str, new: str) -> int:
         """Give a driver his real name, and carry his whole history with him.
@@ -1942,10 +1976,12 @@ class Store:
     # Tables that carry a session_id alongside a driver name, and so can be
     # rewritten for ONE session without touching any other.
     _SESSION_NAME_COLUMNS = (
-        ("rival_stops",     "driver"),
-        ("board_sightings", "driver"),
-        ("board_positions", "driver"),
-        ("board_reads",     "name"),
+        ("rival_stops",          "driver"),
+        ("board_sightings",      "driver"),
+        ("board_positions",      "driver"),
+        ("board_reads",          "name"),
+        # v22: the normalised history is session-scoped too.
+        ("rival_race_history",   "driver"),
     )
 
     def rename_driver_session(self, session_id: int | None,
@@ -2151,6 +2187,67 @@ class Store:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY r.id"
         return [dict(r) for r in self._query(sql, params)]
+
+    # -------------------------------------------------------- rival_race_history
+
+    def upsert_rival_race_history(self, session_id: int, driver: str,
+                                  row: dict) -> None:
+        """Write one `rival_race_history` row.  Replaces any existing row for
+        the same (session_id, driver) pair (idempotent).
+
+        `row` must not contain 'id', 'session_id', 'driver' or 'derived_at'
+        — those are added here.  NULL is the correct value for any field that
+        was not measurable (rule 3).
+        """
+        now = _now()
+        fields = {k: v for k, v in row.items()
+                  if k not in ("id", "session_id", "driver", "derived_at")}
+        fields["session_id"] = session_id
+        fields["driver"] = driver
+        fields["derived_at"] = now
+        cols = ", ".join(fields)
+        placeholders = ", ".join("?" * len(fields))
+        with self._write() as conn:
+            conn.execute(
+                f"INSERT OR REPLACE INTO rival_race_history ({cols}) "
+                f"VALUES ({placeholders})",
+                list(fields.values()))
+
+    def rival_race_history(self, *,
+                           session_id: int | None = None,
+                           driver: str | None = None) -> list[dict]:
+        """Rows from `rival_race_history`, newest first.
+
+        Pass `session_id` to get one race's normalised rows.  Pass `driver`
+        to get one rival's history across all races.  Both may be combined.
+        """
+        sql = "SELECT * FROM rival_race_history"
+        where, params = [], []
+        if session_id is not None:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if driver is not None:
+            where.append("driver = ?")
+            params.append(driver)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC"
+        return [dict(r) for r in self._query(sql, params)]
+
+    def set_history_compacted(self, session_id: int) -> None:
+        """Mark a session as having had its bulk tables cleaned up."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET history_compacted_at = ? WHERE id = ?",
+                (_now(), session_id))
+
+    def board_reads_for_driver(self, session_id: int,
+                               driver: str) -> list[dict]:
+        """Board reads for one named driver in one session, in time order."""
+        return [dict(r) for r in self._query(
+            "SELECT at_s, pit_columns FROM board_reads "
+            "WHERE session_id = ? AND name = ? ORDER BY at_s",
+            (session_id, driver))]
 
     def list_laps(self, session_id: int) -> list[dict]:
         rows = self._query(

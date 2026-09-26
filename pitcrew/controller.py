@@ -1496,6 +1496,14 @@ class PitCrewController(QObject):
                 self._hub_memo = None
             with timed_step("  the orphaned-session sweep"):
                 self._close_orphaned_sessions()
+            # Cleanup is cheap when nothing is due — run off the UI thread so
+            # the window is not held up by a write-heavy compaction.
+            import threading as _threading
+            _threading.Thread(
+                target=self._run_cleanup,
+                name="rival-history-cleanup",
+                daemon=True,
+            ).start()
 
     def prewarm_for_sessions(self) -> None:
         """Pay, while the app idles, what the first session start used to pay
@@ -3206,6 +3214,14 @@ class PitCrewController(QObject):
 
 
     # ------------------------------------------------------- session hygiene
+
+    def _run_cleanup(self) -> None:
+        """Off the UI thread: normalise rival history and delete bulk tables."""
+        try:
+            from pitcrew.race.rival_history import cleanup_due_sessions
+            cleanup_due_sessions(self.store)
+        except Exception:
+            log("session").exception("rival-history cleanup raised")
 
     def _close_orphaned_sessions(self) -> None:
         """Close any session the last run left open, and say so.
@@ -7191,6 +7207,15 @@ class PitCrewController(QObject):
             self._stop_video(self.session_id)
             self.store.end_session(self.session_id)
             self._refresh_straights(self.session_id)
+            # After a race ends, try cleanup off the UI thread so the driver
+            # does not see a pause.
+            if self.session_kind == "race":
+                import threading as _threading
+                _threading.Thread(
+                    target=self._run_cleanup,
+                    name="rival-history-cleanup-post-race",
+                    daemon=True,
+                ).start()
             self.session_kind = None
             self._tell_settings_about_the_session()
             # `stop_practice` clears this and `stop_race` did not, so the

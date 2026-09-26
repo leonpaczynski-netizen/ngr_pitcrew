@@ -157,6 +157,14 @@ Versions, and what upgrading means here:
   per session — at most 20 cars, O(20) rows.  At ~100 bytes/row the total
   per-race write load is ~2 MB; negligible.
 
+**v22 adds `rival_race_history`** (26 Sep 2026, brief_rival_history.md).
+  One row per rival per race session, normalised from `board_positions`,
+  `gap_reads`, `rival_stops` and `board_reads` before those bulk tables are
+  cleaned up.  New table, so no migration function; the version moves so
+  `Store._init_schema` still refuses a file this build predates.
+  `sessions.debriefed_at` and `sessions.history_compacted_at` are pure
+  `ADDED_COLUMNS` on the existing `sessions` table.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -168,7 +176,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -1302,6 +1310,80 @@ CREATE TABLE IF NOT EXISTS name_resolutions (
 
 CREATE INDEX IF NOT EXISTS idx_name_resolutions_session
     ON name_resolutions(session_id, cluster_id);
+
+-- ----------------------------------------------------------------- v22
+-- **One row per rival per race session**, normalised from the raw sources
+-- before `board_reads` and `name_resolutions` are cleaned up.
+--
+-- Written by `race.rival_history.normalise_session` as part of the cleanup
+-- gate: the history is written and verified before anything is deleted, and
+-- `sessions.history_compacted_at` is set only after deletion succeeds.
+-- Re-running for a session replaces its rows (UNIQUE + OR REPLACE).
+--
+-- Everything computed rather than directly measured is tagged [DERIVED] in
+-- the column comment (rule 5).  Every aggregate carries its count (rule 4).
+-- Missing is NULL, never 0 (rule 3).  No clamping (rule 9).
+CREATE TABLE IF NOT EXISTS rival_race_history (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id              INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    driver                  TEXT    NOT NULL,
+    -- Race context, denormalised for read performance.
+    series                  TEXT,
+    circuit_key             TEXT,
+    car_name                TEXT,
+    race_laps               INTEGER,        -- laps_total / scheduled laps for this race
+    -- [DERIVED] Actual laps run, from MAX(laps.lap_num) for this session.
+    -- For a timed race the scheduled count is the lap CAP, not what ran.
+    -- Use race_laps_run for stop fractions; fall back to race_laps when NULL.
+    -- For a laps race, race_laps_run equals race_laps.
+    race_laps_run           INTEGER,
+    is_timed                INTEGER NOT NULL DEFAULT 0,   -- 1 = timed race
+    race_date               TEXT,           -- session.started_at date part
+    -- [DERIVED] Position data, from board_positions.
+    start_position          INTEGER,        -- his position on lap 1
+    finish_position         INTEGER,        -- his position on last observed lap
+    best_position           INTEGER,        -- lowest number seen (best finish)
+    worst_position          INTEGER,        -- highest number seen (worst finish)
+    places_gained           INTEGER,        -- start_position - finish_position
+                                            -- positive = net gain (moved forward)
+    places_gained_n         INTEGER,        -- laps over which positions were tracked
+    -- [DERIVED] distinct laps at which this driver appeared in board_positions
+    -- (i.e. at a lap crossing, where the app samples the leaderboard).
+    -- NOT the same as total board_reads rows (which are sampled at ~0.2–0.5 s).
+    laps_observed           INTEGER,
+    -- [DERIVED] Pace against us, from gap_reads where subject = driver.
+    -- Positive = we were closing at that rate.  NULL where GapTrend's noise
+    -- gate (TREND_WORTH_SAYING_S) refuses the slope or too few consecutive
+    -- laps exist.
+    gap_slope_s_per_lap     REAL,
+    gap_slope_n             INTEGER,        -- consecutive laps behind the slope
+    -- [DERIVED] Pit and fuel pattern, from rival_stops.
+    -- JSON array of per-stop objects, each: {lap, lap_fraction, fuel_in_l,
+    -- fuel_out_l, litres_added, fill_verdict, fill_bound, burn_per_lap_l,
+    -- burn_n, stint_laps, tyre_in, tyre_out, partial, left_view}.
+    stops_json              TEXT,
+    -- NULL when there is no board evidence for this driver (no board_positions
+    -- AND no board_reads rows) — we have no visibility into whether stops
+    -- happened.  0 means we had board coverage and observed no stops (rule 3).
+    stop_count              INTEGER,
+    -- [DERIVED] Board-observed pit windows minus filed rival_stops.  Evidence
+    -- of stops lost to visibility (board saw a car in the pit columns but no
+    -- rival_stop was filed for it).  NULL where board_reads holds no data for
+    -- this driver.  Not clamped — a negative value means rival_stops has more
+    -- records than the board counted, which is informative (rule 9).
+    pit_stops_board_unseen  INTEGER,
+    -- Evidence: a race where he was barely visible carries little weight.
+    board_reads_n           INTEGER,        -- [DERIVED] total board_reads rows for this driver
+    -- [DERIVED] seconds this driver was visible, summed from consecutive at_s
+    -- intervals in board_reads, each capped at 2× the median interval so that
+    -- view gaps (board hidden, driver off screen) are excluded.  NULL when
+    -- fewer than 2 timestamped reads exist (rule 5, rule 3).
+    board_secs_in_view      REAL,
+    derived_at              TEXT    NOT NULL,
+    UNIQUE(session_id, driver)
+);
+CREATE INDEX IF NOT EXISTS idx_rival_race_history_driver
+    ON rival_race_history(driver, session_id);
 """
 
 # Columns added to tables that already existed in an earlier version.
@@ -1653,7 +1735,27 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # carry the circuit in practice.
         ("circuit_key", "TEXT"),
     ),
+    "rival_race_history": (
+        # **v22 addendum (26 Sep 2026):** actual laps run, needed to compute
+        # correct stop fractions for timed races where race_laps is the
+        # scheduled cap, not the distance actually covered.
+        ("race_laps_run", "INTEGER"),
+    ),
     "sessions": (
+        # **v22: debrief marker and cleanup marker** (26 Sep 2026,
+        # brief_rival_history.md §1 and §3).
+        #
+        # `debriefed_at` is set by `mark_session_debriefed` (MCP tool) when
+        # the race-engineer debrief is complete.  A race is due for cleanup
+        # once it has ended AND either this is set OR 14 days have elapsed
+        # since it ended.
+        #
+        # `history_compacted_at` is set by `cleanup_due_sessions` after the
+        # rival history rows are written and the bulk tables deleted.  It is
+        # the idempotency guard: a session with it set is never cleaned up
+        # twice, regardless of `debriefed_at`.
+        ("debriefed_at", "TEXT"),
+        ("history_compacted_at", "TEXT"),
         # **Where the capture is, and the wall clock at video second zero.**
         # `tools/read_hud_wear.py` had to be handed the zero with `--offset`,
         # and its own comment admits the estimate is "a few seconds early".

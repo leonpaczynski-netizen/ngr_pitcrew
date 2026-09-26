@@ -199,6 +199,76 @@ def _rival_verdict(
     return FillVerdictResult(verdict="on the limit", margin_l=spare)
 
 
+def derive_stop_burn(
+    stop: dict,
+    prev_stop: dict | None = None,
+    capacity_l: float | None = None,
+) -> tuple[float | None, bool, str | None]:
+    """Shared burn-per-lap derivation for one pit stop.
+
+    Returns ``(burn_per_lap_l, burn_assumed, start_basis)``.
+
+    ``burn_assumed`` is True when the start-fuel figure was **not** a direct
+    measurement from a consecutive stop (rule 5: derived-from-assumption must
+    say so).  ``start_basis`` names the source:
+
+    * ``None``              — consecutive stops (measured)
+    * ``"assumed_start_l"`` — per-stop assumed start recorded by the wall
+    * ``"capacity"``        — tank capacity used as a proxy for full-tank start
+    * ``"100 L assumed"``   — neither available; 100 L is the fallback
+
+    A negative burned quantity returns ``(None, burn_assumed, start_basis)``
+    (rule 9 — return None, not 0).  A capacity of 0 (electric car) always
+    returns ``(None, False, None)``.
+
+    **This is the one burn-derivation expression** (rule 13).  Both
+    ``rival_stop_rows`` (live monitor) and ``normalise_session`` (history)
+    call this function so they cannot diverge.
+    """
+    cur_in = stop.get("fuel_in_l")
+    cur_lap = stop.get("lap")
+
+    if prev_stop is not None:
+        # Consecutive stops: measure from prev exit → current entry.
+        prev_out = prev_stop.get("fuel_out_l")
+        prev_lap = prev_stop.get("lap")
+        if (prev_out is None or cur_in is None
+                or prev_lap is None or cur_lap is None):
+            return None, False, None
+        stint_laps = cur_lap - prev_lap
+        if stint_laps <= 0:
+            return None, False, None
+        total_burned = _burn_per_lap(prev_out, cur_in)
+        if total_burned is None:
+            return None, False, None
+        return total_burned / stint_laps, False, None
+
+    # First stop: derive from assumed start fuel.
+    if capacity_l == 0:
+        return None, False, None          # electric car — no burn to compute
+
+    if cur_in is None or cur_lap is None or cur_lap <= 0:
+        return None, False, None
+
+    assumed_start = stop.get("assumed_start_l")
+    if assumed_start is not None:
+        start_fuel = float(assumed_start)
+        basis: str = "assumed_start_l"
+    elif capacity_l is not None and capacity_l > 0:
+        start_fuel = float(capacity_l)
+        basis = "capacity"
+    else:
+        start_fuel = 100.0
+        basis = "100 L assumed"
+
+    burned = start_fuel - cur_in
+    if burned <= 0:
+        # Burn cannot be negative (rule 9); 0 means "not yet consumed anything"
+        # which is most likely a wrong assumed-start figure.
+        return None, True, basis
+    return burned / cur_lap, True, basis
+
+
 def fill_verdict(
     fuel_out_l: float | None,
     burn_per_lap_l: float | None,
@@ -515,62 +585,19 @@ def rival_stop_rows(
         if live_rival is not None:
             burn = getattr(live_rival, "burn_per_lap_l", None)
 
-        if burn is None and len(driver_stops) >= 2:
-            # Two or more stops: derive from consecutive exit→entry figures.
-            prev = driver_stops[-2]
-            prev_out = prev.get("fuel_out_l")
-            cur_in = latest.get("fuel_in_l")
-            prev_lap = prev.get("lap")
-            cur_lap = latest.get("lap")
-            # I1: explicit None check — rule 3, a zero lap number is a real
-            # value; `or 0` would misread it as "no lap known" (rule 9).
-            if prev_lap is None or cur_lap is None:
-                stint_laps = None
-            else:
-                stint_laps = cur_lap - prev_lap
-            if (stint_laps is not None and stint_laps > 0
-                    and cur_in is not None and prev_out is not None):
-                total_burned = _burn_per_lap(prev_out, cur_in)
-                if total_burned is not None:
-                    burn = total_burned / stint_laps
-            # Multi-stop consecutive path failed: fall back to own burn, NOT
-            # the first-stop 100 L assumption (that is only valid for the
-            # first stop when no prior exit figure exists at all).
-            if burn is None:
+        if burn is None:
+            # Use derive_stop_burn — the one expression (rule 13).
+            prev_stop = driver_stops[-2] if len(driver_stops) >= 2 else None
+            burn, burn_assumed, start_basis_val = derive_stop_burn(
+                latest, prev_stop, capacity_l=capacity_l
+            )
+            # Multi-stop path failed → fall back to own burn.  First-stop
+            # path returns None on electric cars and negative burns.
+            if burn is None and prev_stop is not None:
+                # Consecutive derivation failed: fall back to own burn rather
+                # than the 100 L assumption (only valid for a first stop).
                 burn = own_burn_l
                 burn_assumed = False
-
-        elif burn is None and len(driver_stops) == 1:
-            # First stop only: derive from assumed start fuel (C3).
-            # The 100 L / capacity assumption is a model, not a reading —
-            # flagged `burn_assumed` (rule 5).
-            cur_in = latest.get("fuel_in_l")
-            cur_lap = latest.get("lap")
-            assumed_start = latest.get("assumed_start_l")
-
-            # capacity_l=0 is an electric car: no meaningful L/lap (rule 9).
-            if capacity_l == 0:
-                # Electric car guard: no burn computable.
-                pass  # burn stays None
-            else:
-                if assumed_start is not None:
-                    start_fuel = float(assumed_start)
-                    burn_assumed = True    # the assumed_start is itself an assumption
-                    start_basis_val = "assumed_start_l"
-                elif capacity_l is not None and capacity_l > 0:
-                    start_fuel = float(capacity_l)
-                    burn_assumed = True    # starting on a full tank is assumed
-                    start_basis_val = "capacity"
-                else:
-                    start_fuel = 100.0
-                    burn_assumed = True    # neither capacity nor per-stop datum
-                    start_basis_val = "100 L assumed"
-
-                if (cur_in is not None and cur_lap is not None
-                        and cur_lap > 0):
-                    burned = start_fuel - cur_in
-                    if burned > 0:
-                        burn = burned / cur_lap
 
         # Fall back to own burn if all derivation paths are exhausted.
         if burn is None:
