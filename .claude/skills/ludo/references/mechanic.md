@@ -210,6 +210,7 @@ never as a step of a diagnosis.**
 - `write_qualifying_plan` (MCP) — the qualifying plan, through `save_qualifying_plan`.
 - `write_measurement` (MCP) — a measurement row, through `store.record_measurement`, journalled with `note_engineer_write`.
 - `write_verdict` (MCP) — a verdict row, through `store.record_verdict`, journalled the same way.
+- `mark_session_debriefed` (MCP) — the final act of a debrief: sets `sessions.debriefed_at`, journalled with `note_engineer_write`. Triggers the cleanup that normalises rival history and frees bulk board data. Idempotent.
 
 - `tools/backfill_measurements.py --apply` — numbers written into prose, as measurement and verdict rows.
 - `tools/build_track_map.py --apply` — anchors each corner to a place on the earth. **Read the corner refusal above before this is so much as mentioned to him:** it is the one tool here that can make `refusals.md` false, and it cannot do so honestly until it writes `corner_models.source` as well as `corners_json`.

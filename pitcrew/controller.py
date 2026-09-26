@@ -43,7 +43,7 @@ from pitcrew.analysis.runs import (
     flag_opening_lap,
     fuel_implausible_laps,
 )
-from pitcrew.diagnostics import log, timed_step
+from pitcrew.diagnostics import attach_race_log, detach_race_log, log, timed_step
 from pitcrew.engineer.ptt import (
     PushToTalk,
     best_listener,
@@ -1267,6 +1267,10 @@ class PitCrewController(QObject):
             rig_only=lambda: self._rig_only_mode)
         self.listener: UDPListener | None = None
         self.session_id: int | None = None
+        # **Per-race log handler** — None outside a race, set by `start_race`
+        # and cleared by `stop_race`. Rule 11: always initialised here so
+        # `stop_race` (and `shutdown`) can safely call `detach_race_log`.
+        self._race_log_handler = None
         self._parse_errors = 0
         self._store_errors = 0
         # **Whether the rig is running without a recording session.** Set by
@@ -1492,6 +1496,14 @@ class PitCrewController(QObject):
                 self._hub_memo = None
             with timed_step("  the orphaned-session sweep"):
                 self._close_orphaned_sessions()
+            # Cleanup is cheap when nothing is due — run off the UI thread so
+            # the window is not held up by a write-heavy compaction.
+            import threading as _threading
+            _threading.Thread(
+                target=self._run_cleanup,
+                name="rival-history-cleanup",
+                daemon=True,
+            ).start()
 
     def prewarm_for_sessions(self) -> None:
         """Pay, while the app idles, what the first session start used to pay
@@ -3202,6 +3214,14 @@ class PitCrewController(QObject):
 
 
     # ------------------------------------------------------- session hygiene
+
+    def _run_cleanup(self) -> None:
+        """Off the UI thread: normalise rival history and delete bulk tables."""
+        try:
+            from pitcrew.race.rival_history import cleanup_due_sessions
+            cleanup_due_sessions(self.store)
+        except Exception:
+            log("session").exception("rival-history cleanup raised")
 
     def _close_orphaned_sessions(self) -> None:
         """Close any session the last run left open, and say so.
@@ -6241,6 +6261,11 @@ class PitCrewController(QObject):
             event["id"], "race",
             rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
+        # **Per-race log file, opened the moment the session row exists** (rule
+        # 11). `stop_race` is the caller that closes it. A race that crashes or
+        # is stopped by `shutdown` still calls `stop_race`, so the file is
+        # always closed — the detach is not the log's only closer.
+        self._race_log_handler = attach_race_log(self.session_id)
         self._session_opened()
         self._tell_settings_about_the_session()
         self.race_run_id = self.store.start_race_run(
@@ -6486,13 +6511,59 @@ class PitCrewController(QObject):
             self.bridge._lap_ruler = self._lap_ruler
             seed = self.store.driver_exemplars()
             self._last_session_id = self.session_id
+            # **OCR namer — Part A.** Build the closed vocabulary from every
+            # real driver name in the store (non-phantom) plus the hub's
+            # league-wide entry list for this race.  `driver_exemplars()` returns
+            # only named (non-Car-#N) drivers, so its keys are the right base.
+            # The league's `entered` list carries names the store may not have
+            # seen yet — new rivals who signed in on the hub.
+            try:
+                from pitcrew.telemetry.ocr_namer import OcrNamer
+                # **Archive names first** — the first-seen key wins on a
+                # collision (OcrNamer keeps first-seen).  Archive spelling is
+                # the ground truth; hub spelling (K_Graebs) may differ from the
+                # archived spelling (K.Graebs) after normalisation.
+                vocab = list(seed.keys())           # non-phantom names only
+                league = getattr(self, "_league", None)
+                if league is not None and hasattr(league, "entered"):
+                    vocab.extend(league.entered)
+                # **League-wide vocabulary** (issue 6, 26 Sep 2026).  The round's
+                # `entered` list only contains drivers who signed in for THIS race;
+                # a rival who raced but did not sign in (e.g. Chook) would be
+                # unnamed.  Query ALL drivers in the hub DB — cheap read-only.
+                try:
+                    from pitcrew.hub.read import Hub
+                    with Hub() as hub:
+                        if hub.available:
+                            for d in hub.drivers():
+                                name = d.driver_name or d.psn_name
+                                if name:
+                                    vocab.append(name)
+                except Exception:
+                    log("pitcrew").debug(
+                        "pit-wall: could not extend vocab from hub drivers")
+                ocr_namer = OcrNamer(vocab)
+                ocr_namer.new_session()             # rule 11: clear any prior state
+                ocr_namer.on_resolution = self._on_ocr_resolution
+                self._ocr_namer = ocr_namer
+                log("pitcrew").info(
+                    "pit-wall: OCR namer armed with %d vocabulary entries",
+                    len(vocab))
+            except Exception:
+                log("pitcrew").exception(
+                    "pit-wall: could not arm OCR namer; naming by exemplar only")
+                ocr_namer = None
+                self._ocr_namer = None
             self._pit_wall = PitWall(Roster(seed=seed),
                                      on_stop=self._on_rival_stop,
                                      on_enter=self._on_rival_enter,
                                      name_for=self.store.provisional_driver_name,
                                      where_on_lap=self._where_on_lap,
                                      on_gap=self._on_wall_gap,
-                                     on_board=self._on_wall_board)
+                                     on_board=self._on_wall_board,
+                                     ocr_namer=ocr_namer,
+                                     on_ocr_rename=self._on_ocr_rename_db,
+                                     on_board_reads=self._on_board_reads_data)
             self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
             log("pitcrew").info(
                 "pit-wall: watching, seeded with %d known driver%s",
@@ -6792,6 +6863,153 @@ class PitCrewController(QObject):
         except Exception:
             log("race").exception("a rival's entry could not be noted")
 
+    def _on_board_reads_data(self, rows_data: list) -> None:
+        """Worker thread: write one frame's board rows to board_reads.
+
+        Called by PitWall from `_see()` on the sampler's worker thread for
+        every frame that has identifiable rows. The write is off the capture
+        thread (rule: never block the capture path on I/O), batched per frame
+        (one transaction per frame ≈ one per second, ~8 rows each).
+        """
+        session = self.session_id or getattr(self, "_last_session_id", None)
+        if session is None or not rows_data:
+            return
+        try:
+            self.store.record_board_reads(session, rows_data)
+        except Exception:
+            log("pitcrew").exception("pit-wall: board_reads could not be filed")
+
+    def _on_ocr_resolution(self, cluster_id: int, name: str,
+                           source: str, score: float, votes: int) -> None:
+        """Worker thread: log an OCR name resolution to name_resolutions.
+
+        Fired by `OcrNamer.on_resolution` on every named/merge/rename event.
+        PitWall's own `on_named`, `on_merge`, `on_rename` callbacks handle the
+        roster update; this writes the audit trail to the DB.
+        """
+        import time as _time
+        session = self.session_id or getattr(self, "_last_session_id", None)
+        try:
+            self.store.record_name_resolution(
+                session,
+                cluster_id=cluster_id,
+                name=name,
+                source=source,
+                score=score,
+                votes=votes,
+                at_s=_time.monotonic(),
+            )
+        except Exception:
+            log("pitcrew").exception(
+                "pit-wall: name_resolution could not be filed")
+
+    def _on_ocr_rename_db(self, old_name: str, new_name: str) -> None:
+        """Worker thread: OCR resolved a phantom handle — rename in this session only.
+
+        Fires on the OCR namer's thread (not the Qt thread).  Two things happen:
+
+        1. The DB rename: ``rename_driver_session`` touches only rows whose
+           ``session_id`` matches the current session, so past sessions are
+           untouched (CLAUDE.md rule 11; CRITICAL 1, 26 Sep 2026).
+
+        2. The in-memory rivals dict is updated on the Qt thread via
+           ``QTimer.singleShot``.  ``RaceState.rivals`` is keyed by driver name
+           and is read at every crossing — touching it off the Qt thread is the
+           race the roster had.
+        """
+        session = self.session_id or getattr(self, "_last_session_id", None)
+        try:
+            moved = self.store.rename_driver_session(session, old_name, new_name)
+            log("pitcrew").info(
+                "pit-wall: OCR rename %r → %r in session %s: %d rival_stop row(s)",
+                old_name, new_name, session, moved)
+        except Exception:
+            log("pitcrew").exception(
+                "pit-wall: rename_driver_session raised for %r → %r",
+                old_name, new_name)
+        # Update the in-memory rivals dict on the Qt thread.
+        QTimer.singleShot(0, lambda: self._rename_race_rival(old_name, new_name))
+
+    def _rename_race_rival(self, old_name: str, new_name: str) -> None:
+        """Qt thread: rebuild the rivals dict entry for new_name from the DB.
+
+        Called after rename_driver_session has rewritten this session's rows,
+        so the DB is the authoritative source of burn history.  The burn
+        passed to note_rival_stop is already the CUMULATIVE profile figure;
+        merging it with an existing record would re-weight history already
+        counted (rule 13, rule 4).  The correct path: after the rename lands
+        in the DB, recompute burn from the DB so both orderings converge on
+        the same number.
+
+        - **stop**: the more recent of phantom.stop and existing.stop (by lap).
+        - **burn / burn_stops**: fresh from rival_book.profile_of(...); not a
+          combination of the two in-memory figures.
+        - **pitted**: True if either had pitted.
+        - **position**: existing's position, else phantom's.
+        - **ordering independence**: whether rename arrives before or after
+          note_rival_stop, both paths end by calling profile_of on the same
+          DB rows, so the result is identical.
+        """
+        race = self.race
+        if race is None:
+            return
+        phantom = race.state.rivals.get(old_name)
+        if phantom is None:
+            return
+        race.state.rivals.pop(old_name, None)
+        existing = race.state.rivals.get(new_name)
+
+        # Pick the more recent stop (higher lap number wins; None < any lap).
+        def _lap(r):
+            try:
+                return int(r.stop.lap) if (r.stop and r.stop.lap is not None) else -1
+            except (TypeError, ValueError):
+                return -1
+
+        if existing is not None and _lap(existing) >= _lap(phantom):
+            stop = existing.stop
+            exit_bound = existing.exit_is_a_bound
+            entry_bound = existing.entry_is_a_bound
+        else:
+            stop = phantom.stop
+            exit_bound = phantom.exit_is_a_bound
+            entry_bound = phantom.entry_is_a_bound
+
+        # Rebuild burn from the DB — the single source of truth.  The DB rows
+        # were just renamed by rename_driver_session, so profile_of now sees
+        # the phantom's stop(s) under new_name.
+        burn, stops = None, 0
+        try:
+            from pitcrew.race import rival_book
+            burn, stops = rival_book.profile_of(
+                self.store, new_name).burn_per_lap_l(
+                    getattr(self.bridge, "_car_name", None),
+                    self._circuit_now())
+            if not stops:
+                burn = None
+        except Exception:
+            burn = None
+
+        from pitcrew.race.rival_calls import Rival
+        updated = Rival(
+            name=new_name,
+            stop=stop,
+            pitted=(phantom.pitted or (existing.pitted if existing else False)),
+            burn_per_lap_l=burn,
+            burn_stops=stops or 0,
+            exit_is_a_bound=exit_bound,
+            entry_is_a_bound=entry_bound,
+            position=(existing.position if existing and existing.position is not None
+                      else phantom.position),
+        )
+        race.state.rivals[new_name] = updated
+        log("race").info(
+            "rivals dict: renamed %r → %r: stop L%s, burn %s L/lap from %d stop(s)",
+            old_name, new_name,
+            updated.stop.lap if updated.stop else "?",
+            f"{burn:.2f}" if burn is not None else "None",
+            stops)
+
     def _rival_stop_filed(self, seen) -> None:
         """Qt thread. Hand a watched stop to the coordinator so it can speak.
 
@@ -6856,9 +7074,21 @@ class PitCrewController(QObject):
         typical as evidence arrives, not less. A cluster with no name gets a
         provisional handle rather than being dropped, because the alternative
         is throwing away a stop that cannot be observed again.
+
+        **The own car's cluster is always skipped** — it is on the board
+        throughout every race and will accumulate the most sightings, so it
+        would always win a provisional mint and leave a Car #N row in the
+        drivers bank with the own car's bitmap, poisoning every future
+        session's name lookup (fault 1, coordinator 26 Sep 2026).
         """
+        own = wall.own_cluster_id
         for driver_id in wall.roster.drivers(min_sightings=PIT_WALL_MIN_SIGHTINGS,
                                              spaced=True):
+            if driver_id == own:
+                log("pitcrew").debug(
+                    "pit-wall: skipping own-car cluster %d (own row, not a rival)",
+                    driver_id)
+                continue
             try:
                 name = wall.roster.name_of(driver_id)
                 if not name:
@@ -6902,6 +7132,17 @@ class PitCrewController(QObject):
             log("pitcrew").exception("pit-wall: could not close cleanly")
         finally:
             self._pit_wall = None
+        # **Shut the OCR executor down** after the wall is cleared, so any
+        # in-flight OCR tasks can finish without a race reference to update.
+        # `_ocr_namer` is only set when `_start_pit_wall` succeeded; guard with
+        # `getattr` so a wall that never started does not raise here.
+        ocr_namer = getattr(self, "_ocr_namer", None)
+        if ocr_namer is not None:
+            try:
+                ocr_namer.shutdown()
+            except Exception:
+                pass
+            self._ocr_namer = None
 
     def stop_race(self) -> None:
         # A race ended without a flag still ends: whatever the rig held back
@@ -6945,6 +7186,13 @@ class PitCrewController(QObject):
         self._close_driver_board()
         # Before the session id is cleared: the stops are filed against it.
         self._stop_pit_wall()
+        # **Closed after the pit wall, so the wall's final health log lands in
+        # the race file** (rule 11: the caller, not the callee). `attach_race_log`
+        # is `start_race`'s counterpart; `stop_race` is both callers' inverse.
+        # `_race_log_handler` defaults to None in `__init__`, so this is safe
+        # even for a race that never fully started.
+        detach_race_log(getattr(self, "_race_log_handler", None))
+        self._race_log_handler = None
         self.stop_haptics()
         self.stop_wind()
         if self.listener is not None:
@@ -6959,6 +7207,15 @@ class PitCrewController(QObject):
             self._stop_video(self.session_id)
             self.store.end_session(self.session_id)
             self._refresh_straights(self.session_id)
+            # After a race ends, try cleanup off the UI thread so the driver
+            # does not see a pause.
+            if self.session_kind == "race":
+                import threading as _threading
+                _threading.Thread(
+                    target=self._run_cleanup,
+                    name="rival-history-cleanup-post-race",
+                    daemon=True,
+                ).start()
             self.session_kind = None
             self._tell_settings_about_the_session()
             # `stop_practice` clears this and `stop_race` did not, so the
@@ -8016,7 +8273,11 @@ class PitCrewController(QObject):
             racing = race is not None and (race.running or bool(
                 getattr(race.state, "finished", False)))
             if racing:
-                body = tablet.compose(race.field_view())
+                # **The same DriverState the phone and monitor are already
+                # building from.** One object passed in, so `temps_c` and
+                # `box_block` cannot produce two readings from one packet
+                # (rules 12 and 13).  `board` was built at line 7682.
+                body = tablet.compose(race.field_view(), board)
             else:
                 # `compose_practice` is the one that decides: anything that
                 # is not a practice or qualifying state comes back idle, so
@@ -8143,6 +8404,27 @@ class PitCrewController(QObject):
             self._practice_rack_failures = failures + 1
             return ()
 
+    def _practice_compound_bests(self) -> "list[dict] | None":
+        """Per-compound best laps for the practice tablet (Story 3, 25 Sep 2026).
+
+        Built from the same LapRow objects the rack uses, so compound_bests and
+        the compound column in the rack quote the same laps.  None if the rows
+        cannot be read - absent rather than empty so the tablet knows whether
+        the computation ran at all (rule 3).
+        """
+        from pitcrew.race.compound_bests import compound_bests_for_session
+
+        try:
+            return compound_bests_for_session(self.practice.rows())
+        except Exception as exc:                            # noqa: BLE001
+            failures = self.__dict__.get("_practice_bests_failures", 0)
+            if failures % BOARD_TRACEBACK_EVERY == 0:
+                log("ui").warning(
+                    "the practice compound bests could not be built: "
+                    "%s: %s", type(exc).__name__, exc)
+            self._practice_bests_failures = failures + 1
+            return None
+
     def _driver_board_state(self):
         """Everything the board draws, in one object.
 
@@ -8176,6 +8458,13 @@ class PitCrewController(QObject):
                 # whether it is SHOWN, and its guard is already the right
                 # one: an empty rack never replaces the live board.
                 history=self._practice_history(),
+                # **Per-compound best laps for the practice tablet** (Story 3,
+                # 25 Sep 2026).  Built from the same LapRow objects the rack
+                # draws from so the compound column and the compound best agree
+                # about the same laps (rules 12 and 13).  An empty list is a
+                # valid result: a session with laps but no compound reads, which
+                # is itself a finding and must not be collapsed to None (rule 3).
+                compound_bests=self._practice_compound_bests(),
                 **fields)
         state = self.race.state
         has_plan = bool(getattr(self.race, "_stints", None))
@@ -8347,6 +8636,16 @@ class PitCrewController(QObject):
         # `laps_completed` drifts off it after a crossing lost in the lane.
         base = replace(base, lap_number=state.lap_on_screen(),
                        history=tuple(getattr(state, "lap_history", ()) or ()))
+        # ---- rival stop table (Story 2, 25 Sep 2026) ------------------------
+        # Scoped to the current session so last race's stops do not appear.
+        # Built here rather than in a separate method so it is one place that
+        # needs to be told "race is over" rather than two (rule 13).
+        _league = getattr(self, "_league", None)
+        base = replace(
+            base,
+            rival_table=self._rival_table(state),
+            rival_all_divisions=bool(getattr(_league, "division_unknown", False)),
+        )
         if not in_box:
             return base
 
@@ -8412,6 +8711,89 @@ class PitCrewController(QObject):
         note = f"{words.board} - {name}" if name else words.board
         return GapView(seconds=seconds, note=note, urgent=words.urgent,
                        good=words.good)
+
+    def _rival_table(self, state) -> tuple:
+        """Pre-worded rival-stop rows for the race monitor (Story 2, 25 Sep 2026).
+
+        Scoped to `self.session_id` so last race's stops do not appear alongside
+        tonight's (rule 11 applied to the stop table).
+
+        **Guarded and empty on any fault.** This is optional decoration on the
+        running board; a raise here must not take the phone strip down with it.
+        Empty and None are the same for the panel, but empty is the honest
+        failure: the rows could not be built, not that no stops have happened.
+        """
+        from pitcrew.race.fill_verdict import rival_stop_rows
+
+        session_id = getattr(self, "session_id", None)
+        if session_id is None:
+            return ()
+        try:
+            raw_stops = self.store.rival_stops(session_id=session_id)
+            league = getattr(self, "_league", None)
+            entered = getattr(league, "entered", []) if league is not None else []
+            own_driver = self.store.driver_name()
+            laps_remaining = (state.laps_remaining()
+                              if callable(getattr(state, "laps_remaining", None))
+                              else None)
+            own_burn = getattr(state, "fuel_per_lap_l", None)
+            # C5: `exit_is_a_bound` and `entry_is_a_bound` are never persisted
+            # in the DB (they are live judgements from the pit wall thread).
+            # Overlay them onto each driver's latest stop dict before passing
+            # to `rival_stop_rows` so the monitor sees the same flags the
+            # voice sees about this race.
+            rivals = dict(getattr(state, "rivals", None) or {})
+            if rivals:
+                # Find the latest stop for each driver (last in the list by id).
+                latest_idx: dict[str, int] = {}
+                for i, stop in enumerate(raw_stops):
+                    key = str(stop.get("driver") or "").lower()
+                    latest_idx[key] = i
+                stops = list(raw_stops)
+                for driver_key, idx in latest_idx.items():
+                    rival = rivals.get(driver_key)
+                    if rival is None:
+                        for k, v in rivals.items():
+                            if str(k).lower() == driver_key:
+                                rival = v
+                                break
+                    if rival is not None:
+                        stop_copy = dict(stops[idx])
+                        stop_copy["exit_is_a_bound"] = bool(
+                            getattr(rival, "exit_is_a_bound", False))
+                        stop_copy["partial"] = bool(
+                            getattr(rival, "entry_is_a_bound",
+                                    stop_copy.get("partial", False)))
+                        stops[idx] = stop_copy
+            else:
+                stops = raw_stops
+            # C3: pass live rivals and car capacity so first-stop burns use
+            # the voice's own figure, and capacity-0 (electric) is guarded.
+            capacity = getattr(state, "fuel_capacity_l", None)
+            # P column: use rival_places_fresh from the race coordinator — the
+            # SAME source as the field table (rule 13: two calls that use the
+            # same words mean the same thing).  Freshness is gated by
+            # coordinator.board_age_s, which uses the same arithmetic as
+            # field.py (packet delta / SAMPLE_HZ vs BOARD_FRESH_S), so the
+            # monitor's P column goes "--" exactly when the old field view
+            # would have refused the place.
+            _race = getattr(self, "race", None)
+            _rstate = getattr(_race, "state", None) if _race is not None else None
+            _positions = (dict(getattr(_rstate, "rival_places_fresh", {}) or {})
+                          if _rstate is not None else None)
+            _board_age_s = getattr(_race, "board_age_s", None)
+            return rival_stop_rows(
+                stops, entered, own_driver, laps_remaining, own_burn,
+                rivals=rivals if rivals else None,
+                capacity_l=capacity,
+                laps_total=getattr(state, "laps_total", None),
+                positions=_positions,
+                board_age_s=_board_age_s,
+            )
+        except Exception:                                   # noqa: BLE001
+            log("race").exception(
+                "the rival stop table could not be built - empty table shown")
+            return ()
 
     def _board_fuel(self, state, *, has_plan: bool) -> dict:
         """The two in-hand figures and, where there is none, the reason.

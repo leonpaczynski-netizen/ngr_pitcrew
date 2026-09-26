@@ -311,11 +311,28 @@ def test_a_new_session_forgets_what_was_logged(monkeypatch):
     assert said == [("rear", "lit"), ("rear", "lit")]
 
 
-def test_the_history_holds_a_whole_window_at_a_half_second_grab():
+def test_the_history_holds_a_whole_window_at_the_base_interval():
+    # Base interval is 0.2 s (measured 26 Sep 2026); DAMAGE_KEEP = ceil(20 / 0.2) = 100.
     from pitcrew.telemetry.hud_session import DAMAGE_KEEP, DAMAGE_WINDOW_S
 
     hud = _hud()
-    assert hud._damage.maxlen == DAMAGE_KEEP >= DAMAGE_WINDOW_S / 0.5
+    assert hud._damage.maxlen == DAMAGE_KEEP >= DAMAGE_WINDOW_S / 0.2
+
+
+def test_damage_keep_covers_the_default_interval():
+    # DAMAGE_KEEP must always be >= ceil(DAMAGE_WINDOW_S / hud_sample_interval_s)
+    # for any non-zero default. Keeps the two constants in sync.
+    import math
+    from pitcrew.telemetry.hud_session import DAMAGE_KEEP, DAMAGE_WINDOW_S
+    from pitcrew.settings import Settings
+
+    interval = Settings().hud_sample_interval_s
+    if interval > 0:
+        required = math.ceil(DAMAGE_WINDOW_S / interval)
+        assert DAMAGE_KEEP >= required, (
+            f"DAMAGE_KEEP={DAMAGE_KEEP} is too small for the default "
+            f"interval {interval}s (need >= {required})"
+        )
 
 
 def test_bars_left_of_their_columns_are_refused_too(panels):

@@ -140,3 +140,11 @@ lap and the out-lap, and never feed them to a race burn, wear or stint figure
 
 Then close each open prediction in its ledger row and commit `brain/` — one
 commit per debrief.
+
+9. **Mark the session debriefed** — the final act.  Call the MCP tool
+   `mark_session_debriefed(session_id=<id>, note="debrief complete")` for
+   the race session that was just debriefed.  The session id is on the
+   `rival_stops` rows or from `laps(event_id, "race")`.  Without this call
+   the cleanup job falls back to a 14-day timer and the rival history may not
+   be written before the raw board data ages out.  The call is idempotent so
+   it is safe to repeat.

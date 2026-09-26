@@ -261,10 +261,13 @@ class Settings:
     # crossing. A crossing then files the last reading taken before it, which
     # is the rule `tools/read_hud_wear.py` already applies to recorded video.
     #
-    # 0 by default, and deliberately: on the `obs` source a two-second interval
-    # would be about a quarter of one core of OBS, which is not affordable.
-    # Set it with `hud_source = screen`, where the same rate costs 0.01%.
-    hud_sample_interval_s: float = 0.0
+    # Measured 26 Sep 2026 on this PC (Intel Core Ultra, 14 logical CPUs):
+    # full cycle p99 ≈ 137 ms (grab 17 ms + see 68 ms + gauge-near 40 ms +
+    # hygro 12 ms). At 0.2 s: p99/interval = 69% ≤ 70% (sampler never falls
+    # behind); at 0.15 s: 91% (fails). CPU share with OBS x264 recording:
+    # ~15% average across all cores — well under 25%.
+    # BURST_INTERVAL_S = 0.2 s matches the base, so burst never slows sampling.
+    hud_sample_interval_s: float = 0.2
     # **Whether the app starts and stops the OBS recording with the session.**
     #
     # The point is not the recording - he records anyway - it is the ZERO.

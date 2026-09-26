@@ -898,8 +898,85 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
             {"lap": 100 + n, "lap_ms": 599_999, "lap_delta_s": 99.999,
              "burn_l": 12.34, "burn_delta_l": None, "saving": None,
              "why": "an implausible fuel reading struck it",
-             "pit": False, "out": False}
+             "pit": False, "out": False,
+             "compound": "RS",
+             "sectors_ms": (38_412, 41_999, 25_000)}
             for n in range(40))))
+        # **The rival stops panel** (Story 2, 25 Sep 2026).  The panel
+        # displaces the tyre section when rival_table is non-empty.
+        # Probe both: 15 entries (the realistic worst — one shown as
+        # "+1 more") and 16 entries ("+0 more" / exact fit).
+        # Each row exercises: long driver name, bound markers (≤/≥), the
+        # burn_assumed asterisk, and multi-stop data (earlier_stops).
+        from pitcrew.race.fill_verdict import FillVerdictResult, RivalStopRow
+        long = "AVeryLongPSN16"   # exactly 14 chars — stays inside 16-char cap
+        def _row(i, *, dimmed=False, burn_assumed=False, start_basis=None,
+                 fuel_in_is_bound=False, fuel_out_is_bound=False,
+                 earlier_stops=()):
+            return RivalStopRow(
+                driver=f"{long}-{i:02d}" if i > 12 else f"RIVAL-{i:02d}",
+                last_stop_lap=i + 5,
+                fuel_in_l=8.0 + i * 0.3,
+                fuel_in_is_bound=fuel_in_is_bound,
+                fuel_out_l=45.0 - i * 0.5,
+                fuel_out_is_bound=fuel_out_is_bound,
+                compound_in="RH", compound_out="RS",
+                stop_count=1 + len(earlier_stops),
+                burn_per_lap_l=7.5 + i * 0.05,
+                burn_assumed=burn_assumed,
+                start_basis=start_basis,
+                dimmed=dimmed,
+                earlier_stops=earlier_stops,
+                verdict=FillVerdictResult(
+                    verdict="spare", margin_l=4.5, bound=False),
+            )
+        # Realistic start_basis values as the backend produces them.
+        # Row 0: first stop, capacity known → "capacity".
+        # Row 5: first stop, capacity unknown → "100 L assumed".
+        rival_15 = tuple([
+            _row(0, burn_assumed=True, start_basis="capacity"),
+            _row(1, fuel_in_is_bound=True,
+                 earlier_stops=({"lap": 3},)),
+            _row(2, fuel_out_is_bound=True),
+            _row(3, dimmed=True),
+            _row(4, earlier_stops=({"lap": 2}, {"lap": 7})),
+            _row(5, burn_assumed=True, fuel_in_is_bound=True,
+                 start_basis="100 L assumed"),
+            _row(6),
+            _row(7),
+            _row(8),
+            _row(9),
+            _row(10),
+            _row(11),
+            _row(12),
+            _row(13, dimmed=True),
+            _row(14),
+        ])
+        rival_16 = rival_15 + (_row(15),)
+        history_12 = tuple(
+            {"lap": 1 + n, "lap_ms": 599_999, "target_ms": 599_999,
+             "lap_delta_s": -99.999, "burn_l": 12.34, "burn_delta_l": 9.99,
+             "saving": bool(n % 2), "why": "beep col",
+             "pit": False, "out": False, "compound": "RS"}
+            for n in range(12))
+        race_hist_base = replace(
+            states[0], show_history=True, laps_of_fuel=99.9,
+            fuel_to_stop=-99.9, fuel_to_flag=-99.9, history=history_12)
+        # Three rival-panel probe states: 15 rows, 16 rows, and 15 rows with
+        # rival_all_divisions=True (the longest caption variant).
+        states.append(replace(race_hist_base, rival_table=rival_15))
+        states.append(replace(race_hist_base, rival_table=rival_16))
+        states.append(replace(race_hist_base, rival_table=rival_15,
+                               rival_all_divisions=True))
+        # Worst-case sub-lines: 16 rivals each with 1-3 earlier stops so all
+        # sub-line rows are visible.  Sub-lines are 14 px each and one per
+        # driver row, so this is the tallest rival-panel variant.
+        rival_worst = tuple(
+            _row(i, earlier_stops=tuple(
+                {"lap": j + 1} for j in range(min(i % 3 + 1, 3))))
+            for i in range(16)
+        )
+        states.append(replace(race_hist_base, rival_table=rival_worst))
         for state in states:
             view.update_state(state)
             app.processEvents()
@@ -974,6 +1051,34 @@ def test_a_dash_on_the_flag_block_carries_a_reason_and_not_a_burn(qt_app):
     # rather than by the code. On the rig the mutant renders the whole thing.
     assert "4.19" not in view.flag_stat._sub_text
     assert view.flag_stat._sub_text == "not measured"
+
+
+def test_fuel_flag_block_value_rounding_to_zero_prints_without_minus_sign(qt_app):
+    """-0.049 rounds to -0.0 in Python's f-string formatter. The panel must
+    print "0.0", not "-0.0": the minus sign implies the driver is short when
+    he is effectively level. The tone is still computed from the unrounded
+    value so the short/over signal survives — a fractionally negative number
+    shows in danger ink even though the printed digits are "0.0"."""
+    from pitcrew.ui.driver_view import DriverState, DriverView, fuel_flag_block
+
+    # Confirm the formatter itself — no Qt needed.
+    state_short = DriverState(fuel_to_flag=-0.049, fuel_to_flag_on="on the plan's fill")
+    block = fuel_flag_block(state_short)
+    assert block.value == "0.0", f"expected '0.0', got {block.value!r}"
+
+    # Tone still encodes short: the unrounded value is negative.
+    from pitcrew.ui.driver_view import TONE_URGENT
+    assert block.tone == TONE_URGENT, "a fractionally-short value must still carry danger ink"
+
+    # A fractionally-long value stays "0.0" with safe tone.
+    state_over = DriverState(fuel_to_flag=0.049, fuel_to_flag_on="on the plan's fill")
+    block_over = fuel_flag_block(state_over)
+    assert block_over.value == "0.0", f"expected '0.0', got {block_over.value!r}"
+
+    # Both render without raising.
+    view = DriverView()
+    view.update_state(state_short)
+    assert view.flag_stat.value.text() == "0.0"
 
 
 def test_a_stop_that_sizes_to_zero_litres_is_not_a_stop_nobody_sized(qt_app):

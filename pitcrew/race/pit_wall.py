@@ -112,6 +112,37 @@ MIN_READS = 2
 # so this discards fragments with a wide margin and no real stop near it.
 MIN_WATCHED_S = 15.0
 
+# **GT7's tank is 100 L for almost every car (CLAUDE.md §3.4).** A fuel
+# reading above this limit is a misread (AV1 compression can produce digit
+# artefacts like 261 L, 351 L). Refuse any reading above this cap and log it.
+# (Issue 7, 26 Sep 2026 coordinator replay review.)
+FUEL_CAPACITY_MAX_L = 100
+
+# Sub-threshold visit fragments are kept for this long after they closed.
+# When two fragments' clusters later merge (via OCR identity), the combined
+# readings are re-evaluated against the stop bar. 180 s matches the silence
+# timeout: a car that stopped and dropped off the board is re-found within
+# one lap, and an OCR resolution fires within seconds to minutes of the
+# capture.  (Fault 3, coordinator 26 Sep 2026.)
+FRAGMENT_TTL_S = 180.0
+
+# P3-2 (26 Sep 2026): maximum time gap in seconds between two fragments'
+# observation windows before they are considered TOO FAR APART to be the same
+# stop.  Matches db._FOLD_MAX_GAP_S — GT7's measured dead time before the
+# hose connects is ~16.9 s (rivals.DEAD_TIME_S), so 20 s is the minimum
+# separation that two genuinely different visits can have.  Two fragments more
+# than 20 s apart in wall-clock time cannot be the same pit stop.
+STOP_COMBINE_MAX_GAP_S = 20.0
+
+# P3-4 (26 Sep 2026): when a 1-read fragment is combined into another visit,
+# the single fuel reading must not be more than this many litres BELOW the
+# other visit's minimum reading.  A garbage OCR digit (e.g. 3 L on a car
+# filling from 40 L) would be far below the range; this tolerance allows for
+# minor read noise on the same fill.  Upper-bound check is strict (≤ exit):
+# a reading above the other visit's highest seen level is inconsistent with
+# having been taken during the same fill phase.
+_FRAGMENT_FUEL_TOLERANCE_L = 5
+
 # A driver must be seen this many times before he is a driver rather than a
 # misread. See `Roster.drivers`.
 MIN_SIGHTINGS = 20
@@ -150,6 +181,11 @@ class Visit:
     # Set by `_close` only when his row came back WITHOUT columns - the one
     # close whose last frame is the lane exit, where the disc flips.
     closed_on_absence: bool = False
+    # **The car dropped out of the visible rows before MIN_READS or
+    # MIN_WATCHED_S was met.** We know he stopped (pit columns were seen and
+    # a fuel figure was read), but we could not read the fill. Fuel out is
+    # unknown - set to None in `_close` rather than using `max(readings)`.
+    left_view: bool = False
 
     @property
     def entry_l(self) -> int | None:
@@ -202,11 +238,24 @@ class Visit:
         the same compound or the flip landed between two grabs; this returns
         the arrival compound as the best estimate and `compound_changed` is
         None, so nothing downstream reads "same tyre" as a fact.
+
+        **`left_view` stops return `None` — CLAUDE.md rule 3.** When the car
+        dropped off the visible board before the lane exit was seen, the disc
+        never flipped on screen: `left_on` is None, and there is no exit
+        frame to read the departure tyre from. Returning `arrived_on` here
+        would dress a guess as a measurement — a car that dropped off mid-fill
+        could have come back out on any compound. `compound_in` carries the
+        arrival tyre; this field carries what was confirmed at the exit only.
         """
         arrived = self.arrived_on
         left = self.left_on
         if left is not None and arrived is not None and left != arrived:
             return left
+        # **Rule 3: left_view means the exit was never seen.** The disc flips
+        # only as the car exits the lane, so without an exit frame the
+        # departure compound is not known — not `arrived_on` as a stand-in.
+        if self.left_view:
+            return None
         return arrived
 
     @property
@@ -392,6 +441,19 @@ class Seen:
     # `partial` does not cover this: it means the entry figure is an upper
     # bound, which is the opposite end of the same stop.
     exit_is_a_bound: bool = False
+    # **The car left the visible rows before MIN_READS or MIN_WATCHED_S was
+    # reached** (brief_names_stops.md part B). We know the stop happened (pit
+    # columns were seen, ≥1 fuel reading was taken, the identity is known) but
+    # the fill was not watched. `stop.fuel_out_l` is `None` - the exit figure
+    # is unknown, not `max(readings)`. Rule 3: a bound dressed as a reading.
+    left_view: bool = False
+    # Monotonic clock seconds bounding the observation window: when the first
+    # frame of this visit was seen and when the last read was taken.  Passed
+    # through to record_rival_stop so the duplicate-fold guard can use time
+    # overlap rather than lap ±1 alone (P3-1, 26 Sep 2026).  None when the
+    # Seen was not built from a Visit (e.g. tests that construct it directly).
+    visit_start_s: float | None = None
+    visit_end_s: float | None = None
 
 
 class PitWall:
@@ -405,7 +467,10 @@ class PitWall:
     def __init__(self, roster: Roster | None = None, *, on_stop=None,
                  on_enter=None, min_sightings: int = MIN_SIGHTINGS,
                  name_for=None, where_on_lap=None, on_gap=None,
-                 on_board=None, on_own_fill=None) -> None:
+                 on_board=None, on_own_fill=None,
+                 ocr_namer=None,
+                 on_board_reads=None,
+                 on_ocr_rename=None) -> None:
         self._roster = roster if roster is not None else Roster()
         # **How many identities it opened with, against how many cars are out
         # there.** Bathurst, 20 Sep 2026: `seeded with 160 known drivers` for
@@ -435,6 +500,20 @@ class PitWall:
         # can reach it without feeding twenty full frames per case. Twenty
         # board reads a test cost three minutes across this file.
         self._min_sightings = min_sightings
+        # **OCR namer**, optional. When provided, native pixel crops are
+        # buffered per cluster and OCR is run off the capture thread to name
+        # drivers the exemplar bank has never seen. Part A, 26 Sep 2026.
+        # Callbacks are set here so the namer can call back into the wall.
+        self._ocr_namer = ocr_namer
+        if ocr_namer is not None:
+            ocr_namer.on_named = self._ocr_named
+            ocr_namer.on_merge = self._ocr_merge
+            ocr_namer.on_rename = self._ocr_rename
+        # **Session-scoped DB rename callback** (CRITICAL 1, 26 Sep 2026).
+        # Fired from `_ocr_rename` so the controller can rename this
+        # session's rival_stops rows only.  Past sessions must not be
+        # touched by a live OCR event.
+        self._on_ocr_rename = on_ocr_rename
         # **Asked for a name at the moment a stop closes, not at the flag.** A
         # stop closes DURING the race, and whatever files it refuses a stop
         # with no driver on it - so a cluster the archive did not recognise had
@@ -460,6 +539,11 @@ class PitWall:
         # Worker thread, guarded: a hook that raises costs its own reading.
         self._on_gap = on_gap
         self._on_board = on_board
+        # **Batch of rich row data for the board_reads table.** Fired once per
+        # frame from `_see()` with a list of dicts carrying at_s, lap, position,
+        # cluster_id, name, name_source, pit_columns, fuel_l and compound.  The
+        # controller writes these to the DB off the capture thread.
+        self._on_board_reads = on_board_reads
         self._visits: dict[int, Visit] = {}
         self._absent: dict[int, int] = {}
         # When each driver's current run of absent frames began - see
@@ -479,6 +563,12 @@ class PitWall:
         self._row_y: dict[int, int] = {}
         self._pitted: set[int] = set()
         self._stops: list[Seen] = []
+        # Sub-threshold visit fragments (≥1 fuel read but below MIN_READS or
+        # MIN_WATCHED_S). Keyed by cluster id. Kept for FRAGMENT_TTL_S so that
+        # when two clusters later merge via OCR identity the combined readings
+        # can be re-evaluated against the stop bar.  (Fault 3, coordinator
+        # 26 Sep 2026.)
+        self._fragments: dict[int, tuple[float, "Visit"]] = {}
         # Our own stops, kept apart from `_stops` so that nothing which walks
         # the rivals can pick one up. See `OwnFill`.
         self._own_fills: list[OwnFill] = []
@@ -654,6 +744,7 @@ class PitWall:
         self._announced.clear()
         self._own = None
         self._stops = []
+        self._fragments.clear()
         # Rule 11: last race's fill is not this race's, and a stale one read
         # live is read as "he has just taken 40 litres".
         self._own_fills = []
@@ -671,10 +762,20 @@ class PitWall:
         self._frames = self._clean = 0
         for key in self._stage:
             self._stage[key] = 0
+        if self._ocr_namer is not None:
+            self._ocr_namer.new_session()
 
     @property
     def roster(self) -> Roster:
         return self._roster
+
+    @property
+    def own_cluster_id(self) -> int | None:
+        """The cluster id for the driver's own car row, or None if not seen.
+
+        Used by the controller to skip minting the own car as a phantom handle.
+        """
+        return self._own
 
     def stops(self) -> list[Seen]:
         return list(self._stops)
@@ -682,6 +783,20 @@ class PitWall:
     def own_fills(self) -> list[OwnFill]:
         """Our own stops this session, oldest first. Never rivals'."""
         return list(self._own_fills)
+
+    @property
+    def any_visit_open(self) -> bool:
+        """True while any car (rival or own) is standing in the pit lane.
+
+        Read by the HUD sampler on its worker thread to decide whether to
+        switch to the burst-sampling interval so the exit disc flip is caught.
+
+        **Thread-safe**: `_visits` is only ever written by `see()`, which
+        runs on the same sampler worker thread that reads this property (via
+        `hud_session._pass_frame` → `see()`). The dict non-empty check is
+        atomic under the GIL.
+        """
+        return bool(self._visits)
 
     def own_fill(self) -> OwnFill | None:
         """His fill: the one happening now, else the last one finished.
@@ -882,6 +997,16 @@ class PitWall:
             identified.add(driver)
             self._position[driver] = place
             self._position_at[driver] = now
+            # **Feed native crops to the OCR namer**, off the capture thread.
+            # Only rows with a native crop and a bitmap are worth OCR-ing;
+            # an own row reads inverted (white plate). The namer handles the
+            # own-cluster exclusion, but we skip own rows here for clarity.
+            if (self._ocr_namer is not None
+                    and not row.is_own
+                    and row.native_crop is not None):
+                self._ocr_namer.note_crop(
+                    driver, row.native_crop,
+                    roster_name=self._roster.name_of(driver))
 
         # **Before the pit rows, because the entry call needs it.** It was
         # computed only for the gaps, below, which is after every announcement
@@ -896,6 +1021,13 @@ class PitWall:
         # `close_all` at the flag, has no board to read it off.
         if own is not None:
             self._own = own
+            # **Exclude the own cluster from OCR** (issue 2, 26 Sep 2026).
+            # The own row's bitmap (white plate, dark ink) is the inverse of
+            # rival rows.  If it drifts into a rival cluster, OCR on that
+            # cluster will read the wrong name.  Mark the cluster as "own" so
+            # `OcrNamer.note_crop` never accumulates own-row crops.
+            if self._ocr_namer is not None:
+                self._ocr_namer.set_own_cluster(own)
         in_lane: set[int] = set()
         saw_pit_columns = False
         for pit in read_rows(frame, board, ladder):
@@ -939,10 +1071,23 @@ class PitWall:
             x0, y0, x1, y1 = pit.fuel_box
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
             if litres is not None:
-                self._stage["fuel_read"] += 1
-                if own is not None and driver == own:
-                    self._stage["own_fuel_read"] += 1
-                visit.readings.append(litres)
+                # **Refuse readings above the car's capacity.** GT7's tank is
+                # 100 L for almost every car (§3.4).  AV1 compression artefacts
+                # occasionally produce digit readings of 261, 351 L — physically
+                # impossible. A figure above capacity is not a reading; refuse
+                # and log it. CLAUDE.md rule 3: a wrong measurement filed as
+                # real is worse than None. (Issue 7, 26 Sep 2026.)
+                if litres > FUEL_CAPACITY_MAX_L:
+                    _log.info(
+                        "pit-wall: %s (driver %d) — fuel read %d L exceeds "
+                        "capacity (%d L); refused (AV1/OCR misread?)",
+                        self._roster.name_of(driver) or "unnamed",
+                        driver, litres, FUEL_CAPACITY_MAX_L)
+                else:
+                    self._stage["fuel_read"] += 1
+                    if own is not None and driver == own:
+                        self._stage["own_fuel_read"] += 1
+                    visit.readings.append(litres)
             self._announce_entry(driver, visit, lap, own)
             dx0, dy0, dx1, dy1 = pit.disc
             shape = (dx0, dx1 - dx0 + 1, dy1 - dy0 + 1)
@@ -984,6 +1129,36 @@ class PitWall:
                      for place, driver in frame_rows], own_place)
             except Exception:                        # pragma: no cover
                 _log.exception("pit-wall: the board hook raised")
+        # **Rich row data for the board_reads table.** Fired once per frame
+        # after both the roster and the pit-column loop have run, so
+        # cluster_id, name, pit_columns and fuel_l are all available.  The
+        # controller writes these batched to the DB off the capture thread.
+        if self._on_board_reads is not None and frame_rows:
+            try:
+                rows_data = []
+                for place, driver in frame_rows:
+                    name = self._roster.name_of(driver) if driver is not None else None
+                    visit = self._visits.get(driver) if driver is not None else None
+                    in_pit = driver in in_lane if driver is not None else False
+                    fuel_l = visit.readings[-1] if (visit and visit.readings
+                                                    and in_pit) else None
+                    comp = (visit.compounds[-1] if (visit and visit.compounds
+                                                    and in_pit) else None)
+                    rows_data.append({
+                        "at_s": now,
+                        "lap": lap,
+                        "position": place,
+                        "cluster_id": driver,
+                        "name": name,
+                        "name_source": (self._name_source_of(driver)
+                                        if driver is not None else None),
+                        "pit_columns": in_pit,
+                        "fuel_l": fuel_l,
+                        "compound": comp,
+                    })
+                self._on_board_reads(rows_data)
+            except Exception:                        # pragma: no cover
+                _log.exception("pit-wall: the board_reads hook raised")
         at_m = self.where()
         for trend, gap, step in ((self.ahead, ahead_gap, -1),
                                  (self.behind, behind_gap, +1)):
@@ -1120,7 +1295,15 @@ class PitWall:
                 # **Closed on the clock, not on seeing him leave.** The exit
                 # figure is therefore the highest reading anyone got, which is
                 # a lower bound on the fill rather than the fill.
-                done = self._close(driver, stale=True)
+                # **If the visit had at least one fuel reading, it is a
+                # left-view stop** - we saw the car in its box but it dropped
+                # off the visible board before the fill finished. The exit
+                # fuel is UNKNOWN (not max(readings), which would be a lower
+                # bound dressed as a reading). Rule 3 and brief part B.
+                left = bool(visit.readings)
+                if left:
+                    visit.left_view = True
+                done = self._close(driver, stale=True, left_view=left)
                 if done is not None:
                     closed.append(done)
         return closed
@@ -1131,9 +1314,27 @@ class PitWall:
         Stale by definition: a visit still open at the flag is one nobody saw
         end, so its exit figure is the highest reading taken rather than the
         fill.
+
+        **CRITICAL 3 (26 Sep 2026)**: the old implementation never passed
+        `left_view`, so a car that left the visible rows within 180 s of the
+        flag with ≥ 1 fuel read was silently dropped instead of filed with
+        `left_view=True` and `fuel_out_l=None`.  Apply the same
+        qualification `_close_stale` uses: if the visit has readings, it left
+        view; file it as such rather than discarding it.
         """
-        return [s for s in (self._close(d, stale=True)
-                            for d in list(self._visits)) if s is not None]
+        closed = []
+        for d in list(self._visits):
+            visit = self._visits.get(d)
+            left = bool(visit and visit.readings)
+            # **fire_on_stop=False** (issue 11, 26 Sep 2026): the caller
+            # (controller._stop_pit_wall) iterates the return value and calls
+            # _on_rival_stop itself. Letting _close ALSO fire on_stop would
+            # file each end-of-race stop twice — once here, once in the loop.
+            result = self._close(d, stale=True, left_view=left,
+                                 fire_on_stop=False)
+            if result is not None:
+                closed.append(result)
+        return closed
 
     @staticmethod
     def _is_a_stop(visit) -> bool:
@@ -1145,10 +1346,19 @@ class PitWall:
         """
         if visit is None or len(visit.readings) < MIN_READS:
             return False
-        return max(0.0, visit.last_s - visit.started_s) >= MIN_WATCHED_S
+        # **Rule 9 — no max(0.0, ...) on a measurement.** A negative
+        # duration means the reference is wrong, not that no time passed.
+        # If last_s < started_s the clock faulted; return False (cannot
+        # confirm it is a stop) rather than clamping to 0 and checking
+        # 0 >= MIN_WATCHED_S — which is also False, but does not say why.
+        if visit.last_s < visit.started_s:
+            return False
+        return (visit.last_s - visit.started_s) >= MIN_WATCHED_S
 
     def _close(self, driver: int, *, stale: bool = False,
-               on_absence: bool = False) -> Seen | None:
+               on_absence: bool = False,
+               left_view: bool = False,
+               fire_on_stop: bool = True) -> Seen | None:
         # **Per VISIT.** Keyed per driver for the session, a two-stop rival's
         # second entry - the one that decides the end of the race - was silent.
         self._announced.discard(driver)
@@ -1165,10 +1375,10 @@ class PitWall:
             self._absent.pop(driver, None)
             self._absent_since.pop(driver, None)
             _log.info("pit-wall: pit columns glimpsed on our own row on lap "
-                      "%s (%d fuel reads over %.0f s) - not a stop",
+                      "%s (%d fuel reads over %.3f s) - not a stop",
                       visit.lap if visit is not None else None,
                       len(visit.readings) if visit is not None else 0,
-                      max(0.0, visit.last_s - visit.started_s)
+                      (visit.last_s - visit.started_s)
                       if visit is not None else 0.0)
             return None
         if driver == self._own:
@@ -1211,21 +1421,17 @@ class PitWall:
             return None
         self._absent.pop(driver, None)
         self._absent_since.pop(driver, None)
-        if visit is None or len(visit.readings) < MIN_READS:
-            # **Said, because this is where a whole race of stops vanished.**
-            # In Sardegna Rd 9 every stop by a car on medium tyres ended here
-            # with 0 or 1 fuel reads - Rocky's and Boxhead's among them - and
-            # there was not one log line about either, so the defect upstream
-            # (a disc refused on shape) could not be seen from the log at
-            # all. CLAUDE.md rule 10: log the accepts, not only the refusals -
-            # and a refusal that is silent is worse than either.
+        if visit is None or len(visit.readings) == 0:
+            # **0 fuel reads means we never saw the fill** - a false column
+            # detection, not a stop. Said always, because this is where a
+            # whole race of stops vanished without a trace (Sardegna Rd 9).
+            # CLAUDE.md rule 10: log the accepts, not only the refusals.
             if visit is not None:
                 _log.info(
-                    "pit-wall: %s's visit dropped - %d fuel read(s), %d "
-                    "needed, over %.0f s from lap %s; not filed",
+                    "pit-wall: %s's visit dropped - 0 fuel reads (false "
+                    "column detection?) over %.3f s from lap %s; not filed",
                     self._roster.name_of(driver) or f"driver {driver}",
-                    len(visit.readings), MIN_READS,
-                    max(0.0, visit.last_s - visit.started_s), visit.lap)
+                    visit.last_s - visit.started_s, visit.lap)
             return None
         # **A cluster too rarely seen to be a driver cannot file a stop.**
         # Same run-length argument `Roster.drivers` makes: a real driver is on
@@ -1241,11 +1447,52 @@ class PitWall:
                       "not filed - that is a misread, not a driver",
                       self._roster.spaced_sightings(driver))
             return None
-        watched = max(0.0, visit.last_s - visit.started_s)
-        if watched < MIN_WATCHED_S:
+        # **Rule 9 — no max(0.0, ...) on a measurement.** A negative
+        # watched duration means the clock reference is wrong (two timestamps
+        # from the same monotonic clock should never go backward).  Clamping
+        # to 0 would make it look like a zero-second stop — a well-formed
+        # reading downstream cannot distinguish from a real one.  Return None
+        # instead, which signals "cannot tell" rather than "definitely no".
+        raw_watched = visit.last_s - visit.started_s
+        if raw_watched < 0:
+            _log.info(
+                "pit-wall: %s has a negative watched duration (%.3f s — "
+                "clock fault?); not filing",
+                self._roster.name_of(driver) or f"driver {driver}",
+                raw_watched)
+            return None
+        watched = raw_watched
+        if len(visit.readings) < MIN_READS:
+            # **Said, because this is where a whole race of stops vanished.**
+            # In Sardegna Rd 9 every stop by a car on medium tyres ended here
+            # with 0 or 1 fuel reads - Rocky's and Boxhead's among them - and
+            # there was not one log line about either, so the defect upstream
+            # (a disc refused on shape) could not be seen from the log at
+            # all. CLAUDE.md rule 10: log the accepts, not only the refusals -
+            # and a refusal that is silent is worse than either.
+            #
+            # **MIN_READS applies to left_view filings too** (coordinator
+            # 26 Sep 2026).  A lone 1-read visit or fragment must never be
+            # filed as a stop on its own; left_view only relaxes MIN_WATCHED_S
+            # and the exit reading.  A 1-read fragment stays eligible for
+            # recombination — the 2+1 PUNISHED path (two clusters watching the
+            # same stop, combined ≥ MIN_READS) must still qualify.
+            _log.info(
+                "pit-wall: %s's visit dropped - %d fuel read(s), %d "
+                "needed, over %.0f s from lap %s; not filed%s",
+                self._roster.name_of(driver) or f"driver {driver}",
+                len(visit.readings), MIN_READS,
+                watched, visit.lap,
+                " (left_view)" if left_view else "")
+            if len(visit.readings) >= 1:
+                self._store_fragment(driver, visit)
+            return None
+        if not left_view and watched < MIN_WATCHED_S:
             _log.info("pit-wall: %s discarded - %d reads over %.0f s is too "
                       "brief to be a stop", self._roster.name_of(driver)
                       or f"driver {driver}", len(visit.readings), watched)
+            if len(visit.readings) >= 1:
+                self._store_fragment(driver, visit)
             return None
         name = self._name_or_mint(driver)
         # **A fill that did not move was not watched, whatever else happened.**
@@ -1257,7 +1504,13 @@ class PitWall:
         # 83 L. Filed, because he did stop and that is a fact worth keeping,
         # but kept out of anything that computes a rate.
         visit.closed_on_absence = on_absence
-        if stale and visit.rising_when_last_read:
+        # **Propagate left_view into the visit object** so that `as_stop()`
+        # (specifically `Visit.compound`) can see it. `_close_stale` sets it
+        # before calling us; `close_all` does not - it passes the flag as a
+        # parameter only. Both paths converge here.
+        if left_view:
+            visit.left_view = True
+        if stale and not left_view and visit.rising_when_last_read:
             # Counted and said, not prevented - see
             # `Visit.rising_when_last_read` for why the readings alone cannot
             # decide this. Counted HERE, where a stop is actually filed and
@@ -1272,6 +1525,23 @@ class PitWall:
                       "on absence" if on_absence else "on the clock",
                       visit.readings[-1])
         stop = visit.as_stop()
+        # **left_view means the car dropped off the visible board.** Two cases:
+        #
+        # 1. Underqualified stop (below MIN_READS or MIN_WATCHED_S): the exit
+        #    is genuinely unknown — blank fuel_out_l (rule 3). These are filed
+        #    *only* because left_view relaxes the bar.
+        #
+        # 2. Fully-qualified stop (met MIN_READS and MIN_WATCHED_S): the exit
+        #    is max(readings), which IS a lower bound on the fill — not unknown.
+        #    Use exit_is_a_bound, not None. Filing None for a 59-read stop is
+        #    rule 3 backwards: it makes a measured figure look like a gap.
+        #    (Issue 5, 26 Sep 2026 coordinator replay review.)
+        well_watched = (len(visit.readings) >= MIN_READS
+                        and watched >= MIN_WATCHED_S)
+        exit_unknown = left_view and not well_watched
+        import dataclasses as _dc
+        if exit_unknown:
+            stop = _dc.replace(stop, fuel_out_l=None)
         no_fill = (stop.litres is not None and stop.litres <= 0)
         seen = Seen(driver=name, driver_id=driver,
                     stop=stop, reads=len(visit.readings),
@@ -1280,20 +1550,408 @@ class PitWall:
                     compound_reads=(1 if visit.compound_changed
                                     else len(visit.compounds)),
                     watched_s=watched, partial=visit.partial or no_fill,
-                    exit_is_a_bound=bool(stale))
+                    # exit_is_a_bound when: closed stale (not a clean exit),
+                    # OR the car left view on a qualified stop (last read is a
+                    # lower bound, fill may have continued after it dropped off).
+                    exit_is_a_bound=bool(stale and not exit_unknown),
+                    left_view=left_view,
+                    visit_start_s=visit.started_s,
+                    visit_end_s=visit.last_s)
+        # **In-memory duplicate guard** (coordinator 26 Sep 2026, Fix 2).
+        # Two clusters that watched the same stop will each call _close.  The
+        # DB fold (P3-1) deduplicates the row, but on_stop fires BEFORE the
+        # DB write, so without this guard the coordinator and tablet receive
+        # two stop events for one stop.  Check the already-filed stops for the
+        # same driver in the same-visit window; if found, suppress the second
+        # filing.  The time check mirrors the DB fold rule: windows that
+        # overlap or are within STOP_COMBINE_MAX_GAP_S are the same visit.
+        if seen.visit_start_s is not None:
+            for existing in self._stops:
+                if existing.driver != name:
+                    continue
+                if (existing.stop.lap is not None and stop.lap is not None
+                        and abs(existing.stop.lap - stop.lap) > 1):
+                    continue
+                if (existing.visit_start_s is None
+                        or existing.visit_end_s is None):
+                    continue
+                dup_gap = (max(existing.visit_start_s, seen.visit_start_s)
+                           - min(existing.visit_end_s, seen.visit_end_s))
+                if dup_gap <= STOP_COMBINE_MAX_GAP_S:
+                    _log.info(
+                        "pit-wall: %s lap %s — suppressing duplicate filing "
+                        "(already filed in same-visit window, gap %.1f s)",
+                        name, stop.lap, dup_gap)
+                    return None
         self._stops.append(seen)
         _log.info("pit-wall: %s (driver %d) stopped - in %s L, out %s L, %d "
-                  "reads over %.0f s%s", seen.driver or "unnamed", driver,
+                  "reads over %.0f s%s%s", seen.driver or "unnamed", driver,
                   visit.entry_l, visit.exit_l, seen.reads, seen.watched_s,
-                  " (joined mid-fill)" if seen.partial else "")
-        if self._on_stop is not None:
+                  " (joined mid-fill)" if seen.partial else "",
+                  (" (left view — exit unknown, underqualified)"
+                   if exit_unknown
+                   else " (left view — exit is a lower bound)"
+                   if left_view else ""))
+        if fire_on_stop and self._on_stop is not None:
             try:
                 self._on_stop(seen)
             except Exception:               # pragma: no cover - belt
                 _log.exception("pit-wall: stop handler failed")
         return seen
 
+    # --- OCR callbacks (Part A) -----------------------------------------
+
+    def _ocr_named(self, cluster_id: int, name: str,
+                   source: str, score: float, votes: int) -> None:
+        """OCR resolved a cluster to a real name: label the roster cluster.
+
+        Called from the OCR namer's worker thread, guarded. The roster's own
+        lock protects concurrent access.
+        """
+        try:
+            existing = self._roster.name_of(cluster_id)
+            self._roster.label(cluster_id, name)
+            _log.info("pit-wall: OCR named cluster %d as %r (was %r, "
+                      "source=%s, score=%.2f, votes=%d)",
+                      cluster_id, name, existing, source, score, votes)
+        except Exception:                           # pragma: no cover - belt
+            _log.exception("pit-wall: OCR named callback raised")
+
+    def _store_fragment(self, driver: int, visit: "Visit") -> None:
+        """Store a refused sub-threshold visit as a fragment for later merging.
+
+        When two clusters with the same driver are later joined by OCR, the
+        combined fragment may meet the stop bar.  Overrides any existing
+        fragment for this cluster (only one per cluster is needed, since they
+        accumulate readings as the visit ran).
+        """
+        import time as _t
+        closed_at = _t.monotonic()
+        self._fragments[driver] = (closed_at, visit)
+        _log.debug("pit-wall: fragment stored for cluster %d (%d read(s), "
+                   "%.0f s), TTL %.0f s",
+                   driver, len(visit.readings),
+                   visit.last_s - visit.started_s, FRAGMENT_TTL_S)
+
+    @staticmethod
+    def _combine_visits(a: "Visit", b: "Visit") -> "Visit":
+        """Merge two Visit objects into one, taking the best of each field.
+
+        Used when OCR identifies two clusters as the same driver.  Not the
+        same as an open-visit merge (which merges IDENTICAL reading lists)
+        — here the two visits may have read different fuel values at different
+        times and we want all of them.
+        """
+        import dataclasses
+        all_readings = sorted(set(a.readings) | set(b.readings))
+        return dataclasses.replace(
+            a,
+            started_s=min(a.started_s, b.started_s),
+            last_s=max(a.last_s, b.last_s),
+            readings=all_readings,
+            compounds=(a.compounds + b.compounds),
+            partial=(a.partial or b.partial),
+        )
+
+    def _ocr_merge(self, keep_id: int, drop_id: int, name: str) -> None:
+        """Two clusters OCR-named to the same person: merge them.
+
+        Called from the OCR namer's worker thread. We call the same
+        `_merge_converged` path the roster uses for bitmap-drift merges, but
+        only if the two ids are still alive — a cluster that has already been
+        aliased is already merged.
+
+        **CRITICAL 2 (26 Sep 2026)**: the old implementation aliased
+        drop_id → keep_id in the roster but left an open Visit under
+        drop_id.  That Visit then closed as its own stop (under the phantom
+        key) while a fresh Visit opened under keep_id — one real stop
+        splitting into two filed stops.
+
+        Fix: atomically transfer the drop Visit's readings, started_s,
+        compounds and partial flag into keep's Visit (or replace it if
+        keep has no open visit) BEFORE the roster merge.
+        """
+        try:
+            import dataclasses
+            keep = self._roster._resolve(keep_id)   # noqa: SLF001
+            drop = self._roster._resolve(drop_id)   # noqa: SLF001
+            if keep == drop:
+                return                              # already merged
+            # **Transfer open Visit before aliasing** so the stop closes
+            # under keep_id, not twice.
+            drop_visit = self._visits.pop(drop, None)
+            keep_visit = self._visits.get(keep)
+            if drop_visit is not None:
+                if keep_visit is None:
+                    # Simple re-key: continue watching under keep
+                    self._visits[keep] = drop_visit
+                    _log.info(
+                        "pit-wall: OCR merge — moved open visit from "
+                        "cluster %d to %d (%d readings so far)",
+                        drop, keep, len(drop_visit.readings))
+                else:
+                    # Both had open visits: combine under keep. Use the
+                    # earlier started_s; merge all readings; partial if
+                    # either was partial.
+                    all_readings = drop_visit.readings + [
+                        r for r in keep_visit.readings
+                        if r not in drop_visit.readings]
+                    merged = dataclasses.replace(
+                        keep_visit,
+                        started_s=min(drop_visit.started_s,
+                                      keep_visit.started_s),
+                        readings=sorted(all_readings),
+                        compounds=(drop_visit.compounds
+                                   + keep_visit.compounds),
+                        last_s=max(drop_visit.last_s, keep_visit.last_s),
+                        partial=(drop_visit.partial or keep_visit.partial),
+                    )
+                    self._visits[keep] = merged
+                    _log.info(
+                        "pit-wall: OCR merge — combined visits cluster %d"
+                        " and %d under %d (%d readings combined)",
+                        drop, keep, keep,
+                        len(merged.readings))
+            # Also transfer absent-counter state so close logic is unbroken.
+            if drop in self._absent:
+                self._absent[keep] = max(
+                    self._absent.get(keep, 0), self._absent.pop(drop))
+            self._absent_since.pop(drop, None)
+            # **OCR identity is the name, not the bitmap distance.**
+            # `_merge_converged` checks bitmap distance ≤ SAME_NAME_MAX_DIFF
+            # (0.58), but OCR same-driver pairs from AV1 video typically measure
+            # 0.61-0.90 — so ~100 of 103 merge calls had no effect in s213/s188.
+            # Use `force_merge`, which bypasses the distance check while still
+            # honouring the "seen side-by-side in one frame" veto (issue 1,
+            # 26 Sep 2026 coordinator replay review).
+            self._roster.force_merge(keep, drop, name)
+            # **Fragment re-evaluation (fault 3, coordinator 26 Sep 2026).**
+            # Sub-threshold visits that were refused when they closed may
+            # qualify once their cluster is merged with another — e.g. two
+            # clusters that each watched 1-2 s of the same stop combine to
+            # cover the full stop duration and meet MIN_READS + MIN_WATCHED_S.
+            self._merge_fragments_after_ocr(keep, drop)
+        except Exception:                           # pragma: no cover - belt
+            _log.exception("pit-wall: OCR merge callback raised")
+
+    def _merge_fragments_after_ocr(self, keep: int, drop: int) -> None:
+        """Re-evaluate sub-threshold fragments after an OCR cluster merge.
+
+        Called from ``_ocr_merge`` after the roster merge.  If either cluster
+        had a fragment in the holding area, combine them (and any open visit
+        under ``keep``) and re-check against the stop bar.  Files via
+        ``on_stop`` if the combined visit qualifies.  Expired fragments
+        (> FRAGMENT_TTL_S old) are discarded without re-evaluation.
+        """
+        import time as _t
+        now = _t.monotonic()
+
+        keep_entry = self._fragments.pop(keep, None)
+        drop_entry = self._fragments.pop(drop, None)
+
+        # Discard expired fragments.
+        def _fresh(entry):
+            if entry is None:
+                return None
+            closed_at, visit = entry
+            if now - closed_at > FRAGMENT_TTL_S:
+                _log.debug("pit-wall: fragment for cluster expired (%.0f s old)",
+                           now - closed_at)
+                return None
+            return visit
+
+        keep_frag = _fresh(keep_entry)
+        drop_frag = _fresh(drop_entry)
+
+        if keep_frag is None and drop_frag is None:
+            return  # nothing to re-evaluate
+
+        # **P3-2**: require time proximity before combining two fragments.
+        # Two fragments separated by more than STOP_COMBINE_MAX_GAP_S cannot
+        # be from the same pit stop — a GT7 stop cannot restart within that
+        # gap.  If they are too far apart, evaluate the keep fragment alone and
+        # discard the drop fragment (the drop cluster has already been merged
+        # into keep by _ocr_merge; there is nowhere else for it to go).
+        if keep_frag is not None and drop_frag is not None:
+            gap = (max(keep_frag.started_s, drop_frag.started_s)
+                   - min(keep_frag.last_s, drop_frag.last_s))
+            if gap > STOP_COMBINE_MAX_GAP_S:
+                _log.info(
+                    "pit-wall: fragments for clusters %d and %d are %.0f s "
+                    "apart (max %.0f s); not combining — keep fragment "
+                    "evaluated alone, drop fragment discarded",
+                    keep, drop, gap, STOP_COMBINE_MAX_GAP_S)
+                drop_frag = None
+
+        # Combine fragments with each other, applying the P3-4 consistency
+        # check on every 1-read fragment before it is merged.
+        combined: "Visit | None" = None
+        for v in filter(None, [keep_frag, drop_frag]):
+            if combined is None:
+                combined = v
+            else:
+                # **P3-4**: a 1-read fragment combined into a multi-read visit
+                # must have its single reading within the other visit's fuel
+                # range.  A garbage OCR digit (e.g. 3 L on a car filling from
+                # 40 L) can be stored as a fragment but must not corrupt the
+                # real reading set.  Check applies in both directions: if the
+                # incoming fragment has 1 read, check it against the combined;
+                # if the combined has 1 read, check it against the incoming.
+                if len(v.readings) == 1 and combined.readings:
+                    single = v.readings[0]
+                    entry = min(combined.readings)
+                    exit_l = max(combined.readings)
+                    if not (single >= entry - _FRAGMENT_FUEL_TOLERANCE_L
+                            and single <= exit_l):
+                        _log.info(
+                            "pit-wall: 1-read fragment (%d L) is inconsistent "
+                            "with combined readings %s (entry %d, exit %d, "
+                            "tolerance %d L); fragment dropped",
+                            single, combined.readings, entry, exit_l,
+                            _FRAGMENT_FUEL_TOLERANCE_L)
+                        continue  # skip this fragment
+                elif len(combined.readings) == 1 and v.readings:
+                    single = combined.readings[0]
+                    entry = min(v.readings)
+                    exit_l = max(v.readings)
+                    if not (single >= entry - _FRAGMENT_FUEL_TOLERANCE_L
+                            and single <= exit_l):
+                        _log.info(
+                            "pit-wall: existing 1-read combined (%d L) is "
+                            "inconsistent with incoming readings %s (entry %d,"
+                            " exit %d); replacing with the larger visit",
+                            single, v.readings, entry, exit_l)
+                        combined = v
+                        continue
+                combined = self._combine_visits(combined, v)
+
+        open_visit = self._visits.get(keep)
+        if open_visit is not None and combined is not None:
+            # **P3-2 (open-visit branch)**: also check proximity against the
+            # open visit.  A fragment from a different stop should not be
+            # merged into the current one.
+            gap = (max(open_visit.started_s, combined.started_s)
+                   - min(open_visit.last_s, combined.last_s))
+            if gap > STOP_COMBINE_MAX_GAP_S:
+                _log.info(
+                    "pit-wall: combined fragment (started %.0f s) is %.0f s "
+                    "from the open visit (started %.0f s); not merging into "
+                    "open visit — evaluating fragment alone",
+                    combined.started_s, gap, open_visit.started_s)
+            else:
+                # Extend the OPEN visit with the fragment readings so that
+                # when it closes naturally it has the full evidence.
+                import dataclasses
+                extended = dataclasses.replace(
+                    open_visit,
+                    started_s=min(open_visit.started_s, combined.started_s),
+                    readings=sorted(
+                        set(open_visit.readings) | set(combined.readings)),
+                    compounds=(open_visit.compounds + combined.compounds),
+                    partial=(open_visit.partial or combined.partial),
+                )
+                self._visits[keep] = extended
+                _log.info(
+                    "pit-wall: fragment merged into open visit for cluster %d "
+                    "(%d → %d readings)", keep,
+                    len(open_visit.readings), len(extended.readings))
+                return
+
+        if combined is None:
+            return
+
+        # No open visit: re-evaluate the combined fragment directly.
+        # Always treat as left_view (car already dropped off the board).
+        # Temporarily place in _visits so _close can process it.
+        if keep in self._visits:
+            return   # open visit appeared between pop and here; skip
+
+        # **Log-spam guard (coordinator 26 Sep 2026).**
+        # If the combined visit is still below the filing threshold, put it
+        # back silently without calling _close.  The "not filed" line already
+        # fired once when the fragment first entered the holding area; a
+        # re-evaluation that changes nothing must not fire it again.  Each
+        # re-evaluation that adds no reads is also pure overhead, so skip the
+        # _close path entirely here.
+        if len(combined.readings) < MIN_READS:
+            self._fragments[keep] = (now, combined)
+            return
+
+        self._visits[keep] = combined
+        result = self._close(keep, stale=True, left_view=True)
+        if result is not None:
+            _log.info(
+                "pit-wall: fragments re-evaluated and filed for cluster %d "
+                "(%s, %d reads, lap %s)",
+                keep, name if (name := self._roster.name_of(keep)) else "?",
+                len(combined.readings), combined.lap)
+        else:
+            _log.debug(
+                "pit-wall: combined fragment for cluster %d still "
+                "sub-threshold after merge (%d reads)", keep,
+                len(combined.readings))
+
+    def _ocr_rename(self, old_name: str, new_name: str) -> None:
+        """OCR replaced a phantom handle with a real name: update filed stops.
+
+        Called from the OCR namer's worker thread. Updates the `_stops` list
+        for this session — the coordinator's filed `Rival` objects are keyed
+        by name, so renaming them here keeps the live race's bookkeeping
+        consistent.
+
+        **Also fires `on_ocr_rename(old_name, new_name)`** (CRITICAL 1) so
+        the controller can rename this session's DB rows only.  Past sessions
+        must not be touched by a live OCR event.
+        """
+        try:
+            import dataclasses
+            count = 0
+            for i, stop in enumerate(self._stops):
+                if stop.driver == old_name:
+                    self._stops[i] = dataclasses.replace(stop,
+                                                         driver=new_name)
+                    count += 1
+            _log.info("pit-wall: renamed %r -> %r in %d filed stop(s)",
+                      old_name, new_name, count)
+            if self._on_ocr_rename is not None:
+                try:
+                    self._on_ocr_rename(old_name, new_name)
+                except Exception:                  # pragma: no cover - belt
+                    _log.exception("pit-wall: OCR rename DB callback raised")
+        except Exception:                          # pragma: no cover - belt
+            _log.exception("pit-wall: OCR rename callback raised")
+
     # --- naming ---------------------------------------------------------
+
+    def _name_source_of(self, driver: int) -> str | None:
+        """The source of this cluster's name: 'ocr', 'handle', 'exemplar', or None.
+
+        Used to populate ``board_reads.name_source`` with a real value
+        instead of the hardcoded ``'bitmap'`` that was there before
+        (IMPORTANT 6, 26 Sep 2026).
+
+        - ``'ocr'``      — resolved by Windows.Media.Ocr and matched against
+                          the league vocabulary (``OcrNamer._resolved``).
+        - ``'handle'``   — a provisional ``Car #N`` handle minted because the
+                          roster had no exemplar for this cluster.  The driver
+                          turns it into a person later; a rename carries the
+                          stops with it.
+        - ``'exemplar'`` — matched against a hand-labelled bitmap from the
+                          archive (the normal path for returning drivers).
+        - ``None``       — no name yet.
+        """
+        name = self._roster.name_of(driver)
+        if name is None:
+            return None
+        # OCR wins if the namer has a resolution for this cluster.
+        if (self._ocr_namer is not None
+                and self._ocr_namer.resolved_name(driver) is not None):
+            return "ocr"
+        # A provisional handle is any phantom name (e.g. "Car #N" or "F#N").
+        from pitcrew.telemetry.ocr_namer import _is_phantom
+        if _is_phantom(name):
+            return "handle"
+        return "exemplar"
 
     def named(self, min_sightings: int | None = None) -> list[tuple[int, str]]:
         """Driver ids that are worth a name, commonest first.

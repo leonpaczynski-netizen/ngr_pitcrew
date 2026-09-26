@@ -281,11 +281,118 @@ def compose_practice(state) -> dict:
         "lights": [{"word": word.upper(), "sub": sub, "ink": ink,
                     "unread": sub in UNREAD_LIGHT}
                    for word, sub, ink in lights],
+        # Per-compound best laps (Story 3, 25 Sep 2026).  The fastest compound
+        # seen today sits at index 0; the page draws one row per entry.  The
+        # key is absent rather than `[]` when `compound_bests` is None (no
+        # board state to read from) so the page can tell "nothing computed"
+        # from "computed and empty" - the latter is a session with laps but no
+        # compound reads, which is itself a finding (rule 3).
+        **({"compound_bests": [
+            {"compound": e["compound"],
+             "best_ms": e["best_ms"],
+             "lap_count": e["lap_count"]}
+            for e in (getattr(state, "compound_bests", None) or [])
+        ]} if getattr(state, "compound_bests", None) is not None else {}),
     }
 
 
-def compose(view: FieldView | None) -> dict:
-    """The whole payload. `None` is no session - the page says so (rule 11)."""
+def _laps_block(state, view) -> "dict | None":
+    """Laps figure for the own-car block: to the stop or to the flag.
+
+    When a stop is still to come (`state.laps_to_box` is not None and the
+    plan is running), the value and tone come VERBATIM from `box_block(state)`
+    — the same Block that fills ``own.box`` in `compose()`.  One expression
+    for the stop countdown (rule 13): the board may not re-derive a second
+    tone threshold or produce a different string for the same lap count.  On
+    the in-lap `box_block` returns ``"NOW"``; this block carries that too, so
+    ``own.laps.value`` is never ``"0"`` (rule 3).
+
+    When the plan has no further stop (`laps_to_box` is None but `has_plan`
+    is True), the figure is the laps remaining to the flag from
+    `view.own_laps_remaining` with label ``"to the flag"``.  None in all
+    other cases (no plan, no state, finished).
+
+    **The race-finished guard (I-B, 25 Sep 2026).** When `state.finished` is
+    True, `laps_remaining()` returns 0 and this function would emit
+    ``{"value": "0", "label": "to the flag"}`` — a zero that looks like a
+    measurement (rule 3) and hides the "FLAG" word `box_block` already
+    provides.  Return None instead; the page falls back to `own.box`, which
+    `box_block` has worded for the finish.  The same guard catches the short
+    window at the final crossing where `laps_remaining()==0` and
+    `finished==False` — that state is also one `box_block` already names.
+
+    `view.own_laps_remaining` is `state.laps_remaining()` filed by
+    `field_view()` — the same call the voice makes; the board may not
+    derive a second one (rule 13).
+    """
+    if state is None:
+        return None
+    # Finished race: box_block says "FLAG"; this block would say "0 to the
+    # flag" — a zero that is not a count (rule 3).  Return None.
+    if getattr(state, "finished", False):
+        return None
+    has_plan = bool(getattr(state, "has_plan", False))
+    laps_to_box = getattr(state, "laps_to_box", None)
+    if not has_plan:
+        return None
+    if laps_to_box is not None:
+        # Stop still to come (including the in-lap where laps_to_box == 0.0):
+        # take value and tone VERBATIM from box_block — the one expression for
+        # the stop countdown.  On the in-lap box_block returns "NOW"; this
+        # block carries that too, so own.laps.value is never "0" (rule 3).
+        # `box_block` is imported here, not at module scope, to avoid a Qt
+        # import cost (same pattern as `compose`).
+        from pitcrew.ui.driver_view import box_block
+        bb = box_block(state)
+        return {"value": bb.value, "label": "to the stop", "tone": bb.tone}
+    # No further stop: how many laps to the flag.
+    own_laps_remaining = getattr(view, "own_laps_remaining", None)
+    if own_laps_remaining is None:
+        return None
+    # Guard zero: at the final crossing `laps_remaining()` becomes 0 before
+    # `finished` is set.  "0 to the flag" is not a useful instruction and
+    # would hide box_block's own last-lap word (rule 3 and rule 13).
+    if own_laps_remaining <= 0:
+        return None
+    return {"value": str(own_laps_remaining), "label": "to the flag",
+            "tone": "plain"}
+
+
+def _gap_block(own_gap) -> dict | None:
+    """One side of the own-car gap, as the payload shape the brief specifies.
+
+    Returns None when the argument is None (P1 has no car ahead; last has
+    none behind).  The page renders null as "not applicable" rather than as
+    a dash that would look like a missed reading.
+
+    `name` is the resolved display name of the neighbouring car (None at
+    P1/last or when the board has not yet been read).
+    """
+    if own_gap is None:
+        return None
+    return {
+        "gap_s": own_gap.gap_s,
+        "unread": own_gap.unread,
+        "trend": own_gap.trend,
+        "rate_s_per_lap": own_gap.rate_s_per_lap,
+        "name": getattr(own_gap, "name", None),
+    }
+
+
+def compose(view: "FieldView | None", state=None) -> dict:
+    """The whole payload. `None` is no session - the page says so (rule 11).
+
+    `state` is the `DriverState` built in the same tick, passed from the
+    controller.  It is used for the own-car block: `temps_c` (comes off the
+    packet, not off the race-state) and `box_block` (needs `laps_to_box`,
+    `has_plan`, `finished`).  Without it the "own" key is omitted so the page
+    can tell "no block built" from "block has no data" (rule 3).
+
+    **One DriverState, passed in, not re-derived here.**  Building it a
+    second time would mean the tyre temps on the tablet could differ from the
+    ones on the phone, which is exactly the defect the comment at line 7683
+    of controller.py was written to prevent (rules 12 and 13).
+    """
     if view is None:
         return {"v": PAYLOAD_VERSION, "idle": True}
     rows, left_off = _window(list(view.rows), view.position)
@@ -321,6 +428,95 @@ def compose(view: FieldView | None) -> dict:
             "tone": tone,
         })
     age = view.board_age_s
+
+    # ---- own-car block (Story 1, 25 Sep 2026) --------------------------------
+    # Built only when a DriverState is passed in, so the test that builds just
+    # a FieldView still gets a well-formed payload (rule 3: absent ≠ null ≠ 0).
+    own = None
+    if state is not None:
+        from pitcrew.ui.driver_view import box_block
+        from pitcrew.ui.driver_view import history_rows, fuel_in_hand_parts
+
+        bb = box_block(state)
+        temps = getattr(state, "temps_c", None)
+
+        # **History rack: one expression for race laps (rule 13).** The same
+        # `history_rows(kind="race")` the monitor uses, so the two surfaces
+        # cannot show different lap times for the same lap.  The tablet renders
+        # a compact version (time, delta, burn) below the big gap cards.
+        hist_rows = history_rows(getattr(state, "history", None), kind="race")
+        history_payload = [
+            {
+                "lap": r.lap,
+                "time": r.time,
+                "delta": r.delta,
+                "burn": r.burn,
+                "note": r.note,
+                "delta_tone": r.delta_tone,
+                "burn_tone": r.burn_tone,
+            }
+            for r in hist_rows
+        ]
+
+        # **Fuel-in-hand: one expression (rule 13).** The monitor uses
+        # `fuel_in_hand_parts(state)` in the rack; we use exactly the same
+        # call so the tablet and monitor cannot disagree.  Each item is
+        # [words, ink] — the HTML page inks each part separately.
+        fuel_parts = fuel_in_hand_parts(state)
+        fuel_in_hand_payload = [
+            {"words": words, "ink": ink}
+            for words, ink in fuel_parts
+        ]
+
+        # George's last call text (one line for the header, spoken anyway).
+        last_call_obj = getattr(state, "last_call", None)
+        last_call_text = (
+            getattr(last_call_obj, "text", None)
+            if last_call_obj is not None else None
+        )
+
+        own = {
+            # The gap to each immediate neighbour.  `_gap_block` returns None
+            # at P1 / last place, which is the correct word for "no car there"
+            # as opposed to "gap exists and is expired".
+            "gap_ahead": _gap_block(getattr(view, "own_gap_ahead", None)),
+            "gap_behind": _gap_block(getattr(view, "own_gap_behind", None)),
+            # Tyre temps from the packet, not from the race state - same object
+            # the phone draws from, so the two surfaces cannot disagree (rule 13).
+            "temps_c": (None if temps is None
+                        else {"fl": temps.get("fl"), "fr": temps.get("fr"),
+                              "rl": temps.get("rl"), "rr": temps.get("rr")}),
+            # Mean lap-delta and burn-delta over the current stint, DERIVED.
+            # None when fewer than 2 qualifying laps - the count says so (rule 4).
+            "stint_lap_delta_ms": getattr(view, "own_stint_lap_delta_ms", None),
+            "stint_lap_laps": getattr(view, "own_stint_lap_laps", None),
+            "stint_burn_delta_l": getattr(view, "own_stint_burn_delta_l", None),
+            "stint_burn_laps": getattr(view, "own_stint_burn_laps", None),
+            # The box countdown, verbatim from `box_block` - "NOW" on the
+            # in-lap, never "0" (`box_block` is the one expression for it,
+            # and rule 13 says the board and the page must agree).
+            "box": {"value": bb.value, "sub": bb.sub, "tone": bb.tone},
+            # **Laps figure: to the stop when one is still to come; to the
+            # flag otherwise** (C1, 25 Sep 2026).  `laps_to_box` is the one
+            # expression for "laps to the next stop" (rule 13); the flag
+            # figure comes from `view.own_laps_remaining` which was filed by
+            # `field_view()` from `state.laps_remaining()` - the same
+            # expression the voice uses, so the board and the voice cannot
+            # give two different numbers for laps left (rule 13).
+            #
+            # None when neither a stop nor a plan exists (no plan running),
+            # never a zero or a dash (rule 3).
+            "laps": _laps_block(state, view),
+            # Race rack: my last laps with time, delta and burn, from the same
+            # history_rows(kind="race") the monitor draws.
+            "history": history_payload,
+            # Fuel-in-hand: [[words, ink], ...] from fuel_in_hand_parts, the
+            # same expression the monitor uses (rule 13).
+            "fuel_in_hand": fuel_in_hand_payload,
+            # George's last call, one line for the tablet header (spoken anyway).
+            "last_call_text": last_call_text,
+        }
+
     return {
         "v": PAYLOAD_VERSION,
         "idle": False,
@@ -346,4 +542,5 @@ def compose(view: FieldView | None) -> dict:
         "rows": drawn,
         "left_off": left_off,
         "why": view.why or ("" if drawn else "no other car read yet"),
+        **({"own": own} if own is not None else {}),
     }

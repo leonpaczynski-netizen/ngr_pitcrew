@@ -74,11 +74,12 @@ from pitcrew.settings import HUD_SOURCE_SCREEN
 from pitcrew.store.db import WEAR_HUD_VIDEO
 
 # The WET light's window: reads inside this many seconds, at least this many
-# readable, the last `HYGRO_KEEP` kept. With the driver's 2 s grab interval that
-# is the last ten seconds and three readings to say anything at all.
+# readable, the last `HYGRO_KEEP` kept. `HYGRO_KEEP` must cover the widest
+# window (COMPOUND_WINDOW_S = 30 s) at the base interval of 0.2 s:
+# ceil(30 / 0.2) = 150 — the same deque is shared by the compound reader.
 HYGRO_WINDOW_S = 10.0
 HYGRO_MIN_READS = 3
-HYGRO_KEEP = 8
+HYGRO_KEEP = 150
 # The compound label: this many agreeing reads inside the window, and not one
 # read of a different code among them, before the tyre counts as known.
 COMPOUND_WINDOW_S = 30.0
@@ -87,13 +88,14 @@ COMPOUND_MIN_AGREE = 3
 # `DAMAGE_MIN_LIT` lit reads of one arc inside `DAMAGE_WINDOW_S`; "no contact"
 # needs `DAMAGE_MIN_READS` readable grabs with not one red pixel on that arc
 # (621 clean frames carried none); anything between is None. Sized for the
-# driver's 2 s grab; `DAMAGE_KEEP` holds a full window down to a 0.5 s grab.
-# **Off at crossing-only sampling** (`hud_sample_interval_s = 0`, the default):
+# driver's 2 s grab; `DAMAGE_KEEP` holds a full window down to a 0.2 s grab
+# (ceil(DAMAGE_WINDOW_S / 0.2) = 100).
+# **Off at crossing-only sampling** (`hud_sample_interval_s = 0`):
 # one read a lap never reaches `DAMAGE_MIN_READS`, so every answer is None.
 DAMAGE_WINDOW_S = 20.0
 DAMAGE_MIN_READS = 3
 DAMAGE_MIN_LIT = 2
-DAMAGE_KEEP = 40
+DAMAGE_KEEP = 100
 
 # How long a pre-flight grab may take before it is called a failure.
 #
@@ -608,6 +610,12 @@ class HudSession:
         `lap_of` is called with no arguments and returns our current lap, or
         None. It is a callable rather than a number because this runs on the
         sampler's worker thread, at whatever moment the grab returns.
+
+        Also enables **pit burst sampling**: while any rival Visit is open
+        (car in the pit lane), the sampler increases its grab rate to
+        `BURST_INTERVAL_S` so the 0.25-0.35 s disc flip at the lane exit is
+        caught.  The burst drops back to the normal interval (plus a short
+        tail) when no visit is open.
         """
         self._wall = wall
         self._wall_lap = lap_of
@@ -619,6 +627,10 @@ class HudSession:
         source = getattr(sampler, "_source", None) if sampler else None
         if source is not None and hasattr(source, "whole"):
             source.whole = True
+        # **Enable burst sampling.** The sampler speeds up while visits are
+        # open, giving the disc reader enough frames to catch the exit flip.
+        if sampler is not None and hasattr(sampler, "set_burst_watch"):
+            sampler.set_burst_watch(wall)
 
     def stop_watching_board(self) -> None:
         self._wall = None
@@ -627,6 +639,9 @@ class HudSession:
         source = getattr(sampler, "_source", None) if sampler else None
         if source is not None and hasattr(source, "whole"):
             source.whole = False
+        # Clear the burst watch so the sampler does not burst between races.
+        if sampler is not None and hasattr(sampler, "set_burst_watch"):
+            sampler.set_burst_watch(None)
 
     def _pass_frame(self, frame) -> None:
         """Worker thread. Hand the grabbed frame to the pit wall.

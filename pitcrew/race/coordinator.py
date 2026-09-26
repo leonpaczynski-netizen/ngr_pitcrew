@@ -1209,6 +1209,13 @@ class RaceCoordinator:
         if self.state.lane.left(name, lap=self.state.lap) is not None:
             log("race").info("rival out of the lane: %s, after our lap %s",
                              name, self.state.lap)
+        # **REPLACE, do not merge burn** (rule 13, critic 26 Sep 2026).
+        # burn_per_lap_l and burn_stops are already the CUMULATIVE figure from
+        # rival_book.profile_of(...).burn_per_lap_l(car, circuit): they include
+        # every stop the DB has on file for this driver right now. Merging them
+        # with an existing Rival record would re-weight history already counted.
+        # The OCR rename path (controller._rename_race_rival) handles ordering
+        # independence by rebuilding from the DB after rename_driver_session.
         self.state.rivals[name] = Rival(
             name=name, stop=seen.stop, pitted=True,
             burn_per_lap_l=burn_per_lap_l, burn_stops=burn_stops,
@@ -3209,6 +3216,24 @@ class RaceCoordinator:
         from pitcrew.race.field import field_view
 
         return field_view(self.state, self.news.board(), packet=self._packets)
+
+    @property
+    def board_age_s(self) -> float | None:
+        """How old the last board read is, in seconds, from the packet count.
+
+        The SAME arithmetic field.py uses (packet delta / SAMPLE_HZ), so any
+        consumer that gates on this shares field.py's freshness criterion rather
+        than a second copy of the rule (rule 13).  Negative — the board was
+        stamped after the current packet, typically across a session boundary —
+        is returned as None (rule 9).
+        """
+        from pitcrew.telemetry.recorder import SAMPLE_HZ
+
+        board = self.news.board()
+        if board is None:
+            return None
+        age = (int(self._packets) - int(board.packet)) / SAMPLE_HZ
+        return age if age >= 0 else None
 
     def observed_fuel_per_lap(self) -> float | None:
         """The race's own burn, or None before enough green laps exist.

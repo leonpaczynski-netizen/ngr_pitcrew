@@ -163,10 +163,17 @@ class BoardRow:
     guess. `None` means the name could not be read, which is a real state: the
     board reorders between frames and a row caught mid-reorder has two names
     drawn over each other.
+
+    `native_crop` is the raw pixel strip (H×W×3 uint8) at the name position,
+    or `None` where the crop could not be extracted. Provided for OCR: binary
+    bitmaps lose the grayscale values the font recogniser needs. The crop is
+    approximately 32 px tall by the board width, extracted at `name_x - 6`
+    from the left edge so the leftmost glyph is not clipped.
     """
     y: int
     is_own: bool
     name: np.ndarray | None
+    native_crop: np.ndarray | None = None
 
     def matches(self, y: int) -> bool:
         """Whether a pit disc at this y belongs to this row."""
@@ -426,11 +433,19 @@ def read(frame, board, ladder=None) -> list[BoardRow]:
     if name_x is None or name_x >= right:
         return []
     out = []
+    half = _half(board)
+    # Back off 6 px from name_x so the leftmost glyph is not clipped - same
+    # offset `name_crops.py` measured in the groundtruth analysis.
+    crop_x = max(0, name_x - 6)
     for y in ys:
         is_own = y == mine
+        native = frame[max(0, y - half):y + half + 1, crop_x:right]
+        # An empty strip or one with no extent is not a crop.
+        nc = native if native.size > 0 and native.ndim == 3 else None
         out.append(BoardRow(
             y=y, is_own=is_own,
-            name=name_bitmap(frame, board, y, name_x, is_own, right)))
+            name=name_bitmap(frame, board, y, name_x, is_own, right),
+            native_crop=nc))
     return out
 
 
@@ -568,6 +583,59 @@ class Roster:
                       "" if self.counts["merged"] == 1 else "s")
             return keep
         return index
+
+    def force_merge(self, keep_id: int, drop_id: int, label: str) -> int:
+        """Merge drop_id into keep_id regardless of bitmap distance.
+
+        Used when OCR has named two clusters identically with sustained votes:
+        the identity IS the name, and the bitmap distance is irrelevant.
+
+        Unlike ``_merge_converged``, this never checks distance — the caller is
+        responsible for ensuring both clusters were given the SAME name by OCR
+        with at least ``MIN_VOTES`` agreeing crops.
+
+        Returns the surviving cluster id (always keep after resolution).
+        """
+        with self._lock:
+            keep = self._resolve(keep_id)
+            drop = self._resolve(drop_id)
+            if keep == drop:
+                return keep
+            if keep >= len(self._groups) or drop >= len(self._groups):
+                return keep
+            if drop in self._together.get(keep, ()):
+                # Seen side-by-side in one frame: provably two cars.
+                _log.info("roster: force_merge refused — %d and %d were seen "
+                          "side-by-side (OCR name collision, not same car)",
+                          keep, drop)
+                return keep
+            winner = self._groups[keep]
+            loser = self._groups[drop]
+            kept_seen, lost_seen = winner["seen"], loser["seen"]
+            kept_label, lost_label = winner["label"], loser["label"]
+            winner["seen"] += loser["seen"]
+            winner["spaced"] = winner.get("spaced", 0) + loser.get("spaced", 0)
+            winner["sum"] = winner["sum"] + loser["sum"]
+            winner["bits"] = (winner["sum"] / winner["seen"]) > 0.5
+            winner["label"] = label
+            self._alias[drop] = keep
+            apart = self._together.pop(drop, set()) | self._together.get(keep, set())
+            apart.discard(keep)
+            apart.discard(drop)
+            self._together[keep] = apart
+            for other_id in apart:
+                partners = self._together.setdefault(other_id, set())
+                partners.discard(drop)
+                partners.add(keep)
+            self.counts["merged"] += 1
+            _log.info("roster: OCR force-merge: cluster %d (%s, %d sighting%s)"
+                      " folded into cluster %d (%s, %d) by name %r; %d merge%s",
+                      drop, lost_label or "unnamed", lost_seen,
+                      "" if lost_seen == 1 else "s",
+                      keep, kept_label or "unnamed", kept_seen,
+                      label, self.counts["merged"],
+                      "" if self.counts["merged"] == 1 else "s")
+            return keep
 
     def see(self, bits) -> int | None:
         """Fold one sighting in and return the driver id it belongs to.

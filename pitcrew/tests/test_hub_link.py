@@ -55,8 +55,9 @@ class FakeHub:
     def hidden_drivers(self):
         return self._banned
 
-    def signed_in(self, series_id, on_or_after=None, already_run=()):
-        return list(self._entered)
+    def signed_in(self, series_id, on_or_after=None, already_run=(),
+                  division_for_driver_id=None):
+        return (list(self._entered), False)
 
     def precomputed_points(self, series_id):
         if self._precomputed is None:

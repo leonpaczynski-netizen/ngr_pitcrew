@@ -485,7 +485,7 @@ class SettingsScreen(QWidget):
 
         self.hud_interval = QDoubleSpinBox()
         self.hud_interval.setRange(0.0, 30.0)
-        self.hud_interval.setSingleStep(0.5)
+        self.hud_interval.setSingleStep(0.1)
         self.hud_interval.setDecimals(1)
         block_wheel(self.hud_interval)
         plate.body.addWidget(Field(

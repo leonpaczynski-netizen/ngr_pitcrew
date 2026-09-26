@@ -570,7 +570,9 @@ class Hub:
         return out
 
     def signed_in(self, series_id: str, on_or_after=None,
-                  already_run=()) -> list[str]:
+                  already_run=(),
+                  division_for_driver_id: str | None = None,
+                  ) -> "tuple[list[str], bool]":
         """Who has entered the next scheduled round of this league.
 
         **The entry list is a DECLARATION, not an observation** - a driver can
@@ -595,6 +597,20 @@ class Hub:
         Ordered by `position` first, like `rounds()`, so two rounds sharing a
         date - the Enduro ran twice on 25 July - are taken in the league's own
         order rather than an arbitrary one.
+
+        **`division_for_driver_id` filters the entry list to the driver's own
+        division (Fix 3, 25 Sep 2026).** A multi-division league (e.g. Div 1
+        and Div 2) has up to 15 drivers per division, not 30 combined.  When
+        the driver's sign-in can be found for this round, only entries for the
+        same DivisionEvent are returned.  Falls back to all confirmed entries
+        when the driver's division cannot be determined (the next best thing is
+        a superset, not a subset).
+
+        Returns ``(names, division_unknown)`` where ``division_unknown`` is
+        ``True`` when ``division_for_driver_id`` was given but the driver's
+        division could not be found, so the list is all divisions combined.
+        The caller should expose this to the monitor so it can caption
+        *"all divisions — yours not found"*.
         """
         when = on_or_after or datetime.datetime.now()
         done = set(already_run or ())
@@ -614,16 +630,43 @@ class Hub:
                 due = due.astimezone().replace(tzinfo=None)
             if due.date() < when.date():
                 continue
-            names = self._query(
-                "SELECT d.driverName FROM EventSignIn es "
-                "JOIN DivisionEvent de ON de.id = es.divisionEventId "
-                "JOIN Driver d ON d.id = es.driverId "
-                "WHERE de.roundId = ? AND es.status = 'CONFIRMED'",
-                (row["id"],))
+            # Determine the driver's division for this round so the entry list
+            # is scoped to his own division, not the combined field.
+            div_id: str | None = None
+            division_unknown = False
+            if division_for_driver_id:
+                my_div = self._query(
+                    "SELECT de.divisionId FROM EventSignIn es "
+                    "JOIN DivisionEvent de ON de.id = es.divisionEventId "
+                    "WHERE es.driverId = ? AND de.roundId = ?",
+                    (division_for_driver_id, row["id"]))
+                if my_div:
+                    div_id = my_div[0]["divisionId"]
+                else:
+                    division_unknown = True
+                    log("pitcrew").warning(
+                        "signed_in: driver %r not found in any division for "
+                        "round %r — returning all confirmed entries",
+                        division_for_driver_id, row["id"])
+            if div_id is not None:
+                names = self._query(
+                    "SELECT d.driverName FROM EventSignIn es "
+                    "JOIN DivisionEvent de ON de.id = es.divisionEventId "
+                    "JOIN Driver d ON d.id = es.driverId "
+                    "WHERE de.roundId = ? AND es.status = 'CONFIRMED' "
+                    "AND de.divisionId = ?",
+                    (row["id"], div_id))
+            else:
+                names = self._query(
+                    "SELECT d.driverName FROM EventSignIn es "
+                    "JOIN DivisionEvent de ON de.id = es.divisionEventId "
+                    "JOIN Driver d ON d.id = es.driverId "
+                    "WHERE de.roundId = ? AND es.status = 'CONFIRMED'",
+                    (row["id"],))
             if names:
-                return [str(r["driverName"]) for r in names
-                        if r["driverName"]]
-        return []
+                return ([str(r["driverName"]) for r in names
+                         if r["driverName"]], division_unknown)
+        return ([], False)
 
     def hidden_drivers(self) -> set[str]:
         """Normalised names of drivers the league hides from its standings.

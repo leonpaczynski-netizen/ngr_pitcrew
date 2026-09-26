@@ -567,6 +567,24 @@ class DriverState:
     history: tuple = ()
     show_history: bool = False
 
+    # ---- rival stop table (Story 2, 25 Sep 2026). Pre-worded `RivalStopRow`
+    # tuples built by `fill_verdict.rival_stop_rows`, scoped to the current
+    # session.  Populated by the controller only during a live race.  Empty
+    # tuple when no race is running or no stops have been seen - empty is not
+    # the same as not built (rule 3), so the panel can tell the two apart.
+    rival_table: tuple = ()
+    # True when `LeagueRace.division_unknown` — the hub returned all divisions
+    # because his own division could not be identified.  The panel caption
+    # names this so the driver knows the entered list is broader than usual.
+    rival_all_divisions: bool = False
+
+    # ---- per-compound best laps (Story 3, 25 Sep 2026). Built by
+    # `compound_bests.compound_bests_for_session` in practice; None outside
+    # practice (the race has no lap rack to build from here).  An empty list
+    # is a session with laps but no compound reads, which is itself a finding
+    # and must not be collapsed to None (rule 3).
+    compound_bests: "list[dict] | None" = None
+
     # ---- the three lights (row 5.21).
     # WET: the hygrometer over the last few HUD reads - "wet", "mixed", "dry",
     # or None where the HUD could not be read (never "dry" for want of a read).
@@ -1731,6 +1749,22 @@ class HistoryRow:
     note: str
     delta_tone: str = TONE_PLAIN
     burn_tone: str = TONE_PLAIN
+    # ---- compound and sector columns (Story 4, 25 Sep 2026) -----------------
+    # The compound the lap was driven on.  None when the disc was not read, not
+    # "" - rule 3: a blank compound would be invisible but present, which is
+    # not the same as not measured.
+    compound: "str | None" = None
+    # Per-sector times, in milliseconds (the feed's native unit).  `None` per
+    # sector where the timing model could not cut it, not 0 (rule 3).
+    # In race mode, `sectors` is `None` (no sector columns) rather than a
+    # tuple of Nones — the two silences mean different things (rule 3).
+    sectors: "tuple | None" = None
+    # The timing colour each sector earns: `theme.BEST_EVER`, `theme.BEST_STINT`,
+    # `theme.SLOWER`, or `None` (no reference yet / uncounted lap).  Computed by
+    # `rank_ink` in `history_rows`; the panel only draws what Python chose.
+    sector_tones: tuple = (None, None, None)
+    # The timing colour the lap time cell earns (same convention as sectors).
+    time_tone: "str | None" = None
 
 
 def history_rows(history, rows: int = HISTORY_ROWS,
@@ -1769,9 +1803,76 @@ def history_rows(history, rows: int = HISTORY_ROWS,
     from pitcrew.race.targets import ON_TARGET_L, ON_TARGET_S, burn_source_word
 
     racing = kind == "race"
+
+    # ---- sector bests for practice mode (Story 4, 25 Sep 2026) --------------
+    # Only in practice: in a race the delta is against the plan's target, which
+    # is what the colour means.  In practice there is no plan, so the delta is
+    # session best - and the sector colours follow the same FIA convention
+    # (`rank_ink` from practice_screen).
+    #
+    # **Two passes, one for bests and one for drawing.**  The bests must be
+    # computed across ALL laps in `history`, not only the tail window, because
+    # a session best older than twelve laps would otherwise be unreachable and
+    # "best of window" and "best of session" would be the same claim said two
+    # ways (rules 4 and 13).  The stint boundary follows practice_screen's own
+    # rule: a pit lap ends a stint, and the sector-bests reset per stint as
+    # well as accumulating the session best.
+    #
+    # `rank_ink` is imported here rather than at module scope to avoid a Qt
+    # import at process start (practice_screen uses Qt widgets).  `practice_screen`
+    # does not import from `driver_view`, so no circular dependency.
+    sector_bests: dict = {}     # {(stint_idx, sector_i): int}  session+stint bests
+    session_sector_bests: list[int | None] = [None, None, None]
+    stint_idx = 0
+    all_laps = list(history or ())
+    # Walk all laps to build bests before the window is applied.
+    if not racing:
+        for lap in all_laps:
+            if lap.get("pit"):
+                stint_idx += 1
+                continue
+            counted = lap.get("counted", True)  # practice rows carry this
+            if not counted:
+                continue
+            sectors_ms = lap.get("sectors_ms", (None, None, None)) or (None, None, None)
+            for i, s_ms in enumerate(sectors_ms):
+                if s_ms is None or s_ms <= 0:
+                    continue
+                # Session best.
+                prev_sess = session_sector_bests[i]
+                if prev_sess is None or s_ms < prev_sess:
+                    session_sector_bests[i] = s_ms
+                # Stint best - keyed by (stint_idx, sector).
+                key = (stint_idx, i)
+                if key not in sector_bests or s_ms < sector_bests[key]:
+                    sector_bests[key] = s_ms
+        # Also build per-lap time bests for the time column.
+        session_time_best: int | None = None
+        stint_time_bests: dict[int, int | None] = {}
+        stint_idx = 0
+        for lap in all_laps:
+            if lap.get("pit"):
+                stint_idx += 1
+                continue
+            counted = lap.get("counted", True)
+            if not counted:
+                continue
+            ms = lap.get("lap_ms")
+            if ms is None or ms <= 0:
+                continue
+            if session_time_best is None or ms < session_time_best:
+                session_time_best = ms
+            if stint_idx not in stint_time_bests or ms < (stint_time_bests[stint_idx] or ms + 1):
+                stint_time_bests[stint_idx] = ms
+
     drawn = []
     marked = None
-    for lap in list(history or ())[-rows:]:
+    stint_idx = 0
+    for lap in all_laps[-rows:]:
+        # Track the stint index within the window too.
+        if lap.get("pit") and not racing:
+            stint_idx += 1
+
         delta, burn_delta = lap.get("lap_delta_s"), lap.get("burn_delta_l")
         saving = lap.get("saving")
         note = lap.get("why") or ("save" if saving else
@@ -1797,6 +1898,42 @@ def history_rows(history, rows: int = HISTORY_ROWS,
         # rather than on its distance from the lap's own target.
         burn = ("" if used is None else f"{used:.2f}" +
                 ("" if burn_delta is None else f"  {burn_delta:+.2f}"))
+
+        # ---- sector tones and compound (practice only) ----------------------
+        compound = lap.get("compound")
+        sectors_ms_lap: tuple = (None, None, None)
+        s_tones: tuple = (None, None, None)
+        time_tone: str | None = None
+        if not racing:
+            from pitcrew.ui.practice_screen import rank_ink
+
+            counted = lap.get("counted", True)
+            raw_sectors = lap.get("sectors_ms") or (None, None, None)
+            # Guard: `sectors_ms` may be a list or tuple of any length.
+            if isinstance(raw_sectors, (list, tuple)):
+                raw_sectors = tuple(raw_sectors)[:3]
+                # Pad to three if fewer were stored.
+                while len(raw_sectors) < 3:
+                    raw_sectors += (None,)
+            else:
+                raw_sectors = (None, None, None)
+            sectors_ms_lap = raw_sectors
+
+            # Sector tones: only a counted lap can earn a mark (rank_ink rule).
+            tones = []
+            for i, s_ms in enumerate(raw_sectors):
+                sess_best = session_sector_bests[i] if i < 3 else None
+                stint_best = sector_bests.get((stint_idx, i))
+                tones.append(rank_ink(s_ms, stint_best, sess_best,
+                                      counted=bool(counted)))
+            s_tones = tuple(tones)
+
+            # Lap-time tone.
+            ms = lap.get("lap_ms")
+            s_best_time = stint_time_bests.get(stint_idx)
+            time_tone = rank_ink(ms, s_best_time, session_time_best,
+                                 counted=bool(counted))
+
         drawn.append(HistoryRow(
             lap=str(lap.get("lap") or "--"),
             time=format_lap_ms(lap.get("lap_ms")),
@@ -1807,6 +1944,13 @@ def history_rows(history, rows: int = HISTORY_ROWS,
                         TONE_URGENT if delta >= ON_TARGET_S else TONE_GOOD),
             burn_tone=(TONE_PLAIN if burn_delta is None else
                        TONE_URGENT if burn_delta >= ON_TARGET_L else TONE_GOOD),
+            compound=compound,
+            # Fix 6 (25 Sep 2026): in race mode emit None (no sector columns)
+            # rather than (None, None, None) (sectors measured but all missing).
+            # The frontend hides the sector columns when sectors is None.
+            sectors=sectors_ms_lap if not racing else None,
+            sector_tones=s_tones if not racing else (None, None, None),
+            time_tone=time_tone,
         ))
     return tuple(drawn)
 
@@ -1896,6 +2040,11 @@ def practice_history(rows) -> tuple[dict, ...]:
     filed = []
     for row in laps:
         used = getattr(row, "fuel_used", None)
+        # `sectors_ms` is a property on `LapRow` (practice_screen.py line 197)
+        # returning `(sector1_ms, sector2_ms, sector3_ms)`.  Older stored laps
+        # may not have it; guard with `getattr` and default to all-None so the
+        # rack's sector columns show dashes rather than raising (rule 3).
+        sectors = getattr(row, "sectors_ms", None) or (None, None, None)
         filed.append({
             "lap": row.lap_num,
             # Never a zero: `format_lap_ms` refuses None and says so.
@@ -1909,6 +2058,18 @@ def practice_history(rows) -> tuple[dict, ...]:
                     else "incident" if row.incident else None),
             "pit": bool(row.is_pit_lap),
             "out": bool(row.is_out_lap),
+            # Whether this lap counts toward the session best and compound
+            # bests.  The same predicate `_best_ms` and `compound_bests_for_
+            # session` use, so the rack and the tablet agree (rule 13).
+            "counted": counts(row),
+            # The compound disc read at the end of this lap (None = not read).
+            # Used by `history_rows(kind="practice")` to populate the compound
+            # column and by `compound_bests_for_session` - one source for both
+            # (rule 13).
+            "compound": getattr(row, "compound", None),
+            # Per-sector times in milliseconds.  A lap with no sector cut
+            # carries three Nones; the rack shows a dash (rule 3, never 0).
+            "sectors_ms": sectors,
         })
     return tuple(filed)
 
@@ -1974,8 +2135,14 @@ def fuel_flag_block(state: "DriverState") -> Block:
     if state.burn_l is not None:
         burn = f"{state.burn_l:.2f} L/lap"
         rests_on = f"{rests_on} · {burn}" if rests_on else burn
-    return Block(f"{state.fuel_to_flag:.1f}", rests_on,
-                 _tone(state.fuel_to_flag < 0))
+    # **A value that rounds to -0.0 must print "0.0", not "-0.0".**
+    # The tone is computed from the unrounded value so the short/over signal
+    # survives: -0.04 shows "0.0" in danger ink because he is a fraction short.
+    val = state.fuel_to_flag
+    formatted = f"{val:.1f}"
+    if formatted == "-0.0":
+        formatted = "0.0"
+    return Block(formatted, rests_on, _tone(val < 0))
 
 
 def fuel_in_hand_parts(state: "DriverState") -> tuple[tuple[str, str], ...]:
@@ -2041,6 +2208,36 @@ def format_sector_ms(ms: int | None) -> str:
     if ms >= 60_000:
         return format_lap_ms(ms)
     return f"{ms / 1000:.3f}"
+
+
+def _fmt_sector_rack(ms: "int | None") -> str:
+    """Sector time for the history rack: `38.412`, `1:02.345`, or `--`.
+
+    Uses `--` (not `--.---`) for absent, consistent with the rack's own rule
+    that an empty cell is a measurement nobody made rather than a missing one.
+    """
+    if ms is None or ms <= 0:
+        return "--"
+    if ms >= 60_000:
+        return format_lap_ms(ms)
+    return f"{ms / 1000:.3f}"
+
+
+def _sector_tone_ink(tone: "str | None") -> str:
+    """Map a `rank_ink` tone (theme constant) to a Qt stylesheet colour.
+
+    `theme.BEST_EVER` (purple) beats every sector in the session;
+    `theme.BEST_STINT` (green) is the best of the current stint;
+    `theme.SLOWER` (yellow) is slower than the stint's best.
+    `None` or unknown → the plain stencil white.
+    """
+    if tone == theme.BEST_EVER:
+        return theme.BEST_EVER
+    if tone == theme.BEST_STINT:
+        return theme.BEST_STINT
+    if tone == theme.SLOWER:
+        return theme.SLOWER
+    return INK
 
 
 def tyre_caption_words(state: "DriverState") -> str:
@@ -2932,6 +3129,355 @@ class _BoxPanel(QWidget):
             self.next_stat.show_value("--", "no plan")
 
 
+def _fill_verdict_text(verdict) -> str:
+    """One-line fill verdict for the rival table column.
+
+    "SAVE ~-8 L  1.33 L/lap" for must-save, "SPARE +32 L" for spare,
+    "EXACT +0 L" for exact, "STOP AGAIN -4 L" for stops-again,
+    "?" for can't tell, "--" for None.
+    `~` marks a bound reading (rule 5).  Margin is signed (rule 9: never
+    clamped) and in whole litres (precision beyond that is noise here).
+    """
+    if verdict is None:
+        return "--"
+    v = verdict.verdict
+    if v == "can't tell":
+        return "?"
+    if verdict.margin_l is None:
+        return v
+    bound = "~" if verdict.bound else ""
+    margin = f"{verdict.margin_l:+.0f} L"
+    if v == "must save":
+        save = (f"  {verdict.saving_per_lap_l:.2f} L/lap"
+                if verdict.saving_per_lap_l is not None else "")
+        return f"SAVE {bound}{margin}{save}"
+    if v == "stops again":
+        return f"STOP AGAIN {bound}{margin}"
+    if v == "on the limit":
+        return f"ON LIMIT {bound}{margin}"
+    if v == "spare":
+        return f"SPARE {bound}{margin}"
+    if v == "exact":
+        return f"EXACT {bound}{margin}"
+    return v
+
+
+def _fill_verdict_ink(verdict) -> str:
+    """Ink colour for the FILL column, chosen by urgency of the verdict.
+
+    "must save" and "stops again" are hard warnings — the driver needs to
+    act or will lose a position.  "on the limit" is marginal — one lap of
+    margin, worth a warning even though technically he reaches.  "spare" is
+    the desired outcome — green.  "can't tell" (displayed as "?") and None
+    are both absent readings — dim, because they carry no instruction.
+
+    Rule 5: the column head is already marked DERIVED; the per-cell colour
+    here adds urgency on top of that, not a second register mark.
+    """
+    if verdict is None:
+        return INK_DIM
+    v = verdict.verdict
+    if v in ("must save", "stops again", "on the limit"):
+        return NEAR
+    if v == "spare":
+        return GOOD
+    if v == "can't tell":
+        return INK_DIM
+    return INK  # "exact" and any future verdict not yet named
+
+
+# Maximum rival rows pre-built in `_RivalStopsPanel` (one row per driver who
+# has stopped in the current session).  A league field rarely exceeds 20;
+# 16 covers the common case without pre-building an enormous grid.
+MAX_RIVALS = 16
+
+# Human-readable legend text for each `RivalStopRow.start_basis` value.
+_BASIS_LEGEND: dict[str, str] = {
+    "capacity":        "* first-stop burn assumes a full tank",
+    "100 L assumed":   "* first-stop burn assumes a full tank",
+    "assumed_start_l": "* first-stop burn uses an estimated start figure",
+}
+_LEGEND_GENERIC = "* first-stop burn uses assumed start fuel"
+
+
+def _legend_for_rows(rival_table: tuple) -> str:
+    """Short legend text when any row has `burn_assumed=True`, else ''.
+
+    Appended to the caption line — no new widget, no added height.
+
+    Named basis → specific text.  Multiple distinct bases or an unrecognised
+    one → generic text.  No assumed row → empty string.
+
+    In production `start_basis` is always set when `burn_assumed=True` (the
+    backend sets one of 'capacity', '100 L assumed', or 'assumed_start_l').
+    `start_basis=None` with `burn_assumed=True` should not occur; it falls
+    through to the generic text so the `*` in the burn cell is still explained.
+    """
+    assumed_bases: list[str | None] = [
+        getattr(rv, "start_basis", None)
+        for rv in rival_table
+        if getattr(rv, "burn_assumed", False)
+    ]
+    if not assumed_bases:
+        return ""
+    unique = {b for b in assumed_bases if b is not None}
+    if len(unique) == 1:
+        text = _BASIS_LEGEND.get(next(iter(unique)), "")
+        if text:
+            return text
+    return _LEGEND_GENERIC
+
+
+class _RivalStopsPanel(QWidget):
+    """Rival pit stop summary — in race mode this panel IS the history page.
+
+    One row per driver who has stopped (or declared) in the current session,
+    using `DriverState.rival_table` (a tuple of `RivalStopRow`).  Dimmed rows
+    mark drivers not in the current round's entered list.
+
+    **Built once and re-texted**, exactly like the rack above it.  Showing
+    and hiding individual rows inside a QVBoxLayout is safe here (unlike
+    QStackedLayout siblings); hidden widgets do not contribute to the
+    minimum size hint.
+
+    **Read between stints, not at racing speed.**  The font is larger than the
+    old embedded version (now 20 px data / 16 px sub-lines) because the panel
+    owns the full page in race mode.
+
+    Columns: P · DRIVER · LAP · IN · OUT · ON · OFF · # · BURN/LAP · FILL
+    P is the board position (fresh only, '--' when stale).
+    The last two are DERIVED (rule 5); their heads use the derived ink.
+
+    Rows are sorted by position (fresh ascending first; no-position rows after
+    in their original order) so the monitor reads like a live timing tower.
+
+    **Sub-lines** under each driver name show earlier stops when present:
+    e.g. 'earlier: L8 32→60 M→M'.  Absent when stop_count ≤ 1.
+    """
+
+    COLS = ("P", "DRIVER", "LAP", "IN", "OUT", "ON", "OFF", "#", "BURN/LAP", "FILL")
+    _NCOLS = len(COLS)
+    # Columns from here onward are DERIVED and their heads use CRAYON_DIM.
+    _DERIVED_START = 8
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        col = QVBoxLayout(self)
+        col.setContentsMargins(0, 6, 0, 0)
+        col.setSpacing(2)
+        self._caption = QLabel("RIVAL STOPS")
+        self._caption.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:20px;font-weight:600;"
+            f"letter-spacing:5px;color:{INK_DIM};background:transparent;")
+        col.addWidget(self._caption)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(0)
+        # Build column heads: measured ink, or derived ink for derived columns.
+        for ci, head in enumerate(self.COLS):
+            ink = CRAYON_DIM if ci >= self._DERIVED_START else INK_DIM
+            lbl = QLabel(head)
+            lbl.setStyleSheet(
+                f"font-family:{LABEL_FACE};font-size:18px;font-weight:600;"
+                f"letter-spacing:3px;color:{ink};background:transparent;")
+            grid.addWidget(lbl, 0, ci)
+
+        # Pre-build MAX_RIVALS data rows.  Each logical driver occupies two
+        # grid rows: row 2r+1 (main data) and row 2r+2 (sub-line for earlier
+        # stops).  The sub-line spans all columns and is hidden when empty.
+        self._row_labels: list[tuple] = []
+        self._sub_labels: list[QLabel] = []
+        for r in range(MAX_RIVALS):
+            line = []
+            for ci in range(self._NCOLS):
+                face = LABEL_FACE if ci <= 1 else NUMBER_FACE
+                lbl = QLabel("")
+                lbl.setStyleSheet(
+                    f"font-family:{face};font-size:30px;font-weight:600;"
+                    f"color:{INK};background:transparent;")
+                grid.addWidget(lbl, r * 2 + 1, ci)
+                line.append(lbl)
+            self._row_labels.append(tuple(line))
+            # Sub-line spans all columns: earlier-stop summary.
+            sub = QLabel("")
+            sub.setStyleSheet(
+                f"font-family:{LABEL_FACE};font-size:21px;font-weight:600;"
+                f"color:{INK_DIM};background:transparent;")
+            sub.setVisible(False)
+            grid.addWidget(sub, r * 2 + 2, 0, 1, self._NCOLS)
+            self._sub_labels.append(sub)
+
+        col.addLayout(grid)
+
+        # Overflow line: shown when the table has more than MAX_RIVALS entries.
+        # Hidden by default (no space consumed); revealed in show_state when
+        # rival_table exceeds capacity.
+        self._overflow_label = QLabel("")
+        self._overflow_label.setVisible(False)
+        self._overflow_label.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:18px;font-weight:600;"
+            f"letter-spacing:3px;color:{INK_DIM};background:transparent;")
+        col.addWidget(self._overflow_label)
+        # **Top-align** within whatever height the parent allocates.
+        col.addStretch(1)
+
+    def show_state(self, rival_table: tuple, *,
+                   rival_all_divisions: bool = False) -> None:
+        """Populate the grid from a tuple of `RivalStopRow`.
+
+        Rows are sorted by position (fresh ascending first; no-position rows
+        after in their original order) so the panel reads like a timing tower.
+
+        When rival_table has more entries than MAX_RIVALS pre-built rows, the
+        excess is not silently dropped — an overflow line says how many more
+        were not shown, so the user knows the table is truncated (rule 3:
+        absent ≠ zero; a silent drop looks like complete data).
+
+        rival_all_divisions: when True, the hub returned all divisions because
+        his own division could not be identified — the caption says so.
+        """
+        # Build the caption on one line: base + optional divisions note +
+        # optional burn-assumption legend.  All three live on the same QLabel
+        # so showing the legend adds zero height to the panel.
+        parts = ["RIVAL STOPS"]
+        if rival_all_divisions:
+            parts.append("all divisions (yours not found)")
+        legend = _legend_for_rows(rival_table)
+        if legend:
+            parts.append(legend)
+        self._caption.setText(" · ".join(parts))
+
+        # Sort: fresh-position rows ascending by place; no-position rows after
+        # in their original order (stable sort preserves the original ordering
+        # within each group, so the stale block is unchanged).
+        def _sort_key(rv):
+            p = getattr(rv, "position", None)
+            fresh = getattr(rv, "position_fresh", False)
+            if fresh and p is not None:
+                return (0, p)
+            return (1, 0)
+
+        sorted_table = sorted(rival_table, key=_sort_key)
+
+        for i, line in enumerate(self._row_labels):
+            if i < len(sorted_table):
+                self._fill_row(line, sorted_table[i])
+                for lbl in line:
+                    lbl.setVisible(True)
+                self._fill_sub(self._sub_labels[i], sorted_table[i])
+            else:
+                for lbl in line:
+                    lbl.setText("")
+                    lbl.setVisible(True)
+                self._sub_labels[i].setVisible(False)
+                self._sub_labels[i].setText("")
+
+        overflow = len(rival_table) - MAX_RIVALS
+        if overflow > 0:
+            self._overflow_label.setText(f"+{overflow} more not shown")
+            self._overflow_label.setVisible(True)
+        else:
+            self._overflow_label.setVisible(False)
+            self._overflow_label.setText("")
+
+    def _fill_row(self, labels, rv) -> None:
+        """Write one RivalStopRow into its pre-built label row.
+
+        Column order: P · DRIVER · LAP · IN · OUT · ON · OFF · # · BURN/LAP · FILL
+        """
+        # Dimmed rows use a dim ink; derived columns always use crayon dim.
+        # I4: a signed-in driver's name is in normal ink; a dimmed (not
+        # signed-in) driver's name is in INK_DIM.  The original line had
+        # INK_DIM on both branches, which erased the distinction.
+        row_ink = INK_DIM if rv.dimmed else INK
+        drv_ink = INK_DIM if rv.dimmed else INK
+
+        # P: board position, fresh only; '--' when stale or unknown.
+        pos_val = "--"
+        pos_ink = INK_DIM
+        p = getattr(rv, "position", None)
+        fresh = getattr(rv, "position_fresh", False)
+        if fresh and p is not None:
+            pos_val = f"P{p}"
+            pos_ink = INK_DIM if rv.dimmed else INK
+
+        # ---- fuel figures: ≤ on entry bound (partial), ≥ on exit bound ----
+        fuel_in = ("--" if rv.fuel_in_l is None else
+                   f"{'≤' if rv.fuel_in_is_bound else ''}{rv.fuel_in_l:.0f}")
+        fuel_out = ("--" if rv.fuel_out_l is None else
+                    f"{'≥' if rv.fuel_out_is_bound else ''}{rv.fuel_out_l:.0f}")
+        compound_in  = rv.compound_in  or "--"
+        compound_out = rv.compound_out or "--"
+        # DERIVED: burn from consecutive stop figures, ≥ when entry was partial.
+        # burn_assumed: True when the first-stop burn used a 100 L start
+        # assumption (no per-stop datum and no known capacity) — flagged with
+        # a trailing "*" so the derivation is visible (rule 5).
+        burn_assumed = getattr(rv, "burn_assumed", False)
+        burn = ("--" if rv.burn_per_lap_l is None else
+                f"{'≥' if rv.burn_is_bound else ''}"
+                f"{rv.burn_per_lap_l:.2f}"
+                f"{'*' if burn_assumed else ''}")
+        fill = _fill_verdict_text(rv.verdict)
+
+        values = (
+            pos_val,                       # P
+            (rv.driver or "")[:16],        # DRIVER: truncate long PSN ids
+            (f"L{rv.last_stop_lap}" if rv.last_stop_lap is not None else "--"),
+            fuel_in,
+            fuel_out,
+            compound_in,
+            compound_out,
+            str(rv.stop_count),
+            burn,
+            fill,
+        )
+        # Per-column ink: P/driver use position/drv ink; data columns use
+        # row_ink; derived columns use derived ink.
+        # FILL: verdict-specific ink (warning/good/dim by urgency, rule 5).
+        der = CRAYON_DIM if not rv.dimmed else INK_DIM
+        fill_ink = _fill_verdict_ink(rv.verdict) if not rv.dimmed else INK_DIM
+        inks = (pos_ink,           # P: position ink (dim when stale)
+                drv_ink,           # DRIVER: dimmed when not entered (I4 fix)
+                row_ink, row_ink, row_ink, row_ink, row_ink, row_ink,
+                der, fill_ink)     # BURN/LAP: derived; FILL: verdict urgency
+
+        for ci, (lbl, val, ink) in enumerate(zip(labels, values, inks)):
+            lbl.setText(val)
+            face = LABEL_FACE if ci <= 1 else NUMBER_FACE
+            lbl.setStyleSheet(
+                f"font-family:{face};font-size:30px;font-weight:600;"
+                f"color:{ink};background:transparent;")
+
+    def _fill_sub(self, sub: "QLabel", rv) -> None:
+        """Populate (or hide) the earlier-stops sub-line for one driver row.
+
+        Text format: 'earlier: L8 32→60 M→M · L3 67→45 S→M'
+        Each stop: L<lap> <fuel_in>→<fuel_out> <cmpd_in>→<cmpd_out>
+        Hidden when stop_count ≤ 1 (nothing earlier to show).
+        """
+        earlier = getattr(rv, "earlier_stops", ())
+        if not earlier:
+            sub.setVisible(False)
+            sub.setText("")
+            return
+
+        parts = []
+        for s in earlier:
+            lap = s.get("lap")
+            fi = s.get("fuel_in_l")
+            fo = s.get("fuel_out_l")
+            ci = s.get("compound_in") or "?"
+            co = s.get("compound") or "?"
+            fi_txt = f"{fi:.0f}" if fi is not None else "?"
+            fo_txt = f"{fo:.0f}" if fo is not None else "?"
+            lap_txt = f"L{lap}" if lap is not None else "L?"
+            parts.append(f"{lap_txt} {fi_txt}→{fo_txt} {ci}→{co}")
+
+        sub.setText("earlier: " + " · ".join(parts))
+        sub.setVisible(True)
+
+
 class _HistoryPanel(QWidget):
     """The race so far, a lap a row - and the four corners under it.
 
@@ -2955,7 +3501,14 @@ class _HistoryPanel(QWidget):
     See `_word_heads`.
     """
 
-    COLUMNS = ("LAP", "TIME", "VS TARGET", "BURN  VS TARGET", "")
+    # ---- compound and sector columns (Story 4, 25 Sep 2026) ----------------
+    # Four new columns to the right of the existing five: the compound disc
+    # read at the end of the lap, then each sector in milliseconds formatted
+    # as seconds.  In practice mode the sector cells are coloured by
+    # `rank_ink`; in race mode sectors are always None and cells show "--".
+    # The heads are the same in both modes (no PRACTICE_HEADS override needed).
+    COLUMNS = ("LAP", "TIME", "VS TARGET", "BURN  VS TARGET", "",
+               "CMPD", "S1", "S2", "S3")
 
     # **What each column IS, marked at its head** (DESIGN.md's registers).
     # Five columns of identical grey heads over figures making three
@@ -2973,7 +3526,11 @@ class _HistoryPanel(QWidget):
                  INK_DIM,          # TIME - GT7's own clock
                  CRAYON_DIM,       # VS TARGET - against the plan he approved
                  None,             # BURN + VS TARGET - split, see below
-                 INK_DIM)          # the column he was on: a note, not a value
+                 INK_DIM,          # the column he was on: a note, not a value
+                 INK_DIM,          # CMPD - disc read (measured)
+                 INK_DIM,          # S1 - measured by the app's sector model
+                 INK_DIM,          # S2
+                 INK_DIM)          # S3
 
     # The split head, as two marks in one label. `measured  declared`.
     SPLIT_HEAD = {3: (("BURN", INK_DIM), ("VS TARGET", CRAYON_DIM))}
@@ -3036,12 +3593,22 @@ class _HistoryPanel(QWidget):
         self.fuel.setStyleSheet(
             f"font-family:{LABEL_FACE};font-size:26px;font-weight:600;"
             f"letter-spacing:3px;background:transparent;")
+        # **Rack section — hidden in race mode** (the monitor gives the full
+        # page to the rival table in a race; the rack returns in practice and
+        # qualifying).  All caption/fuel/grid/summary widgets live inside this
+        # container so a single setVisible(False) removes them together without
+        # needing to hide each one separately, and without the 2,730 px defect
+        # (QWidget in QVBoxLayout contributes 0 height when hidden).
+        self._rack_section = QWidget()
+        rack_col = QVBoxLayout(self._rack_section)
+        rack_col.setContentsMargins(0, 0, 0, 0)
+        rack_col.setSpacing(8)
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         head.addWidget(self.caption)
         head.addStretch(1)
         head.addWidget(self.fuel)
-        column.addLayout(head)
+        rack_col.addLayout(head)
         grid = QGridLayout()
         grid.setHorizontalSpacing(46)
         grid.setVerticalSpacing(4)
@@ -3069,14 +3636,33 @@ class _HistoryPanel(QWidget):
                 grid.addWidget(label, row + 1, index)
                 line.append(label)
             self.cells.append(line)
-        column.addLayout(grid)
+        rack_col.addLayout(grid)
         self.summary = QLabel("")
         self.summary.setStyleSheet(self._css(INK_DIM, 26))
-        column.addWidget(self.summary)
+        rack_col.addWidget(self.summary)
+        column.addWidget(self._rack_section)
 
-        # The corners, across rather than in a square: the rack above has the
-        # height, and four abreast keeps them at the size he reads them at.
-        column.addSpacing(10)
+        # **The tyre section and the rival stops table share the same slot.**
+        # Both live inside a QWidget container so that `setVisible(False)` on
+        # the container truly removes it from the column's height calculation
+        # (a hidden QWidget in a QVBoxLayout contributes 0 height, unlike a
+        # hidden item inside an addSpacing/addLayout sequence).
+        #
+        # When rival_table is non-empty the tyres are swapped OUT and the
+        # rival panel swapped IN; when there are no stops the tyres return.
+        # They are never both visible at once, so the slot height is bounded
+        # by whichever is taller — in practice the compact rival panel is
+        # shorter than the four 187-px tyre widgets.
+        #
+        # "Hide before show" convention: the outgoing widget is hidden before
+        # the incoming one is shown.  For a QVBoxLayout this has no bearing on
+        # the 2730-px growth defect (that is QStackedLayout-specific), but the
+        # convention is kept for consistency.
+        self.tyre_section = QWidget()
+        tyre_col = QVBoxLayout(self.tyre_section)
+        tyre_col.setContentsMargins(0, 0, 0, 0)
+        tyre_col.setSpacing(8)
+        tyre_col.addSpacing(10)
         corners = QHBoxLayout()
         corners.setSpacing(56)
         self.tyres = {corner: _Tyre(corner) for corner in CORNERS}
@@ -3084,13 +3670,44 @@ class _HistoryPanel(QWidget):
         for corner in CORNERS:
             corners.addWidget(self.tyres[corner])
         corners.addStretch(1)
-        column.addLayout(corners)
+        tyre_col.addLayout(corners)
         self.tyre_caption = QLabel("TYRE SURFACE °C")
         self.tyre_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tyre_caption.setStyleSheet(
             f"font-family:{LABEL_FACE};font-size:21px;font-weight:600;"
             f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
-        column.addWidget(self.tyre_caption)
+        tyre_col.addWidget(self.tyre_caption)
+        column.addWidget(self.tyre_section)
+
+        # The rival stops table (Story 2, 25 Sep 2026).  Starts hidden;
+        # show_state toggles it with tyre_section when rival_table is present.
+        self.rival_panel = _RivalStopsPanel()
+        self.rival_panel.setVisible(False)
+        column.addWidget(self.rival_panel)
+        # **Top-align the column contents.** A stretch at the END of the column
+        # absorbs any excess height so rival_panel sits flush at the top of the
+        # allocated space (the QStackedLayout gives _HistoryPanel its full
+        # allocated height; without this stretch the panel would be centred).
+        column.addStretch(1)
+
+        # **S1/S2/S3 column visibility (race vs practice, 25 Sep 2026).**
+        # In race mode HistoryRow.sectors is always None (the sector model
+        # does not run during a race), so those three columns would show "--"
+        # forever.  Hiding them entirely removes dead columns and gives the
+        # remaining five more room.  In practice mode all four new columns
+        # are meaningful: compound and each sector time.
+        #
+        # `_sectors_shown` tracks the last state so we only pay the QGridLayout
+        # relayout cost when the session kind changes, not on every state tick.
+        self._sectors_shown: bool | None = None   # None forces first-run sync
+        # Convenience slices into the pre-built label lists.
+        # Sector column indices: S1=6, S2=7, S3=8.
+        _SECTOR_COLS = (6, 7, 8)
+        self._sector_head_labels = [self.heads[ci] for ci in _SECTOR_COLS]
+        self._sector_cell_labels = [
+            [line[ci] for ci in _SECTOR_COLS]
+            for line in self.cells
+        ]
 
     @staticmethod
     def _css(ink: str, size: int) -> str:
@@ -3118,6 +3735,36 @@ class _HistoryPanel(QWidget):
             else:
                 label.setText(self._head_html(parts))
 
+    def _set_sectors_visible(self, visible: bool) -> None:
+        """Show or hide the S1/S2/S3 column heads and all their cells.
+
+        Called once when the session kind changes (practice ↔ race).  In race
+        mode HistoryRow.sectors is always None, so those three columns carry
+        "--" for every row forever: hiding them is both cleaner and more honest
+        (rule 3 — an absent reading is not the same as a dashed one).
+
+        "Hide before show" order is kept for consistency with the project's
+        other toggle sites, even though QGridLayout does not have the
+        QStackedLayout growth defect.
+        """
+        if visible == self._sectors_shown:
+            return
+        if not visible:
+            # Hiding: hide heads first, then cells.
+            for lbl in self._sector_head_labels:
+                lbl.setVisible(False)
+            for cell_row in self._sector_cell_labels:
+                for lbl in cell_row:
+                    lbl.setVisible(False)
+        else:
+            # Showing: show cells first (so the column has content), then heads.
+            for cell_row in self._sector_cell_labels:
+                for lbl in cell_row:
+                    lbl.setVisible(True)
+            for lbl in self._sector_head_labels:
+                lbl.setVisible(True)
+        self._sectors_shown = visible
+
     def show_state(self, state: "DriverState") -> None:
         # **The rack is worded from the session, not fixed to a race.** The
         # same twelve rows carry practice laps (`practice_history`), where
@@ -3126,28 +3773,70 @@ class _HistoryPanel(QWidget):
         # `session`, not `kind`: the tyre loop below binds `kind` to what
         # `classify` returns, and one of the two would have won silently.
         session = state.session_kind or "race"
+        # **S1/S2/S3 hidden in race mode** (sectors are always None in a race).
+        # Hide before wording heads so Qt does not measure a column that is
+        # about to vanish.
+        self._set_sectors_visible(session != "race")
         self._word_heads(session)
         self.caption.setText(
             self.CAPTIONS.get(session, self.CAPTIONS["race"]))
         rows = history_rows(state.history, kind=session)
-        for index, line in enumerate(self.cells):
-            row = rows[index] if index < len(rows) else None
-            values = (("", "", "", "", "") if row is None else
-                      (row.lap, row.time, row.delta, row.burn, row.note))
-            inks = (INK, INK,
-                    NEAR if (row and row.delta_tone == TONE_URGENT) else
-                    GOOD if (row and row.delta_tone == TONE_GOOD) else INK,
-                    NEAR if (row and row.burn_tone == TONE_URGENT) else
-                    GOOD if (row and row.burn_tone == TONE_GOOD) else INK,
-                    INK_DIM)
-            for index, (label, value, ink) in enumerate(zip(line, values,
-                                                            inks)):
+        for row_idx, line in enumerate(self.cells):
+            row = rows[row_idx] if row_idx < len(rows) else None
+            # ---- compound and sector values for this row -------------------
+            cmpd = (row.compound or "") if row else ""
+            s_vals = tuple(
+                (_fmt_sector_rack(row.sectors[i])
+                 if row and row.sectors is not None else "")
+                for i in range(3)
+            )
+            values = (("", "", "", "", "", "", "", "", "") if row is None else
+                      (row.lap, row.time, row.delta, row.burn, row.note,
+                       cmpd, s_vals[0], s_vals[1], s_vals[2]))
+            # ---- ink for each column --------------------------------------
+            # TIME: white, or the rank_ink tone in practice mode.
+            time_ink = (_sector_tone_ink(row.time_tone)
+                        if row and row.time_tone and session != "race" else INK)
+            inks = (
+                INK,
+                time_ink,
+                NEAR if (row and row.delta_tone == TONE_URGENT) else
+                GOOD if (row and row.delta_tone == TONE_GOOD) else INK,
+                NEAR if (row and row.burn_tone == TONE_URGENT) else
+                GOOD if (row and row.burn_tone == TONE_GOOD) else INK,
+                INK_DIM,   # note column
+                INK_DIM,   # compound (disc read, dim like note)
+                _sector_tone_ink(row.sector_tones[0] if row else None),
+                _sector_tone_ink(row.sector_tones[1] if row else None),
+                _sector_tone_ink(row.sector_tones[2] if row else None),
+            )
+            for cell_idx, (label, value, ink) in enumerate(
+                    zip(line, values, inks)):
                 label.setText(value)
+                # note (4) and compound (5) at a smaller face: they are
+                # annotations beside numeric values, not the values themselves.
                 # By POSITION, not by identity: `"" is ""` is True for an
                 # interned empty string, so an empty cell on an empty row
                 # was drawn at the note's size and the row wobbled.
-                last = index == len(values) - 1
-                label.setStyleSheet(self._css(ink, 26 if last else 34))
+                small = cell_idx in (4, 5)
+                label.setStyleSheet(self._css(ink, 26 if small else 34))
+        # ---- rival stops panel (race mode) ----------------------------------
+        # In race mode: hide the rack and give the full page to the rival
+        # panel.  The tyre section is also hidden in race mode (it is there
+        # for practice/qualifying, where the driver reads it between runs).
+        # "Hide before show" order is maintained in all branches.
+        if session == "race":
+            self._rack_section.setVisible(False)   # hide rack first
+            self.tyre_section.setVisible(False)    # hide tyres first
+            self.rival_panel.setVisible(True)
+            self.rival_panel.show_state(
+                getattr(state, "rival_table", ()),
+                rival_all_divisions=getattr(state, "rival_all_divisions", False))
+        else:
+            # Practice / qualifying: rack returns, rival panel goes away.
+            self.rival_panel.setVisible(False)     # hide first
+            self.tyre_section.setVisible(True)
+            self._rack_section.setVisible(True)
         self.summary.setText(history_summary(state.history, kind=session))
         # **Fuel in hand, on the page he is actually looking at.** Rich text
         # for the same reason the split head above is: the two figures are
@@ -3188,7 +3877,11 @@ class DriverView(QWidget):
         outer.setContentsMargins(40, 8, 40, 18)
         # **Bottom-anchored.** He glances UP from the game screen below, so the
         # bottom edge of this display is the shortest eye travel.
+        # **In race-history mode the stretch is set to 0** so the rival table
+        # starts at the top rather than in the middle of the page.  The stretch
+        # item is always at index 0 in `outer`.
         outer.addStretch(1)
+        self._outer_layout = outer
 
         middle = QHBoxLayout()
         middle.setSpacing(70)
@@ -3494,7 +4187,23 @@ class DriverView(QWidget):
         self.wet_light.show_light(*wet_light(state.wet))
         self.abs_light.show_light(*abs_light(state.abs_setting, state.front_lock))
         self.tcs_light.show_light(*tcs_light(state.tcs_active))
-        self.last_call.show_call(state.last_call)
+        # **George's last call is hidden in race history mode.**  In race mode
+        # the history page gives the whole monitor to the rival table; the call
+        # text adds nothing the driver cannot hear, and the horizontal space it
+        # sits on top of the page is the only real estate the rival table has.
+        # It stays visible on all other pages (running, box, practice, quali).
+        # "Hide before show" convention: set visibility before show_call so the
+        # widget does not flash.
+        race_history = (state.show_history
+                        and (state.session_kind or "") == "race")
+        # **Top-anchor in race-history mode** so the rival table fills from
+        # the top of the monitor.  The bottom-anchor stretch (always at index 0
+        # in `outer`) is set to factor 0 (no expansion) in race-history mode
+        # and restored to 1 in all other modes.
+        self._outer_layout.setStretch(0, 0 if race_history else 1)
+        self.last_call.setVisible(not race_history)
+        if not race_history:
+            self.last_call.show_call(state.last_call)
 
         # The words are `box_block`'s, shared with the strip page.
         box = box_block(state)

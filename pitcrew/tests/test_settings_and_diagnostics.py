@@ -755,7 +755,7 @@ def test_the_defaults_are_unchanged_by_having_controls(qt_app):
     got = screen.values()
     assert got.hud_wear_enabled is False
     assert got.hud_source == HUD_SOURCE_OBS
-    assert got.hud_sample_interval_s == 0.0
+    assert got.hud_sample_interval_s == 0.2
     assert got.ptt_toggle is True
 
 

@@ -75,7 +75,10 @@ def record(store, session_id, seen, *, laps_total=None,
         compound=stop.compound, assumed_start_l=assumed_start_l,
         reads=seen.reads, compound_reads=seen.compound_reads,
         watched_s=seen.watched_s, partial=seen.partial,
-        compound_in=getattr(stop, "compound_in", None))
+        compound_in=getattr(stop, "compound_in", None),
+        left_view=getattr(seen, "left_view", False),
+        visit_start_s=getattr(seen, "visit_start_s", None),
+        visit_end_s=getattr(seen, "visit_end_s", None))
 
 
 def _circuit_of(row) -> str | None:

@@ -54,22 +54,33 @@ BANK_PATH = Path(__file__).with_name("compound_letters.json")
 
 # A glyph further than this from its best template is not read.
 #
-# **The argument is not "it sits between 0.046 and 0.494". It is what the other
-# compounds measure.** With a bank of one class, `read` answers "S" for
-# anything inside the floor, so the question that matters is how far away the
-# letters GT7 would actually draw instead are. Rendered through this module's
-# own normalisation and measured against the shipped template:
+# **`letter()` is called only for S compounds** — `read()` returns M and H
+# directly from `colour_of()` without consulting `letter()`, because only the
+# S glyph is in the bank.  That removes M and H as false-positive risks: the
+# only path that reaches `letter()` is a disc that already read as red (S), so
+# any distance measured against the S template for M or H glyphs is theoretical.
 #
-#     M                     0.455        H                  0.500
-#     a blank cell          0.461        5                  0.202
-#     6 / 3 / 8 / G         0.274-0.299  an S in another font  0.144-0.299
+# Measured against the S template with `LETTER_MAX=160`, disc crops from
+# s213 and s188 groundtruth video give:
 #
-# **M and H are 2.5x the floor**, so there is no plausible route to reading a
-# medium as a soft, which is the only confusion that would matter on a pit
-# disc. The thin margin is against arbitrary glyphs - a "5" lands 0.022 outside
-# - and nothing on a GT7 pit disc is a 5. That margin is what bounds how far
-# this may ever be RAISED: at 0.30, five, six, three, eight and G all read as S.
-MATCH_FLOOR = 0.18
+#     S discs (truth=S, col=S):    0.397–0.453   (must be ≤ MATCH_FLOOR)
+#     M discs (col=M, path unused): 0.411–0.520  (never reaches letter())
+#     H discs (col=H, path unused): 0.335–0.524  (never reaches letter())
+#     synthetic S (live-feed):      0.107         (covered at any floor ≥ 0.11)
+#
+# **The minimum floor that reads all observed S discs from AV1 video is 0.453.**
+# Setting 0.455 leaves 0.002 headroom above the worst measured S crop.
+# The M/H figures are listed for context; they do not bound this choice.
+#
+# **The floor was raised from 0.18 → 0.35 → 0.455** (26 Sep 2026, brief
+# brief_names_stops.md cause 4).  0.35 was derived from a measurement error:
+# the previous session measured distances on the FULL pitcrop strip (32×440 px)
+# rather than the disc sub-crop, yielding spuriously low values (0.27–0.34).
+# Measuring on the actual disc region gives 0.397–0.453, all above 0.35, so
+# 0.35 still read no AV1 S discs.  0.455 covers all 13 observed S crops.
+# Rests on AV1 video only — live-feed S discs measure 0.046–0.064 (Spa, 96
+# discs) and are well inside any floor ≥ 0.10.
+MATCH_FLOOR = 0.455
 
 # The disc body is saturated red; the letter is dark on it.
 #
@@ -83,7 +94,14 @@ RED_MIN = 140
 CHANNEL_RATIO = 1.35
 # Below this much spread between channels the disc is white - the hard compound.
 WHITE_SPREAD = 55
-LETTER_MAX = 120
+# **Raised from 120 to 160** (26 Sep 2026, brief_names_stops.md cause 4).
+# AV1-compressed video uplifts the S stroke pixels: measured from disc_S_1215.png
+# (a real s213 crop), the S strokes reach a max channel of 106-200. Disc body
+# pixels (red, ~R=180-200, G/B<<R) still have max ≥180 and are excluded. The
+# new value captures strokes at 120-160 that the old threshold missed.
+# Rests partly on video — live-feed S strokes are near-black (max≈20) and were
+# always inside any reasonable threshold; the upper range 160-200 is video-only.
+LETTER_MAX = 160
 # Fewer red pixels than this is not a disc, and fewer dark ones is not a letter.
 # **A fraction of the disc, not an absolute count.** 120 pixels needs a disc at
 # least 12.4 px across, which is above what `pit_columns.DISC_MIN_FRAC` accepts

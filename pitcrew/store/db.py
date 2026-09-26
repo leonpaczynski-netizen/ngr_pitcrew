@@ -57,6 +57,14 @@ def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+# P3-1 (26 Sep 2026): minimum time gap in seconds between two DIFFERENT stops
+# by the same driver.  GT7's measured dead time before a hose connects is
+# ~16.9 s, so no car can leave the box and re-enter within 20 s.  Two filings
+# whose time windows are within this gap must be the same visit; beyond it they
+# cannot be. Justified against rivals.DEAD_TIME_S which is 16.9 s in
+# pitcrew/race/rivals.py.
+_FOLD_MAX_GAP_S = 20.0
+
 # The two event constants the driver types, and the column that says whether he
 # did.  Both value columns are NOT NULL with an app default, so `None` from the
 # form cannot be stored as itself; it is recorded as an absent provenance and
@@ -1233,6 +1241,38 @@ class Store:
             conn.execute("UPDATE sessions SET ended_at = ? WHERE id = ?",
                          (at or _now(), session_id))
 
+    def mark_session_debriefed(self, session_id: int,
+                               note: str | None = None) -> bool:
+        """Set `sessions.debriefed_at` and record an `engineer_writes` row.
+
+        Idempotent: calling it a second time is a no-op and returns False.
+        Returns True on the first marking, False on every subsequent one.
+
+        A race is due for cleanup once it has ended AND either this has been
+        set OR 14 days have elapsed since it ended (see
+        `rival_history.is_race_session_due`).
+        """
+        row = self.get_session(session_id)
+        if row is None:
+            return False
+        if row.get("debriefed_at") is not None:
+            return False        # already marked — idempotent, no write
+        now = _now()
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET debriefed_at = ? WHERE id = ?",
+                (now, session_id))
+        self.note_engineer_write(
+            "session_debrief",
+            target_id=session_id,
+            event_id=row.get("event_id"),
+            author="race engineer (MCP)",
+            summary=(f"session {session_id} marked debriefed"
+                     + (f": {note}" if note else "")),
+            before=None,
+            after={"debriefed_at": now, "note": note})
+        return True
+
     def open_sessions(self) -> list[dict]:
         """Sessions with no end, newest first, each with its last sign of life.
 
@@ -1590,7 +1630,10 @@ class Store:
                           reads: int = 0, compound_reads: int = 0,
                           watched_s: float | None = None,
                           partial: bool = False,
-                          compound_in: str | None = None) -> int:
+                          compound_in: str | None = None,
+                          left_view: bool = False,
+                          visit_start_s: float | None = None,
+                          visit_end_s: float | None = None) -> int:
         """File one observed stop.
 
         Nullable throughout, deliberately: these come from reading a screen and
@@ -1600,20 +1643,165 @@ class Store:
         `partial` says the watcher joined after the fill had begun, which makes
         `fuel_in_l` an upper bound rather than a measurement - and nothing in
         the numbers themselves would say so.
+
+        `visit_start_s` / `visit_end_s` are monotonic clock seconds bounding
+        the observation window.  The duplicate-fold guard uses them: two filings
+        are treated as the same stop only when their windows overlap or are
+        separated by less than `_FOLD_MAX_GAP_S` (20 s) AND lap is within ±1.
+        If either side's times are unavailable the guard does NOT fold — a None
+        cannot prove identity.
         """
         with self._write() as conn:
+            # **Duplicate guard** (fault 2, coordinator 26 Sep 2026; tightened
+            # P3-1 26 Sep 2026).  Two clusters that watched the same pit stop
+            # will each file a stop row, usually on the same lap.  Before
+            # inserting, check for existing rows for this driver in this session
+            # with lap ±1.  Fold only when BOTH filings carry time-window
+            # information whose windows overlap or are within _FOLD_MAX_GAP_S:
+            # that is the only safe way to identify "same visit".  Without the
+            # time check, lap ±1 alone folds two genuine consecutive stops (e.g.
+            # a penalty box on the lap immediately after a planned stop).
+            candidates = conn.execute(
+                "SELECT id, fuel_in_l, fuel_out_l, reads, watched_s, "
+                "partial, left_view, laps_total, compound, compound_in, "
+                "visit_start_s, visit_end_s "
+                "FROM rival_stops "
+                "WHERE session_id IS NOT DISTINCT FROM ? AND driver = ? "
+                "AND (? IS NULL OR lap IS NULL OR ABS(lap - ?) <= 1)",
+                (session_id, driver, lap, lap)).fetchall()
+            existing_dup = None
+            for c in candidates:
+                c_start = c["visit_start_s"]
+                c_end = c["visit_end_s"]
+                # Times unavailable on either side — cannot prove same visit.
+                if (c_start is None or c_end is None
+                        or visit_start_s is None or visit_end_s is None):
+                    continue
+                # Gap between the two windows: negative means they overlap.
+                gap = max(c_start, visit_start_s) - min(c_end, visit_end_s)
+                if gap <= _FOLD_MAX_GAP_S:
+                    existing_dup = c
+                    break
+            if existing_dup is not None:
+                e = existing_dup
+                # fuel_in_l: earliest valid entry = minimum non-None
+                def _min_nn(a, b):
+                    if a is None:
+                        return b
+                    if b is None:
+                        return a
+                    return min(a, b)
+                # fuel_out_l: best exit = maximum non-None
+                def _max_nn(a, b):
+                    if a is None:
+                        return b
+                    if b is None:
+                        return a
+                    return max(a, b)
+                new_fuel_in = _min_nn(e["fuel_in_l"], fuel_in_l)
+                new_fuel_out = _max_nn(e["fuel_out_l"], fuel_out_l)
+                new_reads = (e["reads"] or 0) + int(reads)
+                new_watched = ((e["watched_s"] or 0.0)
+                               + (watched_s or 0.0))
+                new_partial = bool(e["partial"]) or partial
+                # left_view only if BOTH had left_view (0 if either was complete)
+                new_left_view = bool(e["left_view"]) and left_view
+                new_laps_total = (e["laps_total"] if e["laps_total"] is not None
+                                  else laps_total)
+                new_compound = e["compound"] if e["compound"] is not None else compound
+                new_compound_in = (e["compound_in"] if e["compound_in"] is not None
+                                   else compound_in)
+                # Both sides had valid times (guaranteed by the fold guard).
+                new_visit_start = min(e["visit_start_s"], visit_start_s)
+                new_visit_end = max(e["visit_end_s"], visit_end_s)
+                conn.execute(
+                    "UPDATE rival_stops SET "
+                    "fuel_in_l = ?, fuel_out_l = ?, reads = ?, watched_s = ?, "
+                    "partial = ?, left_view = ?, laps_total = ?, "
+                    "compound = ?, compound_in = ?, "
+                    "visit_start_s = ?, visit_end_s = ?, recorded_at = ? "
+                    "WHERE id = ?",
+                    (new_fuel_in, new_fuel_out, new_reads, new_watched,
+                     1 if new_partial else 0, 1 if new_left_view else 0,
+                     new_laps_total, new_compound, new_compound_in,
+                     new_visit_start, new_visit_end,
+                     _now(), e["id"]))
+                log("store").info(
+                    "session %s: folded duplicate stop for %r lap %s "
+                    "(reads %d+%d, fuel_in %.1f→%.1f, fuel_out %.1f→%.1f)",
+                    session_id, driver, lap,
+                    e["reads"] or 0, int(reads),
+                    e["fuel_in_l"] if e["fuel_in_l"] is not None else float("nan"),
+                    new_fuel_in if new_fuel_in is not None else float("nan"),
+                    e["fuel_out_l"] if e["fuel_out_l"] is not None else float("nan"),
+                    new_fuel_out if new_fuel_out is not None else float("nan"))
+                return int(e["id"])
             cur = conn.execute(
                 """INSERT INTO rival_stops
                        (session_id, driver, lap, laps_total, fuel_in_l,
                         fuel_out_l, compound, compound_in, assumed_start_l,
                         reads, compound_reads, watched_s, partial,
-                        recorded_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        left_view, visit_start_s, visit_end_s, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, driver, lap, laps_total, fuel_in_l, fuel_out_l,
                  compound, compound_in, assumed_start_l, int(reads),
                  int(compound_reads), watched_s, 1 if partial else 0,
+                 1 if left_view else 0, visit_start_s, visit_end_s,
                  _now()))
             return int(cur.lastrowid)
+
+    def record_board_reads(self, session_id: int | None,
+                           rows: list[dict]) -> int:
+        """Write a batch of board reads from one capture frame.
+
+        Each dict in `rows` must carry: `at_s`, `lap`, `position`,
+        and optionally `cluster_id`, `name`, `name_source`, `pit_columns`,
+        `fuel_l`, `compound`.
+
+        Batched so the write is one transaction per frame (~8 rows) rather
+        than one per row.  Returns the number of rows written.
+        """
+        if session_id is None or not rows:
+            return 0
+        now = _now()
+        params = [
+            (session_id, r["at_s"], r.get("lap"), int(r["position"]),
+             r.get("cluster_id"), r.get("name"), r.get("name_source"),
+             1 if r.get("pit_columns") else 0,
+             r.get("fuel_l"), r.get("compound"), now)
+            for r in rows
+        ]
+        with self._write() as conn:
+            conn.executemany(
+                """INSERT INTO board_reads
+                       (session_id, at_s, lap, position, cluster_id, name,
+                        name_source, pit_columns, fuel_l, compound,
+                        recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                params)
+        return len(params)
+
+    def record_name_resolution(self, session_id: int | None, *,
+                               cluster_id: str, name: str, source: str,
+                               score: float | None = None,
+                               votes: int = 1,
+                               at_s: float | None = None) -> None:
+        """Log one name-resolution event.
+
+        A single INSERT per event rather than batched because resolutions are
+        rare (at most once per cluster per OCR pass) and the record matters for
+        auditing exactly what the system decided and when.
+        """
+        if session_id is None:
+            return
+        with self._write() as conn:
+            conn.execute(
+                """INSERT INTO name_resolutions
+                       (session_id, cluster_id, name, source, score, votes,
+                        at_s, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, str(cluster_id), name, source, score, int(votes),
+                 at_s, _now()))
 
     def record_gap_reads(self, session_id: int | None, samples) -> int:
         """File one crossing's worth of gap readings. Returns rows written.
@@ -1697,7 +1885,9 @@ class Store:
                      ("board_sightings", "driver"),
                      ("traffic", "rival"),
                      ("gap_reads", "subject"),
-                     ("series_teammates", "driver"))
+                     ("series_teammates", "driver"),
+                     # v22: the normalised history carries the driver name too.
+                     ("rival_race_history", "driver"))
 
     def rename_driver(self, old: str, new: str) -> int:
         """Give a driver his real name, and carry his whole history with him.
@@ -1783,6 +1973,107 @@ class Store:
                       in sorted(carried.items())) or "nothing on file")
         return moved
 
+    # Tables that carry a session_id alongside a driver name, and so can be
+    # rewritten for ONE session without touching any other.
+    _SESSION_NAME_COLUMNS = (
+        ("rival_stops",          "driver"),
+        ("board_sightings",      "driver"),
+        ("board_positions",      "driver"),
+        ("board_reads",          "name"),
+        # v22: the normalised history is session-scoped too.
+        ("rival_race_history",   "driver"),
+    )
+
+    def rename_driver_session(self, session_id: int | None,
+                              old: str, new: str) -> int:
+        """Rename a driver in THIS SESSION's rows only.
+
+        Called on a live OCR rename: a phantom handle (e.g. 'Car #5') has
+        been resolved to a real name during a race.  Past sessions must not
+        be touched, so this is separate from the global `rename_driver`.
+
+        Returns the number of `rival_stops` rows moved.
+        """
+        if not old or not new or old == new or session_id is None:
+            return 0
+        moved = 0
+        carried: dict[str, int] = {}
+        with self._write() as conn:
+            for table, column in self._SESSION_NAME_COLUMNS:
+                try:
+                    rows = conn.execute(
+                        f"UPDATE {table} SET {column} = ? "
+                        f"WHERE {column} = ? AND session_id = ?",
+                        (new, old, session_id)).rowcount
+                except sqlite3.OperationalError:
+                    log("store").warning(
+                        "rename_driver_session: no %s.%s in this database",
+                        table, column)
+                    continue
+                if rows:
+                    carried[f"{table}.{column}"] = int(rows)
+                if table == "rival_stops":
+                    moved = int(rows)
+            # Fold the phantom's drivers row into the real name's row, but ONLY
+            # when the phantom was minted in THIS session — i.e. has no
+            # rival_stops rows in any session other than this one.  A phantom
+            # with history in past sessions is an archived driver; deleting its
+            # row would orphan those rows and lose any exemplar bitmap that lets
+            # the roster recognise him in future races (IMPORTANT 5, critic
+            # 26 Sep 2026).
+            try:
+                # Guard: count stops for 'old' in sessions other than this one.
+                # If any exist, the phantom has prior history and must not be
+                # touched in the drivers table.
+                other_sessions = conn.execute(
+                    "SELECT COUNT(*) FROM rival_stops "
+                    "WHERE driver = ? AND (session_id IS NULL OR session_id != ?)",
+                    (old, session_id)).fetchone()[0]
+                if other_sessions > 0:
+                    log("store").info(
+                        "session %d: phantom %r has %d stop(s) in other "
+                        "sessions — drivers row left untouched",
+                        session_id, old, other_sessions)
+                else:
+                    existing = conn.execute(
+                        "SELECT id, exemplar, rows, cols FROM drivers "
+                        "WHERE name = ?", (new,)).fetchone()
+                    going = conn.execute(
+                        "SELECT exemplar, rows, cols FROM drivers "
+                        "WHERE name = ?", (old,)).fetchone()
+                    if going is not None:
+                        if existing is None:
+                            # Real name has no drivers row yet — promote the
+                            # phantom's row to the real name.
+                            conn.execute(
+                                "UPDATE drivers SET name = ?, updated_at = ? "
+                                "WHERE name = ?", (new, _now(), old))
+                            carried["drivers.name"] = 1
+                        else:
+                            # Both rows exist — carry exemplar if phantom has
+                            # it and real row doesn't (same logic as
+                            # rename_driver).
+                            if (going["exemplar"] is not None
+                                    and existing["exemplar"] is None):
+                                conn.execute(
+                                    "UPDATE drivers SET exemplar = ?, rows = ?, "
+                                    "cols = ?, updated_at = ? WHERE id = ?",
+                                    (going["exemplar"], going["rows"],
+                                     going["cols"], _now(), existing["id"]))
+                                carried["drivers.exemplar"] = 1
+                            conn.execute(
+                                "DELETE FROM drivers WHERE name = ?", (old,))
+            except sqlite3.OperationalError:
+                log("store").warning(
+                    "rename_driver_session: drivers table not available, "
+                    "phantom row for %r left in place", old)
+        log("store").info(
+            "session %d: renamed %r -> %r: %s",
+            session_id, old, new,
+            ", ".join(f"{what} {count}" for what, count
+                      in sorted(carried.items())) or "nothing on file")
+        return moved
+
     @staticmethod
     def _rename_in_knowledge(conn, old: str, new: str) -> int:
         """Carry the name into `race_knowledge.rivals_json`. Rows rewritten.
@@ -1853,7 +2144,8 @@ class Store:
     def rival_stops(self, driver: str | None = None,
                     *, include_partial: bool = True,
                     series: str | None = None,
-                    car: str | None = None) -> list[dict]:
+                    car: str | None = None,
+                    session_id: int | None = None) -> list[dict]:
         """Every stop on file, newest last. One row is one observation.
 
         Each row carries the `series` and `car_name` of the race it was watched
@@ -1865,6 +2157,11 @@ class Store:
         **The circuit comes with the row too**, because litres a LAP is a
         property of the lap: a Monza lap and a Bathurst lap are different
         distances, and a mean over both describes no track anybody races on.
+
+        `session_id` scopes the result to a single race.  Used by the live
+        monitor (Story 2, 25 Sep 2026) so the rival table shows only stops
+        from the race in progress rather than the whole career history.  A stop
+        from three races ago carries no information about tonight's strategy.
         """
         sql = ("SELECT r.*, e.series AS series, e.car_name AS car_name, "
                "e.track AS track, e.layout AS layout "
@@ -1883,10 +2180,74 @@ class Store:
         if car is not None:
             where.append("e.car_name IS ?")
             params.append(car)
+        if session_id is not None:
+            where.append("r.session_id = ?")
+            params.append(session_id)
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY r.id"
         return [dict(r) for r in self._query(sql, params)]
+
+    # -------------------------------------------------------- rival_race_history
+
+    def upsert_rival_race_history(self, session_id: int, driver: str,
+                                  row: dict) -> None:
+        """Write one `rival_race_history` row.  Replaces any existing row for
+        the same (session_id, driver) pair (idempotent).
+
+        `row` must not contain 'id', 'session_id', 'driver' or 'derived_at'
+        — those are added here.  NULL is the correct value for any field that
+        was not measurable (rule 3).
+        """
+        now = _now()
+        fields = {k: v for k, v in row.items()
+                  if k not in ("id", "session_id", "driver", "derived_at")}
+        fields["session_id"] = session_id
+        fields["driver"] = driver
+        fields["derived_at"] = now
+        cols = ", ".join(fields)
+        placeholders = ", ".join("?" * len(fields))
+        with self._write() as conn:
+            conn.execute(
+                f"INSERT OR REPLACE INTO rival_race_history ({cols}) "
+                f"VALUES ({placeholders})",
+                list(fields.values()))
+
+    def rival_race_history(self, *,
+                           session_id: int | None = None,
+                           driver: str | None = None) -> list[dict]:
+        """Rows from `rival_race_history`, newest first.
+
+        Pass `session_id` to get one race's normalised rows.  Pass `driver`
+        to get one rival's history across all races.  Both may be combined.
+        """
+        sql = "SELECT * FROM rival_race_history"
+        where, params = [], []
+        if session_id is not None:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if driver is not None:
+            where.append("driver = ?")
+            params.append(driver)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC"
+        return [dict(r) for r in self._query(sql, params)]
+
+    def set_history_compacted(self, session_id: int) -> None:
+        """Mark a session as having had its bulk tables cleaned up."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET history_compacted_at = ? WHERE id = ?",
+                (_now(), session_id))
+
+    def board_reads_for_driver(self, session_id: int,
+                               driver: str) -> list[dict]:
+        """Board reads for one named driver in one session, in time order."""
+        return [dict(r) for r in self._query(
+            "SELECT at_s, pit_columns FROM board_reads "
+            "WHERE session_id = ? AND name = ? ORDER BY at_s",
+            (session_id, driver))]
 
     def list_laps(self, session_id: int) -> list[dict]:
         rows = self._query(

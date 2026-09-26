@@ -244,9 +244,11 @@ IDENTICAL_PEAKS_MEAN_STATIC = 3
 # clear would throw those six away. Zero accepts across this many attempts is a
 # different claim: the gauge is not coming.
 #
-# Sixty, against the 2-10 s intervals raced, is ten minutes and several laps -
-# far past any occlusion a long left-hander or a menu can produce.
-BLIND_SAMPLES_BEFORE_STANDING_DOWN = 60
+# Ten minutes: far past any occlusion a long left-hander, a menu, or a
+# pit-lane transit can produce. Time-based so the meaning is unchanged at any
+# sampling rate. (Was `BLIND_SAMPLES_BEFORE_STANDING_DOWN = 60` frames;
+# at 0.2 s that was only 12 s — a single slow corner in VR.)
+BLIND_WINDOW_S = 600.0
 # A drop this large between readings is a fresh set, not wear going
 # backwards. Wear is monotonic within a stint and the only thing that
 # resets it is a tyre change - the gauge snapping back to white is a
@@ -326,12 +328,14 @@ GAUGE_MAX_RISE = 0.15
 # them, all judged against one reading, is evidence about that reading. So the
 # baseline is dropped and the next reading re-seeds the series.
 #
-# Deliberately not small. Three or four refusals in a row is ordinary - the
+# Deliberately not short. Three or four refusals in a row is ordinary - the
 # driver looks away in VR, the pit-lane HUD relocates the gauge for a few
 # seconds - and re-seeding then would hand the series to the pit-lane misread
-# that `_coherent` exists to reject. Twelve consecutive, at the sample rates
-# raced, is tens of seconds of nothing but disagreement.
-REFUSALS_BEFORE_RESEED = 12
+# that `_coherent` exists to reject. Thirty seconds of nothing but
+# disagreement is the threshold. Time-based so the meaning is unchanged at
+# any sampling rate. (Was `REFUSALS_BEFORE_RESEED = 12` frames; at burst
+# 0.2 s that was only 2.4 s — a brief noise episode.)
+REFUSALS_WINDOW_S = 30.0
 # How far past its own interval a held reading may be and still be the
 # lap reading. Wider than one interval so a single missed tick does not
 # force a grab on the crossing, and far short of a lap so a stale number
@@ -349,6 +353,34 @@ STOP_JOIN_S = 2.0
 FREE_RUN_LOG_SPACING_S = 30.0
 # Sentinel: no crossing asked, take a free-running sample.
 _FREE_RUN = object()
+
+# --- pit burst sampling -------------------------------------------------------
+#
+# While any rival Visit is open (car standing in the pit lane), the sampler
+# grabs at BURST_INTERVAL_S instead of hud_sample_interval_s.  This catches
+# the disc flip that GT7 shows for only 0.25-0.35 s at the lane exit (measured
+# on s188, 60fps).  After the last visit closes a short tail keeps the rate up
+# so the exit frame is not missed.
+#
+# The burst is bounded per-visit-set: once a car enters and none are still open,
+# the visit set closes and the budget resets. A stuck visit (leftover from a
+# session that never cleanly closed) cannot pin the CPU for the race.
+#
+# **Why this is on the sampler, not inside PitWall.see():** the PitWall is fed
+# frames; it does not grab them.  The rate is the sampler's job.
+#
+# Measured on this machine: PitWall.see() costs 44-111 ms per frame (memory
+# reference_screen_capture_rate.md, 17 Sep 2026 after the batch-glyph-scoring
+# fix).  200 ms burst interval leaves >90 ms headroom even at the top of the
+# measured range.  If see() is slower the burst is effectively "as fast as it
+# completes" — the interval check in _free_run is non-blocking.
+BURST_INTERVAL_S = 0.2
+# Seconds to keep bursting after the last open visit closes.
+BURST_TAIL_S = 3.0
+# Maximum continuous burst time per visit set (seconds).  If a Visit has been
+# open longer than this the burst ends and the normal interval resumes.
+# 120 s comfortably exceeds the longest real stop measured (Bathurst ~100 s).
+BURST_MAX_S = 120.0
 
 
 @dataclass(frozen=True)
@@ -1742,6 +1774,22 @@ class LiveWearSampler:
         self._stop = threading.Event()
         self._failures = 0
         self.stood_down = False
+        # --- pit burst sampling ------------------------------------------
+        # Set by `set_burst_watch`; read only on the worker thread via the
+        # same path that drives `see()`, so no data race.
+        self._burst_wall = None
+        self._burst_interval_s: float = BURST_INTERVAL_S
+        self._burst_tail_s: float = BURST_TAIL_S
+        self._burst_max_s: float = BURST_MAX_S
+        # True while burst is active (for one-shot logging).
+        self._burst_active: bool = False
+        # When the current burst started (monotonic).
+        self._burst_start_s: float = 0.0
+        # When we last observed an open visit (monotonic).  0 = never.
+        self._burst_last_open_s: float = 0.0
+        # Set when the burst cap fires; cleared only when visits go fully
+        # closed so a stuck-open visit cannot restart the burst indefinitely.
+        self._burst_capped: bool = False
         # Crossings in a row that produced no reading, and the dim peaks they
         # reported. Both exist to turn a silent instrument into a spoken one -
         # see `BLIND_CROSSINGS_BEFORE_SAYING`.
@@ -1753,8 +1801,11 @@ class LiveWearSampler:
         self._said_stuck = False
         self._dim_peaks: list[int] = []
         # Consecutive samples that produced no accepted reading, for any
-        # reason. Reset by any accept. See BLIND_SAMPLES_BEFORE_STANDING_DOWN.
+        # reason. Reset by any accept. See BLIND_WINDOW_S.
         self._nothing_seen = 0
+        # Monotonic time of the first nothing-seen in the current run; None
+        # while the run has not started or after an accept cleared it.
+        self._nothing_since_s: float | None = None
         # The most recent good reading and when it was taken. Written and read
         # on the worker thread only.
         self._latest: tuple[float, Reading] | None = None
@@ -1762,8 +1813,11 @@ class LiveWearSampler:
         # set, the same way the offline tool splits stints.
         self.series: list[tuple[float, dict]] = []
         # Consecutive refusals against the current baseline. See
-        # `REFUSALS_BEFORE_RESEED`.
+        # `REFUSALS_WINDOW_S`.
         self._refused_running = 0
+        # Monotonic time of the first refusal in the current run; None while
+        # the run has not started or after an accept cleared it.
+        self._refused_since_s: float | None = None
         self._last_free_log = 0.0
         # **A fresh-set reading, held until a second agrees.** A drop to zero
         # on all four corners was accepted instantly while a rise was refused
@@ -1797,6 +1851,7 @@ class LiveWearSampler:
         self._said_stuck = False
         self._dim_peaks.clear()
         self._nothing_seen = 0
+        self._nothing_since_s = None
         self.stood_down = False
         # **The comparison baseline is session state and it never was.** The
         # series and the held reading outlived the session along with the
@@ -1806,9 +1861,81 @@ class LiveWearSampler:
         # ended is not evidence about the one starting.
         self.series = []
         self._refused_running = 0
+        self._refused_since_s = None
         self._latest = None
         self._pending_fresh = None
         self._gauge_near = None
+        # **Burst state is session state too.** A stuck visit from a previous
+        # session must not hold the burst open for the next one.
+        self._burst_active = False
+        self._burst_start_s = 0.0
+        self._burst_last_open_s = 0.0
+        self._burst_capped = False
+
+    def set_burst_watch(self, wall, *,
+                        burst_interval_s: float = BURST_INTERVAL_S,
+                        burst_tail_s: float = BURST_TAIL_S,
+                        burst_max_s: float = BURST_MAX_S) -> None:
+        """Tell the sampler which PitWall to watch for open visits.
+
+        While `wall.any_visit_open` is True the sampler grabs at
+        `burst_interval_s` (default 0.2 s / 5 Hz) so the lane-exit disc flip
+        (0.25-0.35 s window, measured s188) is captured.
+
+        `burst_tail_s` keeps the faster rate going after the last visit closes
+        (default 3 s) so the exit frame is not missed by a close that fires
+        just before the grab.  `burst_max_s` caps continuous burst time
+        (default 120 s) so a stuck visit cannot pin the CPU for a race.
+
+        **Called from any thread; the reference is written once and never
+        replaced mid-burst.**  The worker thread reads it in `_free_run` and
+        `_run`, both on the same thread that drives `see()`, so there is no
+        data race on the wall's `_visits`.
+        """
+        self._burst_wall = wall
+        self._burst_interval_s = max(0.01, float(burst_interval_s))
+        self._burst_tail_s = max(0.0, float(burst_tail_s))
+        self._burst_max_s = max(1.0, float(burst_max_s))
+
+    def _burst_in_effect(self, now: float) -> bool:
+        """True if burst sampling should be used on this iteration.
+
+        Called only on the worker thread.  Updates `_burst_active`,
+        `_burst_start_s`, and `_burst_last_open_s` as a side-effect.
+        """
+        wall = self._burst_wall
+        if wall is None:
+            return False
+        open_now = wall.any_visit_open
+        if not open_now:
+            # Visits have closed — cap may lift for the next burst.
+            if self._burst_capped:
+                self._burst_capped = False
+                _log.info("hud-burst: cap cleared (all visits closed)")
+        if open_now:
+            self._burst_last_open_s = now
+            if not self._burst_active and not self._burst_capped:
+                self._burst_active = True
+                self._burst_start_s = now
+                _log.info("hud-burst: start (pit lane open)")
+        # **Cap is checked unconditionally** — if a visit stays open beyond
+        # burst_max_s, the burst still ends.  The cap sticks until the visit
+        # set that triggered it closes, so a stuck-open visit cannot restart
+        # the burst after the cap fires.
+        if self._burst_active and now - self._burst_start_s > self._burst_max_s:
+            self._burst_active = False
+            self._burst_capped = True
+            _log.info("hud-burst: stop (cap — will not restart until all "
+                      "visits close)")
+            return False
+        if not open_now and self._burst_active:
+            # Visit closed — check whether we are still in the tail window.
+            in_tail = (self._burst_last_open_s > 0
+                       and now - self._burst_last_open_s < self._burst_tail_s)
+            if not in_tail:
+                self._burst_active = False
+                _log.info("hud-burst: stop (tail expired)")
+        return self._burst_active
 
     def start(self) -> None:
         """Start the reader. A no-op while one is already running.
@@ -1882,8 +2009,22 @@ class LiveWearSampler:
 
     def _run(self, stop: threading.Event) -> None:
         while not stop.is_set():
+            # **Shorten the queue wait during burst so the loop wakes at the
+            # burst rate.**  QUEUE_WAIT_S (0.5 s) is the normal idle sleep; at
+            # burst_interval_s=0.2 s the loop would otherwise wake 0.5 s after
+            # the last grab, missing the 0.25-0.35 s disc window entirely.
+            # The burst check here is a HINT only — the worker thread has not
+            # yet updated `_burst_last_open_s` — but it is correct one frame
+            # behind, which is good enough: a 0.2 s overshoot on the first
+            # burst iteration is harmless.
+            now = time.monotonic()
+            burst = (self._burst_wall is not None
+                     and self._burst_active
+                     and (now - self._burst_last_open_s < self._burst_tail_s
+                          or self._burst_wall.any_visit_open))
+            wait = self._burst_interval_s if burst else QUEUE_WAIT_S
             try:
-                lap_id = self._queue.get(timeout=QUEUE_WAIT_S)
+                lap_id = self._queue.get(timeout=wait)
             except queue.Empty:
                 # Nothing asked. Free-running turns the idle wait into a
                 # sample; without it the loop simply goes round again.
@@ -1902,10 +2043,12 @@ class LiveWearSampler:
 
     def _free_run(self, stop: threading.Event | None = None) -> None:
         """One un-asked-for sample, kept but never filed against a lap."""
-        if not self._interval_s or self.stood_down:
-            return
         now = time.monotonic()
-        if self._latest is not None and now - self._latest[0] < self._interval_s:
+        burst = self._burst_in_effect(now)
+        effective = self._burst_interval_s if burst else self._interval_s
+        if not effective or self.stood_down:
+            return
+        if self._latest is not None and now - self._latest[0] < effective:
             return
         reading, _ = self._read()
         if stop is not None and stop.is_set():
@@ -2050,28 +2193,37 @@ class LiveWearSampler:
             # The place may be what is wrong. Search the whole next frame.
             self._gauge_near = None
             self._refused_running += 1
+            # `at` is already a monotonic timestamp (from the caller's
+            # time.monotonic() call), so it is the right clock to use for the
+            # duration check — and tests can drive it without patching time.
+            if self._refused_since_s is None:
+                self._refused_since_s = at
             _log.warning("hud-wear: reading refused - %s", why)
-            if self._refused_running >= REFUSALS_BEFORE_RESEED:
+            if at - self._refused_since_s >= REFUSALS_WINDOW_S:
                 # **The baseline is the reading that is wrong.** See
-                # `REFUSALS_BEFORE_RESEED`. Said loudly rather than quietly:
+                # `REFUSALS_WINDOW_S`. Said loudly rather than quietly:
                 # the series is being thrown away, so any wear slope built on
                 # it is gone too, and the driver's gauge figures restart from
                 # here.
                 _log.warning(
-                    "hud-wear: %d readings in a row refused against one "
+                    "hud-wear: %d readings refused over %.0f s against one "
                     "baseline (%s) - so the baseline is what is wrong, not "
                     "the gauge. Dropping it and re-seeding from the next "
                     "reading; the wear series so far is discarded.",
                     self._refused_running,
+                    at - self._refused_since_s,
                     ", ".join(f"{k.upper()} {v * 100:.0f}%"
                               for k, v in sorted(self.series[-1][1].items())
                               if v is not None) if self.series else "none")
                 self.series = []
                 self._latest = None
                 self._refused_running = 0
+                self._refused_since_s = None
             return False
         self._refused_running = 0
+        self._refused_since_s = None
         self._nothing_seen = 0
+        self._nothing_since_s = None
         if fresh:
             pending = self._pending_fresh
             if pending is None:
@@ -2155,7 +2307,7 @@ class LiveWearSampler:
                 # failure**: the source is fine and the next grab may well be
                 # good, so this does not tell the driver the gauge has gone
                 # dark. `_keep` has already said what was wrong with it. It
-                # does count toward `BLIND_SAMPLES_BEFORE_STANDING_DOWN`,
+                # does count toward `BLIND_WINDOW_S`,
                 # because a sample that produced no reading produced no
                 # reading whatever the reason.
                 self._saw_nothing()
@@ -2257,7 +2409,7 @@ class LiveWearSampler:
             self._status(Reading(None, blind_note(note),
                                  peak=reading.peak))
 
-    def _saw_nothing(self) -> None:
+    def _saw_nothing(self, _now: float | None = None) -> None:
         """One more sample that produced no reading. Stand down at the cap.
 
         **Said once, with the route to the number rather than only its
@@ -2266,22 +2418,27 @@ class LiveWearSampler:
         see it" is not the end of the sentence. In VR it can be read afterwards
         off a chase-view replay, where the HUD is back in screen space, and
         that is a thing the driver can act on.
+
+        `_now` overrides `time.monotonic()` for deterministic tests.
         """
         self._nothing_seen += 1
+        now = time.monotonic() if _now is None else _now
+        if self._nothing_since_s is None:
+            self._nothing_since_s = now
         if (self.stood_down
-                or self._nothing_seen < BLIND_SAMPLES_BEFORE_STANDING_DOWN):
+                or now - self._nothing_since_s < BLIND_WINDOW_S):
             return
         self.stood_down = True
         _log.warning(
-            "hud-wear: %s samples in a row produced no reading, so the gauge "
-            "is not visible this session and sampling stops here. **This is "
-            "expected in VR** - GT7 draws the HUD on the car's dashboard in "
-            "3D, so a fixed rectangle cannot hold it. Nothing is lost that "
-            "was not already lost: read it off a chase-view replay afterwards "
-            "with `tools/read_hud_wear.py --session <id> --video <file>`, "
-            "where the HUD is in screen space and the whole race is "
+            "hud-wear: %s samples in a row over %.0f s produced no reading, "
+            "so the gauge is not visible this session and sampling stops here. "
+            "**This is expected in VR** - GT7 draws the HUD on the car's "
+            "dashboard in 3D, so a fixed rectangle cannot hold it. Nothing is "
+            "lost that was not already lost: read it off a chase-view replay "
+            "afterwards with `tools/read_hud_wear.py --session <id> --video "
+            "<file>`, where the HUD is in screen space and the whole race is "
             "available. Until then this session contributes no measured wear.",
-            self._nothing_seen)
+            self._nothing_seen, now - self._nothing_since_s)
         if self._status:
             self._status(Reading(None, "no tyre gauge this session - it will "
                                        "have to come from the replay"))

@@ -904,3 +904,187 @@ def test_a_run_of_absent_frames_is_broken_by_a_frame_his_name_did_not_read():
     wall._row_y[7] = TOP                   # the first row's centre
     wall.see(a_frame(names=False), now=31.0)
     assert wall._absent.get(7, 0) == 0
+
+
+# --- compound detection: exit disc vs arrival vote --------------------------
+#
+# Ground truth from s188 (Sardegna Rd 9, Magical daddy lap 26):
+#   - Disc shows H from first frame (t=2758.8) to t=2781.6 (last standing frame)
+#   - Disc flips to S at t=2782.0 (the lane exit frame)
+#   - At every=3 replay cadence (0.6 s interval starting from t=0), the S frame
+#     falls between processed frames: k=13910, 13910 % 3 = 2 → NOT processed.
+#   - At every=2 (0.4 s interval), k=13910, 13910 % 2 = 0 → processed.
+#   - The current code (left_on logic) correctly returns S when the exit frame
+#     IS captured.  The cause of the filed H/H is sampling rate, not logic.
+
+
+def _visit_with_exit_compound(
+        arrivals=("H",), exit_compound="S", *,
+        closed_on_absence=True, last_s=20.0, fuel=20,
+        left_view=False):
+    """Build a Visit whose compounds list ends with exit_compound.
+
+    `arrivals` are the readings during the standing period. `exit_compound`
+    is what was read on the last columns frame (the lane exit). `last_s` is
+    that frame's timestamp. `fuel` is the reading on the exit frame (sets
+    `last_compound_l`) and is also `max(readings)`.
+    """
+    compounds = list(arrivals) + [exit_compound]
+    v = Visit(driver=1, lap=26, started_s=0.0,
+              readings=[fuel] * (len(arrivals) + 1),
+              compounds=compounds,
+              last_s=last_s,
+              last_compound_l=fuel,
+              last_compound_s=last_s,
+              closed_on_absence=closed_on_absence,
+              left_view=left_view)
+    return v
+
+
+def test_exit_s_on_h_arrival_is_filed_as_compound_s():
+    """H arrivals + S on the last columns frame → compound = S.
+
+    This is the Magical daddy L26 case (s188): arrived on H, the disc flipped
+    to S at the lane exit. When the exit frame is processed, the existing
+    left_on logic returns S and compound = S.
+    """
+    v = _visit_with_exit_compound(arrivals=("H",) * 36, exit_compound="S")
+    assert v.arrived_on == "H"
+    assert v.left_on == "S"
+    assert v.compound == "S"
+    assert v.compound_changed is True
+
+
+def test_same_compound_at_exit_is_filed_unchanged():
+    """H arrivals + H on the last frame → compound = H (same-compound stop).
+
+    This covers the no-change case: all s188 stops except Magical daddy L26
+    were M→M or H→H.  The vote and exit agree → compound = arrived_on.
+    """
+    v = _visit_with_exit_compound(arrivals=("H",) * 36, exit_compound="H")
+    assert v.arrived_on == "H"
+    assert v.left_on == "H"
+    assert v.compound == "H"
+    assert v.compound_changed is None         # same compound: no change seen
+
+
+def test_m_arrival_m_exit_no_change():
+    """Medium compound: M arrivals + M on the last frame → compound = M."""
+    v = _visit_with_exit_compound(arrivals=("M",) * 20, exit_compound="M")
+    assert v.arrived_on == "M"
+    assert v.compound == "M"
+    assert v.compound_changed is None
+
+
+def test_left_view_stop_compound_is_none():
+    """CLAUDE.md rule 3: a left_view stop never saw the exit disc flip.
+
+    The disc only changes at the lane exit.  A car that dropped off the visible
+    board before the exit was seen has an unknown departure compound.  Returning
+    arrived_on here would dress a guess as a measurement.
+    """
+    v = Visit(driver=1, lap=14, started_s=0.0,
+              readings=[22, 30, 45],
+              compounds=["M", "M", "M"],
+              last_s=30.0,
+              last_compound_l=45, last_compound_s=30.0,
+              closed_on_absence=False,   # left_view = closed by stale timer
+              left_view=True)
+    assert v.arrived_on == "M"
+    assert v.left_on is None              # not closed on absence
+    assert v.compound is None             # rule 3: exit unseen → NULL
+
+
+def test_left_view_compound_null_even_with_consistent_arrivals():
+    """A car on M throughout that left view: compound = None.
+
+    It is tempting to say 'clearly M → M, so compound = M'.  But the disc
+    only changes at the exit, and the exit was never seen: he may have come
+    back out on any compound.  Rule 3 applies regardless of how many arrival
+    reads agreed.
+    """
+    v = Visit(driver=2, lap=20, started_s=0.0,
+              readings=[20, 25, 30],
+              compounds=["H"] * 50,      # 50 consistent H reads
+              last_s=60.0,
+              last_compound_l=30, last_compound_s=60.0,
+              closed_on_absence=False,
+              left_view=True)
+    assert v.arrived_on == "H"
+    assert v.compound is None             # rule 3: left view → unknown
+
+
+def test_as_stop_h_to_s_sets_tyres_changed():
+    """Visit.as_stop() sets tyres_changed=True when compound_in != compound.
+
+    This is the Magical daddy L26 ground truth: arrived on H, departed on S.
+    The as_stop() method must propagate both values and mark the change.
+    """
+    v = _visit_with_exit_compound(arrivals=("H",) * 36, exit_compound="S")
+    s = v.as_stop()
+    assert s.compound_in == "H"
+    assert s.compound == "S"
+    assert s.tyres_changed is True
+
+
+def test_as_stop_same_compound_tyres_changed_is_none():
+    """Visit.as_stop() leaves tyres_changed as None when no change was seen.
+
+    Same compound at exit: the disc did not flip. Refitted or unchanged
+    set — we cannot know. Rule 3: None, not False.
+    """
+    v = _visit_with_exit_compound(arrivals=("H",) * 36, exit_compound="H")
+    s = v.as_stop()
+    assert s.compound_in == "H"
+    assert s.compound == "H"
+    assert s.tyres_changed is None
+
+
+# --- PitWall.any_visit_open --------------------------------------------------
+
+def test_any_visit_open_false_when_no_visits():
+    """No pit columns on any row → any_visit_open is False."""
+    wall = a_wall()
+    clock = Clock()              # default step=10 s
+    warm(wall, clock)
+    assert wall.any_visit_open is False
+
+
+def test_any_visit_open_true_while_car_is_in_lane():
+    """any_visit_open flips to True the first time pit columns appear."""
+    wall = a_wall()
+    clock = Clock()
+    warm(wall, clock)
+
+    # Show a car in the lane — this opens a Visit.
+    for _ in range(MIN_READS + 1):
+        wall.see(a_frame(in_lane=(1,), fuel={1: 40}), now=clock.tick())
+
+    assert wall.any_visit_open is True
+
+
+def test_any_visit_open_false_after_visit_closes():
+    """any_visit_open drops back to False after the visit closes.
+
+    The absence close requires both CLOSE_AFTER_CLEAN_FRAMES AND
+    CLOSE_AFTER_CLEAN_S (4 s).  The default Clock step is 10 s so each
+    frame advances the clock enough; CLOSE_AFTER_CLEAN_FRAMES+1 clean
+    frames exceed both conditions.
+    """
+    stops = []
+    wall = a_wall(on_stop=stops.append)
+    clock = Clock()              # step=10 s, satisfies CLOSE_AFTER_CLEAN_S
+    warm(wall, clock)
+
+    for _ in range(MIN_READS + 1):
+        wall.see(a_frame(in_lane=(1,), fuel={1: 40}), now=clock.tick())
+    assert wall.any_visit_open is True
+
+    # Clean board frames → absence close (needs ≥ CLOSE_AFTER_CLEAN_FRAMES
+    # clean frames AND ≥ CLOSE_AFTER_CLEAN_S elapsed since first absence).
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES + 1):
+        wall.see(a_frame(), now=clock.tick())
+
+    assert wall.any_visit_open is False
+    # The stop should be filed (MIN_READS met, MIN_WATCHED_S met at 10s/frame).
+    assert len(stops) == 1

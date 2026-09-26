@@ -831,6 +831,52 @@ def engineer_writes(kind: str = "", limit: int = 20) -> str:
         store.close()
 
 
+@mcp.tool()
+def mark_session_debriefed(session_id: int, note: str = "") -> str:
+    """Mark a race session as debriefed. ⚠
+
+    Sets `sessions.debriefed_at` and records an `engineer_writes` row so the
+    write is auditable.  **Idempotent**: calling it a second time returns
+    `{"marked": false}` and changes nothing.
+
+    Once a session is marked, the cleanup job (`rival_history.cleanup_due
+    _sessions`) will normalise its rival data into `rival_race_history` and
+    then delete that session's `board_reads` and `name_resolutions` rows on
+    the next app start or session end.
+
+    Call at the end of a race debrief, with the session id from
+    `list_events` → `laps(event_id, "race")` → `session_id`.
+    """
+    store = _store()
+    try:
+        row = store.get_session(session_id)
+        if row is None:
+            return _dump({"marked": False,
+                          "error": f"no session with id {session_id}"})
+        if row.get("kind") != "race":
+            return _dump({"marked": False,
+                          "error": (f"session {session_id} is kind "
+                                    f"{row.get('kind')!r}, not 'race'. "
+                                    "Only race sessions are debriefed.")})
+        changed = store.mark_session_debriefed(session_id,
+                                               note=note or None)
+        return _dump({
+            "marked": changed,
+            "sessionId": session_id,
+            "note": (
+                "session marked debriefed. The cleanup job will normalise "
+                "rival history and delete board_reads / name_resolutions "
+                "for this session on the next app start or race end."
+                if changed else
+                "already marked — no change."
+            ),
+        })
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"marked": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
 def main() -> None:
     mcp.run()
 

@@ -143,6 +143,28 @@ Versions, and what upgrading means here:
   column added to it later needs an `ADDED_COLUMNS` entry as well as the DDL
   line.**
 
+**v21 adds `board_reads` and `name_resolutions`** (26 Sep 2026,
+  brief_names_stops.md part E).  Two new tables - one row per board position
+  per grab (~1 s cadence), and one row per OCR name resolution.  Both are
+  pure new tables, so like v12, v16, v18, v19 and v20 there is no migration
+  function and the version moves only so `Store._init_schema` still refuses a
+  file this build predates.  **A column added to either later needs an
+  `ADDED_COLUMNS` entry as well as the DDL line.**
+
+  Row-count estimate per race: at a 1 s grab cadence, a 30-lap race at Monza
+  (~90 s/lap) = ~2,700 s.  8 board rows per frame = ~21,600 rows in
+  `board_reads`.  `name_resolutions` accumulates one row per resolved cluster
+  per session — at most 20 cars, O(20) rows.  At ~100 bytes/row the total
+  per-race write load is ~2 MB; negligible.
+
+**v22 adds `rival_race_history`** (26 Sep 2026, brief_rival_history.md).
+  One row per rival per race session, normalised from `board_positions`,
+  `gap_reads`, `rival_stops` and `board_reads` before those bulk tables are
+  cleaned up.  New table, so no migration function; the version moves so
+  `Store._init_schema` still refuses a file this build predates.
+  `sessions.debriefed_at` and `sessions.history_compacted_at` are pure
+  `ADDED_COLUMNS` on the existing `sessions` table.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -154,7 +176,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 22
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -1018,6 +1040,11 @@ CREATE TABLE IF NOT EXISTS rival_stops (
     -- 1 = the watcher joined after the fill had begun, so `fuel_in_l` is an
     -- upper bound on what he came in with and the litres taken are a floor.
     partial         INTEGER NOT NULL DEFAULT 0,
+    -- Monotonic clock seconds: when the visit started and when the last read
+    -- was taken. NULL on rows filed before this column was added (26 Sep 2026).
+    -- Used by the duplicate-fold guard; see ADDED_COLUMNS + db._FOLD_MAX_GAP_S.
+    visit_start_s   REAL,
+    visit_end_s     REAL,
     recorded_at     TEXT    NOT NULL
 );
 
@@ -1221,6 +1248,142 @@ CREATE TABLE IF NOT EXISTS straight_models (
     created_at    TEXT    NOT NULL,
     updated_at    TEXT    NOT NULL
 );
+
+-- ----------------------------------------------------------------- v21
+-- **One row per car per board read** (~1 s cadence during a race session).
+--
+-- The driver asked for names and stops to be logged and persisted.  Before
+-- this table, every board read was computed and discarded: the only survivor
+-- was `board_positions` (one row per named car per LAP crossing) and
+-- `rival_stops` (one row per filed stop).  Between crossings and between
+-- stops the board was a stream of frames that left no trace.
+--
+-- `cluster_id` is the roster's integer cluster id as a TEXT string.  It is
+-- not a foreign key: the cluster only lives for the session and carries no
+-- row in any other table.  NULL where the row could not be matched to any
+-- cluster (e.g., own row excluded, or board row unreadable).
+--
+-- `name_source` is 'ocr' | 'exemplar' | 'handle' | NULL.  NULL where no
+-- name has been resolved yet; never 'unknown', which would read as a name.
+--
+-- Written batched from a queue off the capture thread.  CLAUDE.md rule 3:
+-- NULL is not-read, never 0.
+CREATE TABLE IF NOT EXISTS board_reads (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    at_s        REAL    NOT NULL,   -- monotonic clock at the grab
+    lap         INTEGER,            -- OUR lap at that moment, NULL if unknown
+    position    INTEGER NOT NULL,   -- 1-based board position (row number)
+    cluster_id  TEXT,               -- roster cluster id as text; NULL = unmatched
+    name        TEXT,               -- resolved name, NULL if not yet known
+    name_source TEXT,               -- 'ocr' | 'exemplar' | 'handle' | NULL
+    pit_columns INTEGER NOT NULL DEFAULT 0,   -- 1 if this row showed pit columns
+    fuel_l      REAL,               -- fuel figure read on this frame; NULL = unread
+    compound    TEXT,               -- compound from disc, NULL = unread
+    recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_board_reads_session
+    ON board_reads(session_id, at_s);
+
+-- **One row per name resolution event.**
+--
+-- Logged when the roster assigns a name to a cluster — whether by exemplar
+-- bitmap match, by OCR, or by a provisional handle.  Each row carries enough
+-- to reconstruct what happened and why: the source, the match score, and how
+-- many frames voted for this name.
+--
+-- Duplicates are expected: an OCR resolution that fires on every pit-row crop
+-- would accumulate many rows.  The consumer groups by cluster_id and name and
+-- takes the row with the most votes.
+CREATE TABLE IF NOT EXISTS name_resolutions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL,
+    cluster_id  TEXT    NOT NULL,   -- roster cluster id as text
+    name        TEXT    NOT NULL,
+    source      TEXT    NOT NULL,   -- 'ocr' | 'exemplar' | 'handle'
+    score       REAL,               -- match score; NULL for 'handle' (no score)
+    votes       INTEGER NOT NULL DEFAULT 1,
+    at_s        REAL,               -- when the resolution was made
+    recorded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_name_resolutions_session
+    ON name_resolutions(session_id, cluster_id);
+
+-- ----------------------------------------------------------------- v22
+-- **One row per rival per race session**, normalised from the raw sources
+-- before `board_reads` and `name_resolutions` are cleaned up.
+--
+-- Written by `race.rival_history.normalise_session` as part of the cleanup
+-- gate: the history is written and verified before anything is deleted, and
+-- `sessions.history_compacted_at` is set only after deletion succeeds.
+-- Re-running for a session replaces its rows (UNIQUE + OR REPLACE).
+--
+-- Everything computed rather than directly measured is tagged [DERIVED] in
+-- the column comment (rule 5).  Every aggregate carries its count (rule 4).
+-- Missing is NULL, never 0 (rule 3).  No clamping (rule 9).
+CREATE TABLE IF NOT EXISTS rival_race_history (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id              INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    driver                  TEXT    NOT NULL,
+    -- Race context, denormalised for read performance.
+    series                  TEXT,
+    circuit_key             TEXT,
+    car_name                TEXT,
+    race_laps               INTEGER,        -- laps_total / scheduled laps for this race
+    -- [DERIVED] Actual laps run, from MAX(laps.lap_num) for this session.
+    -- For a timed race the scheduled count is the lap CAP, not what ran.
+    -- Use race_laps_run for stop fractions; fall back to race_laps when NULL.
+    -- For a laps race, race_laps_run equals race_laps.
+    race_laps_run           INTEGER,
+    is_timed                INTEGER NOT NULL DEFAULT 0,   -- 1 = timed race
+    race_date               TEXT,           -- session.started_at date part
+    -- [DERIVED] Position data, from board_positions.
+    start_position          INTEGER,        -- his position on lap 1
+    finish_position         INTEGER,        -- his position on last observed lap
+    best_position           INTEGER,        -- lowest number seen (best finish)
+    worst_position          INTEGER,        -- highest number seen (worst finish)
+    places_gained           INTEGER,        -- start_position - finish_position
+                                            -- positive = net gain (moved forward)
+    places_gained_n         INTEGER,        -- laps over which positions were tracked
+    -- [DERIVED] distinct laps at which this driver appeared in board_positions
+    -- (i.e. at a lap crossing, where the app samples the leaderboard).
+    -- NOT the same as total board_reads rows (which are sampled at ~0.2–0.5 s).
+    laps_observed           INTEGER,
+    -- [DERIVED] Pace against us, from gap_reads where subject = driver.
+    -- Positive = we were closing at that rate.  NULL where GapTrend's noise
+    -- gate (TREND_WORTH_SAYING_S) refuses the slope or too few consecutive
+    -- laps exist.
+    gap_slope_s_per_lap     REAL,
+    gap_slope_n             INTEGER,        -- consecutive laps behind the slope
+    -- [DERIVED] Pit and fuel pattern, from rival_stops.
+    -- JSON array of per-stop objects, each: {lap, lap_fraction, fuel_in_l,
+    -- fuel_out_l, litres_added, fill_verdict, fill_bound, burn_per_lap_l,
+    -- burn_n, stint_laps, tyre_in, tyre_out, partial, left_view}.
+    stops_json              TEXT,
+    -- NULL when there is no board evidence for this driver (no board_positions
+    -- AND no board_reads rows) — we have no visibility into whether stops
+    -- happened.  0 means we had board coverage and observed no stops (rule 3).
+    stop_count              INTEGER,
+    -- [DERIVED] Board-observed pit windows minus filed rival_stops.  Evidence
+    -- of stops lost to visibility (board saw a car in the pit columns but no
+    -- rival_stop was filed for it).  NULL where board_reads holds no data for
+    -- this driver.  Not clamped — a negative value means rival_stops has more
+    -- records than the board counted, which is informative (rule 9).
+    pit_stops_board_unseen  INTEGER,
+    -- Evidence: a race where he was barely visible carries little weight.
+    board_reads_n           INTEGER,        -- [DERIVED] total board_reads rows for this driver
+    -- [DERIVED] seconds this driver was visible, summed from consecutive at_s
+    -- intervals in board_reads, each capped at 2× the median interval so that
+    -- view gaps (board hidden, driver off screen) are excluded.  NULL when
+    -- fewer than 2 timestamped reads exist (rule 5, rule 3).
+    board_secs_in_view      REAL,
+    derived_at              TEXT    NOT NULL,
+    UNIQUE(session_id, driver)
+);
+CREATE INDEX IF NOT EXISTS idx_rival_race_history_driver
+    ON rival_race_history(driver, session_id);
 """
 
 # Columns added to tables that already existed in an earlier version.
@@ -1253,6 +1416,22 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # exits the lane. `compound` is now the tyre he left on; this is the
         # one he came in on. NULL on older rows, whose `compound` is arrival.
         ("compound_in", "TEXT"),
+        # 26 Sep 2026 (brief_names_stops.md part B): the car left the visible
+        # rows during its stop before MIN_WATCHED_S was reached.  The stop is
+        # still filed - with what was read - but fuel_out_l is a lower bound
+        # rather than the measured fill, because the fill may not have
+        # completed when visibility was lost.  0 on all rows filed before this
+        # column existed, which is the false answer; a reader that needs the
+        # distinction filters on `recorded_at > '2026-09-26'`.
+        ("left_view", "INTEGER NOT NULL DEFAULT 0"),
+        # 26 Sep 2026 (P3-1): monotonic clock seconds when the visit started
+        # and when the last read was taken.  Used by the duplicate-fold guard
+        # in record_rival_stop: fold only when the time windows overlap or are
+        # within FOLD_MAX_GAP_S (20 s), which a GT7 stop cannot span twice
+        # within.  NULL on all rows filed before this column existed; the fold
+        # guard refuses to fold when either side's times are unavailable.
+        ("visit_start_s", "REAL"),
+        ("visit_end_s", "REAL"),
     ),
     # **What became of the call** (7 Sep 2026, plan 1.6): `race/call_outcome`
     # judged against the laps that followed, written as they came in. NULL
@@ -1556,7 +1735,27 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # carry the circuit in practice.
         ("circuit_key", "TEXT"),
     ),
+    "rival_race_history": (
+        # **v22 addendum (26 Sep 2026):** actual laps run, needed to compute
+        # correct stop fractions for timed races where race_laps is the
+        # scheduled cap, not the distance actually covered.
+        ("race_laps_run", "INTEGER"),
+    ),
     "sessions": (
+        # **v22: debrief marker and cleanup marker** (26 Sep 2026,
+        # brief_rival_history.md §1 and §3).
+        #
+        # `debriefed_at` is set by `mark_session_debriefed` (MCP tool) when
+        # the race-engineer debrief is complete.  A race is due for cleanup
+        # once it has ended AND either this is set OR 14 days have elapsed
+        # since it ended.
+        #
+        # `history_compacted_at` is set by `cleanup_due_sessions` after the
+        # rival history rows are written and the bulk tables deleted.  It is
+        # the idempotency guard: a session with it set is never cleaned up
+        # twice, regardless of `debriefed_at`.
+        ("debriefed_at", "TEXT"),
+        ("history_compacted_at", "TEXT"),
         # **Where the capture is, and the wall clock at video second zero.**
         # `tools/read_hud_wear.py` had to be handed the zero with `--offset`,
         # and its own comment admits the estimate is "a few seconds early".

@@ -230,6 +230,9 @@ class _Stub:
     # No session is open on the stub unless a test says so.
     session_kind = None
     _board_fuel = PitCrewController._board_fuel
+    # Rival stop table (Story 2, 25 Sep 2026): bound off the real class so
+    # the stub's session_id=None produces an empty tuple via the real guard.
+    _rival_table = PitCrewController._rival_table
 
     def __init__(self, *, race=None, bridge=None, target=74.0, event=None,
                  splits=None):
